@@ -201,6 +201,17 @@ npm --prefix frontend test -- --run src/utils/remoteEnvironments.test.js src/com
 checks persistent username reuse, normalization, separate identities, same-name
 testing/password isolation, display names after refresh, legacy testing IDs,
 local origin restrictions and mode-off token rejection.
+
+`e2e/v4-question-live.spec.ts` exercises V4 multi-select questions through an
+isolated app and synthetic provider. Start
+`node frontend/e2e/fixtures/question-provider.cjs PORT` on loopback, then start
+a disposable local-testing API with its `DEEPSEEK_BASE_URL` set to that provider's
+`http://127.0.0.1:PORT/v1`, a synthetic vault key, and a temporary data directory.
+Serve the current frontend and run with `E2E_LIVE_QUESTION=1`, `BASE_URL` set to
+the isolated app, and `E2E_QUESTION_ROOT` set to a disposable absolute directory.
+The test creates and deletes its own empty workspace directories and synthetic
+sessions. `e2e/v4-question.spec.ts` also covers single and multi-select cards
+with mocked routes. Neither test uses a real provider.
 Core config tests also reject non-loopback or external-storage testing mode.
 Frontend `LoginPage.localTesting.test.jsx` and auth lifecycle tests cover the
 username-only UI, normal password fallback and token commitment.
@@ -225,11 +236,55 @@ E2E_BACKGROUND_DELEGATION=1 E2E_DELEGATION_PROVIDER_URL=http://127.0.0.1:PORT BA
 Use numeric port values and the optional `E2E_LOCAL_BROWSER` if needed. The test
 creates disposable accounts, keys and project directories and requires the local
 fixture health check. It verifies approval, a denied child write, the child's
-read result, and delivery to the parent's follow-up queue, where the default build
-holds it for review without waking the parent. Set `E2E_QUEUED_AUTHORITY_PREVIEW=1`
-only against a server built with the experimental `queued-authority-preview` feature
-to expect the parent to wake instead. Stop the fixture servers and remove their
+read result, and automatic delivery to a locally authorized parent. Stop the fixture servers and remove their
 disposable data after testing; do not use this fixture against normal user data.
+
+`e2e/delegation-auto-delivery.spec.ts` exercises automatic parent wakeup, manual
+holds, logout and local review, and legacy queue behavior through an isolated API
+and synthetic local provider. Build `terminal-v4-api` inside a disposable fixture
+directory, then run from `frontend/`:
+
+```bash
+E2E_DELEGATION_AUTO=1 E2E_DELEGATION_ROOT=/path/to/fixture E2E_DELEGATION_BINARY=/path/to/fixture/target/debug/terminal-v4-api npx playwright test e2e/delegation-auto-delivery.spec.ts --workers=1
+```
+
+The test creates case directories under the supplied fixture root. Remove that
+disposable root after the test. It does not exercise a real provider or an
+upgraded production data directory.
+
+The paired-grant queue proof can be checked with:
+
+```bash
+cargo test --manifest-path rust/Cargo.toml -p terminal-v4-api --lib paired_delegation_proof_binds_the_grant_and_exact_queue_reservation
+```
+
+It covers encrypted binding, refusal by the previous strict proof schema,
+rejection by local-only credential conversion, and revocation-aware admission.
+It does not replace an end-to-end paired-device test.
+
+`paired_binding_requires_matching_owner_and_exclusive_authority` checks that
+delegation bindings reject foreign owners, missing parent identities and mixed
+local/paired claims, and remain readable after grant expiry. The
+`paired_approval_records_grant_and_describes_conditional_delivery` test checks
+the approval's conditional delivery description.
+The `paired_delegation_attestation_binds_exact_reviewed_scope_and_installation`
+test rejects changed scopes, owners, ciphertext and installation keys. The
+synthetic `paired_background_investigation_publishes_verified_result_for_idle_parent`
+fixture exercises approval, child launch, the stored attestation and proof-bearing
+queue item; it does not send the input from a paired client.
+`paired_revocation_after_attestation_prevents_child_launch` checks revocation at
+the launch boundary using the same synthetic child fixture.
+The isolated `delegation-auto-delivery.spec.ts` includes paired-token auto, manual
+hold and revoked-grant cases. It uses one loopback API and a synthetic provider,
+so it does not establish real-provider behavior.
+`delegation-paired-proxy.spec.ts` uses the same environment variables and binary
+to start two loopback APIs. It checks proxy delivery and a completed result held
+through graceful restart until explicit resume. It also kills the remote API with
+a synthetic child active, verifies that child's exit, performs the fixture owner's
+explicit recovery review, and resumes the retained interruption without replay.
+It does not cover a stopped supervisor or an escaped descendant.
+The `paired_dispatch_waits_for_a_busy_owner_without_holding_the_result` test
+checks the bounded retry for owner-input contention before acceptance.
 
 `e2e/terminal-responsive.spec.ts` uses the same isolated-server flags to exercise
 real CLI terminals at 320px, 390px and 1440px. It checks environment-bar clearance

@@ -3,7 +3,9 @@ import { isCompanionSession } from '../utils/sidebarSessionScope';
 import { getEnvironmentStorage, getActiveEnvironment, getEnvironmentSignal, getEnvironmentCacheScope } from '../utils/remoteEnvironments';
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { apiFetch } from '../utils/api';
+import { resolveHomeApiUrl } from '../utils/apiBase';
 import { captureAuthScope, isAuthScopeCurrent } from '../utils/auth';
+import { readStrictResponseMetadata, validateStrictResponse } from '../utils/strictAuthenticatedFetch';
 import { getComposerDraftStore } from '../utils/composerDraftStore';
 import { createUuid } from '../utils/createUuid';
 import { sendRawInput } from '../utils/supervisedRawInputController';
@@ -52,7 +54,147 @@ function readStructuredSessionMetadata(storage = getEnvironmentStorage()) {
 // Drawer terminals belong to a conversation and are never chosen as the selected thread on their own.
 const isFallbackSession = session => session.isActive && !isCompanionSession(session);
 
-export function TerminalSessionProvider({ children }) {
+export function TerminalSessionProvider(props) {
+  return Object.hasOwn(props, 'authLifecycle')
+    ? <StrictTerminalSessionProvider {...props} />
+    : <LegacyTerminalSessionProvider {...props} />;
+}
+
+function StrictTerminalSessionProvider({ children, authLifecycle, strictReady }) {
+  const [sessions, setSessions] = useState([]);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [loadingSessions, setLoadingSessions] = useState(strictReady === true);
+  const [sessionLoadError, setSessionLoadError] = useState(null);
+  const currentRef = useRef({ authLifecycle, strictReady });
+  currentRef.current = { authLifecycle, strictReady };
+  const mountedRef = useRef(false);
+  const requestRef = useRef({ sequence: 0, controller: null });
+  const pinnedScope = useRef(null);
+  const environment = useRef({ signal: getEnvironmentSignal(), value: JSON.stringify(getActiveEnvironment()) });
+
+  const loadSessions = useCallback(async () => {
+    const lifecycle = currentRef.current.authLifecycle;
+    const signal = environment.current.signal;
+    const sequence = ++requestRef.current.sequence;
+    requestRef.current.controller?.abort();
+    const controller = new AbortController();
+    requestRef.current.controller = controller;
+    const current = () => mountedRef.current && sequence === requestRef.current.sequence
+      && !controller.signal.aborted && !signal.aborted && getEnvironmentSignal() === signal
+      && JSON.stringify(getActiveEnvironment()) === environment.current.value
+      && currentRef.current.authLifecycle === lifecycle && currentRef.current.strictReady === true;
+    const same = (a, b) => a.owner === b.owner && a.session === b.session && a.incarnation === b.incarnation && a.home === b.home;
+    const readScope = async () => {
+      if (!current() || typeof lifecycle?.read !== 'function' || typeof lifecycle?.refresh !== 'function') throw new Error('Authentication is unavailable.');
+      const snapshot = await lifecycle.read();
+      if (!current()) throw new Error('Authentication is unavailable.');
+      const pair = snapshot?.pair;
+      let home;
+      try { home = new URL(pair?.home).href; } catch { throw new Error('Authentication is unavailable.'); }
+      if (snapshot?.status !== 'active' || snapshot.refreshReserved || !snapshot.incarnation
+        || !pair?.owner || snapshot.user?.id !== pair.owner || !pair.session || !pair.accessToken
+        || home !== new URL(resolveHomeApiUrl('/'), window.location.origin).href) throw new Error('Authentication is unavailable.');
+      const scope = { owner: pair.owner, session: pair.session, incarnation: snapshot.incarnation, home };
+      if (pinnedScope.current && !same(pinnedScope.current, scope)) throw new Error('Authentication changed. Save any unsent drafts and reopen the workspace.');
+      pinnedScope.current ||= scope;
+      return { snapshot, scope };
+    };
+    try {
+      if (!current()) throw new Error('Authentication is unavailable.');
+      setLoadingSessions(true);
+      const initial = await readScope();
+      const scopedLifecycle = {
+        read: async () => {
+          const value = await readScope();
+          if (!same(initial.scope, value.scope)) throw new Error('Authentication changed.');
+          return value.snapshot;
+        },
+        refresh: async (scope, options) => {
+          if (!same(initial.scope, scope) || !current()) throw new Error('Authentication changed.');
+          return lifecycle.refresh(scope, options);
+        },
+      };
+      const options = { authLifecycle: scopedLifecycle, signal: controller.signal, cache: 'no-store' };
+      const [terminal, structured] = await Promise.all([
+        apiFetch('/api/terminal', options),
+        apiFetch('/api/structured/sessions?view=inventory', options),
+      ]);
+      const [terminalMeta, structuredMeta] = await Promise.all([readStrictResponseMetadata(terminal), readStrictResponseMetadata(structured)]);
+      if (!terminalMeta.ok || (!structuredMeta.ok && structuredMeta.status !== 404)) throw new Error('Could not load sessions.');
+      if (structuredMeta.status === 404 && sessionsRef.current.some(item => isStructuredSessionId(item.id))) throw new Error('Could not confirm existing conversations.');
+      const [terminalData, structuredData] = await Promise.all([
+        terminal.json(), structuredMeta.status === 404 ? Promise.resolve([]) : structured.json(),
+      ]);
+      if (!Array.isArray(terminalData?.sessions) || !Array.isArray(structuredData)) throw new Error('Invalid session inventory.');
+      await Promise.all([validateStrictResponse(terminal, { required: true }), validateStrictResponse(structured, { required: true })]);
+      const latest = await readScope();
+      if (!current() || !same(initial.scope, latest.scope)) throw new Error('Authentication changed.');
+      const next = mergeSessionCollections(terminalData.sessions, structuredData, {});
+      setSessions(next);
+      setActiveSessionId(previous => next.some(item => item.id === previous && !isCompanionSession(item))
+        ? previous : next.find(isFallbackSession)?.id || null);
+      setSessionLoadError(null);
+      return next;
+    } catch (error) {
+      if (mountedRef.current && sequence === requestRef.current.sequence && !controller.signal.aborted) {
+        setSessionLoadError(error.message || 'Authentication is unavailable.');
+        setLoadingSessions(false);
+      }
+      controller.abort();
+      return null;
+    } finally {
+      if (mountedRef.current && sequence === requestRef.current.sequence && !controller.signal.aborted) setLoadingSessions(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; requestRef.current.sequence += 1; requestRef.current.controller?.abort(); };
+  }, []);
+  useEffect(() => {
+    if (strictReady === true) void loadSessions();
+    else { setLoadingSessions(false); setSessionLoadError('Authentication is unavailable. Save any unsent drafts.'); }
+    return () => { requestRef.current.sequence += 1; requestRef.current.controller?.abort(); };
+  }, [authLifecycle, strictReady, loadSessions]);
+
+  const activeSessions = useMemo(() => sessions.filter(item => item.isActive), [sessions]);
+  const inactiveSessions = useMemo(() => sessions.filter(item => !item.isActive), [sessions]);
+  const pinnedSessions = useMemo(() => sessions.filter(item => item.thread?.pinned && !item.thread?.archived), [sessions]);
+  const archivedSessions = useMemo(() => sessions.filter(item => item.thread?.archived), [sessions]);
+  const sessionsGroupedByProject = useMemo(() => {
+    const groups = new Map();
+    for (const session of sessions.filter(item => !item.thread?.archived)) {
+      const projectPath = session.thread?.projectPath || session.groupPath || session.cwd || null;
+      if (!groups.has(projectPath)) groups.set(projectPath, { projectPath, projectName: projectPath?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'Unknown', sessions: [] });
+      groups.get(projectPath).sessions.push(session);
+    }
+    return [...groups.values()];
+  }, [sessions]);
+  const selected = sessions.find(item => item.id === activeSessionId);
+  const unavailable = useCallback(async () => { throw new Error('This action is unavailable while strict authentication integration is incomplete. Your draft was kept.'); }, []);
+  const noop = useCallback(() => {}, []);
+  const selectSession = useCallback(id => {
+    if (id === null || (currentRef.current.strictReady === true && sessionsRef.current.some(item => item.id === id))) setActiveSessionId(id);
+  }, []);
+  const value = {
+    sessions, activeSessionId, activeSessions, inactiveSessions, loadingSessions, sessionLoadError,
+    restoringSessionId: null, projectInfo: selected?.cwd ? { cwd: selected.cwd, projectType: 'unknown' } : null,
+    sessionsGroupedByProject, pinnedSessions, archivedSessions,
+    createSession: unavailable, createStructuredSession: unavailable, updateStructuredSessionSelection: unavailable,
+    updateStructuredSessionAccess: unavailable, selectSession, restoreSession: unavailable,
+    renameSession: unavailable, closeSession: unavailable, navigateSession: unavailable, retryLoadSessions: loadSessions,
+    registerTerminalSender: noop, unregisterTerminalSender: noop, sendToSession: unavailable, sendRawToSession: unavailable,
+    updateThreadMetadata: unavailable, pinSession: unavailable, unpinSession: unavailable, archiveSession: unavailable,
+    unarchiveSession: unavailable, updateSessionTopic: unavailable, syncSessionThread: noop,
+    generateSessionTopic: unavailable, detectSessionProject: unavailable, refreshSessionGitStats: unavailable,
+    listSessionGitBranches: unavailable, checkoutSessionGitBranch: unavailable, trackActivity: noop,
+  };
+  return <TerminalSessionContext.Provider value={value}>{children}</TerminalSessionContext.Provider>;
+}
+
+function LegacyTerminalSessionProvider({ children }) {
   const environmentSignal = useRef(getEnvironmentSignal());
   const storage = useMemo(() => getEnvironmentStorage(), []);
   const [sessions, setSessions] = useState([]);
@@ -91,6 +233,8 @@ export function TerminalSessionProvider({ children }) {
   const inventorySeqRef = useRef(0);
   const loadRequestRef = useRef(0);
   const appliedInventorySeqRef = useRef(0);
+  const initialSelectionHandledRef = useRef(false);
+  const initialSelectionGenerationRef = useRef(selectionGenerationRef.current);
 
   const captureSelection = useCallback(() => {
     const generation = selectionGenerationRef.current;
@@ -773,19 +917,28 @@ export function TerminalSessionProvider({ children }) {
   }, [loadSessions, patchStructuredSessionMetadata, refreshStructuredLifecycle, sessions]);
 
   const closeSession = useCallback(async (sessionId) => {
+    const auth = captureAuthScope();
+    const signal = environmentSignal.current;
+    const scopeCurrent = () => isMountedRef.current && !signal.aborted
+      && getEnvironmentSignal() === signal && isAuthScopeCurrent(auth);
+    const scopeChanged = () => ({ ok: false, error: new Error('The account or environment changed. Check the original terminal before trying again.') });
+    if (!scopeCurrent()) return scopeChanged();
     if (isStructuredSessionId(sessionId)) {
       try {
         const response = await apiFetch(`/api/structured/sessions/${sessionId}`, {
-          method: 'DELETE'
+          method: 'DELETE', signal
         });
+        if (!scopeCurrent()) return scopeChanged();
         if (!response.ok) {
           throw new Error(`Failed to close structured session (${response.status})`);
         }
 
         removeStructuredSessionMetadata(sessionId);
         setSessions((currentSessions) => {
+          if (!scopeCurrent()) return currentSessions;
           const remainingSessions = currentSessions.filter((session) => session.id !== sessionId);
           setSelectedSession((currentActiveId) => {
+            if (!scopeCurrent()) return currentActiveId;
             if (sessionId === currentActiveId) {
               const nextActive = remainingSessions.find(isFallbackSession);
               return nextActive ? nextActive.id : null;
@@ -795,8 +948,10 @@ export function TerminalSessionProvider({ children }) {
           return remainingSessions;
         });
       } catch (error) {
+        if (!scopeCurrent()) return scopeChanged();
         console.error('Failed to close structured session', error);
         await loadSessions();
+        if (!scopeCurrent()) return scopeChanged();
         return { ok: false, error };
       }
       return;
@@ -804,15 +959,18 @@ export function TerminalSessionProvider({ children }) {
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}`, {
-        method: 'DELETE'
+        method: 'DELETE', signal
       });
+      if (!scopeCurrent()) return scopeChanged();
       if (!response.ok) {
         throw new Error(`Failed to close session (${response.status})`);
       }
 
       setSessions((currentSessions) => {
+        if (!scopeCurrent()) return currentSessions;
         const remainingSessions = currentSessions.filter((s) => s.id !== sessionId);
         setSelectedSession((currentActiveId) => {
+          if (!scopeCurrent()) return currentActiveId;
           if (sessionId === currentActiveId) {
             const nextActive = remainingSessions.find(isFallbackSession);
             return nextActive ? nextActive.id : null;
@@ -823,9 +981,12 @@ export function TerminalSessionProvider({ children }) {
       });
 
       await loadSessions();
+      if (!scopeCurrent()) return scopeChanged();
     } catch (error) {
+      if (!scopeCurrent()) return scopeChanged();
       console.error('Failed to close session', error);
       await loadSessions();
+      if (!scopeCurrent()) return scopeChanged();
       return { ok: false, error };
     }
   }, [loadSessions, removeStructuredSessionMetadata]);
@@ -1326,52 +1487,31 @@ export function TerminalSessionProvider({ children }) {
     fetchAppStateRef.current = fetchAppState;
   }, [fetchAppState]);
 
+  useEffect(() => {
+    if (loadingSessions || !hasLoadedOnceRef.current || initialSelectionHandledRef.current) return;
+    initialSelectionHandledRef.current = true;
+    if (selectionGenerationRef.current !== initialSelectionGenerationRef.current) return;
+
+    try {
+      const lastSessionId = storage.getItem('lastActiveSession');
+      const lastSession = sessions.find((session) => session.id === lastSessionId && !isCompanionSession(session));
+      const selected = lastSession || sessions.find(isFallbackSession);
+      if (selected) {
+        setSelectedSession(selected.id);
+        storage.setItem('lastActiveSession', selected.id);
+      } else if (lastSessionId) {
+        storage.removeItem('lastActiveSession');
+        setSelectedSession(null);
+      }
+    } catch (error) {
+      console.error('Failed to restore last session', error);
+    }
+  }, [loadingSessions, sessions, setSelectedSession, storage]);
+
   // Initial load and polling setup
   useEffect(() => {
     isMountedRef.current = true;
-
-    const initializeSessions = async () => {
-      const selectionGeneration = selectionGenerationRef.current;
-      const initialSessions = await loadSessionsRef.current();
-      if (!isMountedRef.current || environmentSignal.current.aborted
-        || selectionGeneration !== selectionGenerationRef.current || !Array.isArray(initialSessions)) return;
-
-      const lastSessionId = storage.getItem('lastActiveSession');
-      if (lastSessionId) {
-        try {
-          const lastSession = initialSessions.find((session) => session.id === lastSessionId && !isCompanionSession(session));
-
-          if (lastSession) {
-            setSelectedSession(lastSession.id);
-            storage.setItem('lastActiveSession', lastSession.id);
-            return;
-          }
-
-          const activeSession = initialSessions.find(isFallbackSession);
-          if (activeSession) {
-            setSelectedSession(activeSession.id);
-            storage.setItem('lastActiveSession', activeSession.id);
-          } else {
-            storage.removeItem('lastActiveSession');
-            setSelectedSession(null);
-          }
-        } catch (error) {
-          console.error('Failed to restore last session', error);
-        }
-      } else {
-        try {
-          const activeSession = initialSessions.find(isFallbackSession);
-          if (activeSession) {
-            setSelectedSession(activeSession.id);
-            storage.setItem('lastActiveSession', activeSession.id);
-          }
-        } catch (error) {
-          console.error('Failed to find active session', error);
-        }
-      }
-    };
-
-    initializeSessions();
+    loadSessionsRef.current();
 
     // Visibility-aware polling
     let pollTimeoutId = null;
@@ -1452,7 +1592,7 @@ export function TerminalSessionProvider({ children }) {
   // Auto-restore inactive sessions
   useEffect(() => {
     if (loadingSessions) return;
-    if (!activeSessionId) return;
+    if (!activeSessionId || activeSessionIdRef.current !== activeSessionId) return;
     const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
     if (!activeSnapshot || activeSnapshot.isActive) return;
     if (restoreInFlightRef.current.has(activeSessionId)) return;

@@ -339,6 +339,17 @@ impl AuthAdmission {
         Ok(file)
     }
 
+    pub(super) fn try_acquire(&self) -> Result<File, String> {
+        let file = open_file(&self.root.join(LOCK), true)?;
+        same(&self.root.join(LOCK), &self.lock_file, false, true)?;
+        same(&self.root.join(LOCK), &file, false, true)?;
+        file.try_lock()
+            .map_err(|_| "Authentication admission is busy".to_string())?;
+        same(&self.root.join(LOCK), &self.lock_file, false, true)?;
+        same(&self.root.join(LOCK), &file, false, true)?;
+        Ok(file)
+    }
+
     pub(super) fn validate(&self, db: &Connection) -> Result<(), String> {
         same(&self.root, &self.root_file, true, false)?;
         same(&self.root.join("terminal.db"), &self.database, false, false)?;

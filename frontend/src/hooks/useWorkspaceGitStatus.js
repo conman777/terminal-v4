@@ -4,6 +4,7 @@ import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity
 
 const REFRESH_MS = 15000;
 const UNAVAILABLE = { available: false };
+const LOADING = { ...UNAVAILABLE, status: 'loading' };
 
 export function summarizeGitStatus(status) {
   const files = Array.isArray(status?.files) ? status.files : [];
@@ -17,31 +18,40 @@ export function summarizeGitStatus(status) {
 }
 
 export function useWorkspaceGitStatus(cwd, { enabled = true } = {}) {
-  const [summary, setSummary] = useState(UNAVAILABLE);
+  const [result, setResult] = useState(null);
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision(value => value + 1), []);
 
   useEffect(() => {
-    if (!enabled || !cwd) { setSummary(UNAVAILABLE); return undefined; }
+    if (!enabled || !cwd) { setResult(null); return undefined; }
+    setResult({ cwd, summary: LOADING });
     let cancelled = false;
     let notRepository = false;
     let timer;
+    let request = 0;
     const load = async () => {
+      const current = ++request;
       try {
         const response = await apiFetch(`/api/workspace/git/status?path=${encodeURIComponent(cwd)}&mode=unstaged`);
         // A folder outside Git stays that way until the thread moves, so it is not polled again.
-        notRepository = response.status === 400;
+        const isNotRepository = response.status === 400;
         const data = response.ok ? await response.json() : null;
-        if (!cancelled) setSummary(data ? summarizeGitStatus(data) : UNAVAILABLE);
+        if (!cancelled && current === request) {
+          notRepository = isNotRepository;
+          setResult({ cwd, summary: data
+            ? { ...summarizeGitStatus(data), status: 'success' }
+            : { ...UNAVAILABLE, status: notRepository ? 'not-repository' : 'error' } });
+        }
       } catch {
-        if (!cancelled) setSummary(UNAVAILABLE);
+        if (!cancelled && current === request) setResult({ cwd, summary: { ...UNAVAILABLE, status: 'error' } });
       }
-      if (!cancelled && !notRepository) timer = setTimeout(() => { if (isWindowActive()) load(); }, REFRESH_MS);
+      if (!cancelled && current === request && !notRepository) timer = setTimeout(() => { if (isWindowActive()) load(); }, REFRESH_MS);
     };
     load();
     const unsubscribe = subscribeWindowActivity(active => { if (active && !cancelled && !notRepository) { clearTimeout(timer); load(); } });
     return () => { cancelled = true; clearTimeout(timer); unsubscribe(); };
   }, [cwd, enabled, revision]);
 
+  const summary = !enabled || !cwd ? { ...UNAVAILABLE, status: 'idle' } : result?.cwd === cwd ? result.summary : LOADING;
   return { ...summary, refresh };
 }

@@ -15,6 +15,43 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('WorkspaceBrowser', () => {
+  it('keeps the typing draft editable while a browser resize is waiting for its new frame', async () => {
+    let notifyResize, finishResize;
+    let dimensions = { width: 1280, height: 800 };
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback) { notifyResize = callback; }
+      observe() {}
+      disconnect() {}
+    });
+    try {
+      apiFetch.mockImplementation(async (path, options = {}) => {
+        if (path.endsWith('/sessions')) return response({ id: ID, state });
+        if (path.endsWith('/frame')) return response({ ...state, ...dimensions, image: 'fixture-frame' });
+        if (options.body?.type === 'resize') return new Promise(resolve => {
+          finishResize = () => { dimensions = { width: options.body.width, height: options.body.height }; resolve(response(state)); };
+        });
+        return response(state);
+      });
+      render(<WorkspaceBrowser onClose={() => {}} />);
+      await screen.findByAltText('Live browser page');
+      fireEvent.click(screen.getByRole('button', { name: 'Show typing controls' }));
+      const input = screen.getByRole('textbox', { name: 'Type into browser page' });
+      fireEvent.change(input, { target: { value: 'unsent' } });
+      const surface = screen.getByRole('application', { name: 'Interactive browser page' });
+      vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0, width: 390, height: 500 });
+      act(() => notifyResize());
+      await waitFor(() => expect(finishResize).toBeTypeOf('function'));
+      expect(input).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Type', exact: true })).toBeDisabled();
+      fireEvent.change(input, { target: { value: 'unsent typing' } });
+      fireEvent.submit(input.closest('form'));
+      expect(apiFetch.mock.calls.filter(([_path, options]) => options?.body?.type === 'text')).toEqual([]);
+      await act(async () => finishResize());
+      await screen.findByAltText('Live browser page');
+      expect(input).toHaveValue('unsent typing');
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('recovers the resized frame when a control change supersedes the resize response', async () => {
     let notifyResize, finishResize;
     vi.stubGlobal('ResizeObserver', class {

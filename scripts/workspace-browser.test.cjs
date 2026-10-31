@@ -193,6 +193,71 @@ test('agent keyboard release stays fenced while a modal waits for the human', as
   assert.equal((await session.command({ type: 'state' })).keyboardRelease, null);
 });
 
+test('disabled agent keyboard prototype can send keyup to a different field', async t => {
+  const allowed = await fixture(t, (_req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(`<input aria-label="Reviewed"><input aria-label="Other"><script>const [a,b]=document.querySelectorAll('input');window.keys=[];for(const e of [a,b])for(const type of ['keydown','keyup'])e.addEventListener(type,event=>keys.push([type,event.target.getAttribute('aria-label')]));a.addEventListener('keydown',()=>b.focus());</script>`);
+  });
+  const session = await createBrowser(); t.after(() => session.close());
+  await session.command({ type: 'navigate', url: allowed.origin, human: true });
+  const snapshot = await agent(session, allowed.origin, 'browser_snapshot');
+  const ref = snapshot.elements.find(row => row.name === 'Reviewed').ref;
+  await agent(session, allowed.origin, 'browser_press', { ref, key: 'Enter' });
+  const page = session.browser.contexts()[0].pages()[0];
+  assert.deepEqual(await page.evaluate(() => window.keys), [['keydown', 'Reviewed'], ['keyup', 'Other']]);
+});
+
+test('agent typing rejects focus redirected by a focus microtask', async t => {
+  const allowed = await fixture(t, (_req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(`<input aria-label="Reviewed"><input aria-label="Other"><script>const [a,b]=document.querySelectorAll('input');a.addEventListener('focus',()=>queueMicrotask(()=>b.focus()));</script>`);
+  });
+  const session = await createBrowser(); t.after(() => session.close());
+  await session.command({ type: 'navigate', url: allowed.origin, human: true });
+  const snapshot = await agent(session, allowed.origin, 'browser_snapshot');
+  const ref = snapshot.elements.find(row => row.name === 'Reviewed').ref;
+  await assert.rejects(agent(session, allowed.origin, 'browser_type', { ref, text: 'approved' }), /focus/i);
+  const page = session.browser.contexts()[0].pages()[0];
+  assert.deepEqual(await page.evaluate(() => Array.from(document.querySelectorAll('input'), e => e.value)), ['', '']);
+});
+
+test('agent typing updates editable fields and emits input events', async t => {
+  const allowed = await fixture(t, (_req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(`<textarea aria-label="Notes">old</textarea><div aria-label="Editor" contenteditable="true">old</div><script>window.changed=[];for(const e of document.querySelectorAll('textarea,div'))e.addEventListener('input',()=>changed.push(e.getAttribute('aria-label')));</script>`);
+  });
+  const session = await createBrowser(); t.after(() => session.close());
+  await session.command({ type: 'navigate', url: allowed.origin, human: true });
+  const snapshot = await agent(session, allowed.origin, 'browser_snapshot');
+  const ref = name => snapshot.elements.find(row => row.name === name).ref;
+  await agent(session, allowed.origin, 'browser_type', { ref: ref('Notes'), text: 'new' });
+  await agent(session, allowed.origin, 'browser_type', { ref: ref('Notes'), text: ' ✓', clear: false });
+  await agent(session, allowed.origin, 'browser_type', { ref: ref('Editor'), text: 'text' });
+  const page = session.browser.contexts()[0].pages()[0];
+  assert.deepEqual(await page.evaluate(() => ({ notes: document.querySelector('textarea').value, editor: document.querySelector('div').textContent, changed: window.changed })), {
+    notes: 'new ✓', editor: 'text', changed: ['Notes', 'Notes', 'Editor'],
+  });
+});
+
+test('a dialog during agent typing focus cannot insert text after cancellation', async t => {
+  const allowed = await fixture(t, (_req, res) => {
+    res.setHeader('Content-Type', 'text/html');
+    res.end(`<input aria-label="Target" onfocus="alert('Synthetic focus dialog');window.focusReturned=true">`);
+  });
+  const session = await createBrowser(); t.after(() => session.close());
+  await session.command({ type: 'navigate', url: allowed.origin, human: true });
+  const snapshot = await agent(session, allowed.origin, 'browser_snapshot');
+  const ref = snapshot.elements.find(row => row.name === 'Target').ref;
+  await assert.rejects(agent(session, allowed.origin, 'browser_type', { ref, text: 'must not appear' }), /dialog/i);
+  const state = await session.command({ type: 'state' });
+  await session.command({ type: 'control', owner: 'human', human: true });
+  await session.command({ type: 'dialog', dialogId: state.dialog.id, accept: false, human: true });
+  const page = session.browser.contexts()[0].pages()[0];
+  await page.waitForFunction(() => window.focusReturned === true);
+  await page.waitForTimeout(100);
+  assert.equal(await page.locator('input').inputValue(), '');
+});
+
 test('a dialog during focus cancels a key action before key-down', async t => {
   const allowed = await fixture(t, (_req, res) => {
     res.setHeader('Content-Type', 'text/html');
@@ -243,7 +308,8 @@ test('managed tab history reports real back and forward availability independent
   const initial = await session.command({ type: 'state' }), first = initial.activeTabId;
   const row = (id, pathname, canGoBack, canGoForward) => ({ id, url: pathname === 'about:blank' ? pathname : allowed.origin + pathname, canGoBack, canGoForward });
   assert.deepEqual(availability(initial), [row(first, 'about:blank', false, false)]);
-  assert.deepEqual(Object.keys(initial.tabs[0]).sort(), ['canGoBack', 'canGoForward', 'documentId', 'id', 'title', 'url']);
+  assert.deepEqual(Object.keys(initial.tabs[0]).sort(), ['canGoBack', 'canGoForward', 'documentId', 'id', 'title', 'url', 'viewRevision']);
+  assert.equal(initial.tabs[0].viewRevision, 0);
   assert.deepEqual(availability(await session.command({ type: 'frame' })), [row(first, 'about:blank', false, false)]);
   for (const pathname of ['/one', '/two', '/three']) {
     assert.deepEqual(availability(await session.command({ type: 'navigate', url: allowed.origin + pathname, human: true })), [row(first, pathname, true, false)]);
@@ -544,7 +610,7 @@ test('human JPEG frames recover known capture failures with bounded attempts and
       if (mode === 'recover') {
         assert.equal(Buffer.from(result.value?.image || '', 'base64').subarray(0, 3).toString('hex'), 'ffd8ff');
         const { image, ...frameState } = result.value;
-        assert.deepEqual(withoutTitles(frameState), { ...withoutTitles(before), width: 1280, height: 800 });
+        assert.deepEqual(withoutTitles(frameState), { ...withoutTitles(before), width: 1280, height: 800, viewRevision: before.tabs.find(tab => tab.id === before.activeTabId).viewRevision });
         assert.ok(attempts >= 2 && attempts <= 3);
       } else {
         assert.match(result.error, mode === 'exhausted' ? /Unable to capture screenshot/ : /Synthetic screenshot permission error/);

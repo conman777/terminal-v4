@@ -4,7 +4,7 @@ import { setUser } from '../utils/auth';
 import { WorkspaceStartView } from './WorkspaceStartView';
 
 const mocks = vi.hoisted(() => ({ catalog: null, error: null }));
-vi.mock('../utils/api', () => ({ apiFetch: async url => {
+vi.mock('../utils/api', () => ({ apiGet: async url => String(url) === '/api/system/doctor' ? { ready: true, checks: [] } : { pullRequest: null }, apiFetch: async url => {
   if (String(url).startsWith('/api/agent/catalog') && mocks.error) throw mocks.error;
   return { ok: true, json: async () => String(url).startsWith('/api/agent/catalog') ? mocks.catalog : {} };
 } }));

@@ -60,4 +60,36 @@ describe('draft stash', () => {
     const result = stashDraft('kept', 1);
     expect([result.ok, result.items.map(item => item.text)]).toEqual([true, ['kept']]);
   });
+
+  it('preserves every saved draft when the stash reaches its limit', () => {
+    for (let index = 0; index < 20; index += 1) stashDraft(`Draft ${index}`, index + 1);
+    const before = loadStash();
+    const result = stashDraft('Overflow draft', 21);
+    expect([result.ok, result.reason, loadStash()]).toEqual([false, 'full', before]);
+  });
+
+  it.each(['', '{invalid json', '{"unexpected":true}', '[{"id":"saved"}]'])('does not overwrite unreadable saved data: %s', raw => {
+    stashDraft('Initial saved draft', 1);
+    const savedKey = Object.keys(localStorage).find(name => name.endsWith('tv4StashedDrafts:v2'));
+    localStorage.setItem(savedKey, raw);
+    const result = stashDraft('Keep this new draft', 2);
+    expect([result.ok, result.reason, localStorage.getItem(savedKey)]).toEqual([false, 'unreadable', raw]);
+  });
+
+  it('does not write after storage fails while reading the stash', () => {
+    const setter = vi.spyOn(Storage.prototype, 'setItem');
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('unavailable'); });
+    const result = stashDraft('Keep this new draft', 1);
+    expect([result.ok, result.reason, setter.mock.calls]).toEqual([false, 'unreadable', []]);
+  });
+
+  it('does not report a successful save if its read-back cannot be confirmed', () => {
+    const original = Storage.prototype.getItem;
+    let reads = 0;
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (key) {
+      if (String(key).endsWith('tv4StashedDrafts:v2') && ++reads > 1) throw new Error('unavailable');
+      return original.call(this, key);
+    });
+    expect(stashDraft('Keep this draft', 1).ok).toBe(false);
+  });
 });

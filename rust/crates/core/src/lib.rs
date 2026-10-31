@@ -165,6 +165,16 @@ pub struct TokenPair {
 pub struct AuthResult {
     pub user: UserPublic,
     pub tokens: TokenPair,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<AuthSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthSession {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logout_capability: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -72,9 +72,11 @@ describe('apiFetch', () => {
     setActiveEnvironment({ id: 'remote-a' });
     const oldSignal = getEnvironmentSignal();
     await apiFetch('/api/terminal');
-    expect(global.fetch).toHaveBeenCalledWith('/api/environments/remote-a/proxy/api/terminal', expect.objectContaining({ signal: oldSignal, headers: { Authorization: 'Bearer token-1' } }));
+    expect(global.fetch).toHaveBeenCalledWith('/api/environments/remote-a/proxy/api/terminal', expect.objectContaining({ headers: { Authorization: 'Bearer token-1' } }));
+    const requestSignal = global.fetch.mock.calls[0][1].signal;
     setActiveEnvironment(null);
     expect(oldSignal.aborted).toBe(true);
+    expect(requestSignal.aborted).toBe(true);
     await expect(apiFetch('https://untrusted.example.test/api/terminal')).rejects.toThrow('API requests must use the home server');
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });

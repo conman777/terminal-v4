@@ -12,7 +12,7 @@ const base = { number: 7, headSha: SHA, url: 'https://github.com/acme/app/pull/7
 const reply = (pullRequest, repository = '/w') => ({ pullRequest, availability: 'ok', repository });
 const statusCalls = () => vi.mocked(apiGet).mock.calls.length;
 
-beforeEach(() => { vi.mocked(apiGet).mockReset(); vi.mocked(apiPost).mockReset(); setActiveEnvironment(null); });
+beforeEach(() => { sessionStorage.clear(); vi.mocked(apiGet).mockReset(); vi.mocked(apiPost).mockReset(); setActiveEnvironment(null); });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 afterEach(() => vi.useRealTimers());
 
@@ -33,7 +33,7 @@ describe('PullRequestRow', () => {
 
   it('merges only after an exact-action confirmation and sends that confirmation', async () => {
     vi.mocked(apiGet).mockResolvedValue(reply(base));
-    vi.mocked(apiPost).mockResolvedValue({ done: true });
+    vi.mocked(apiPost).mockResolvedValue({ done: true, action: 'merge', number: 7 });
     render(<PullRequestRow cwd="/w" branch="b" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Merge' }));
     expect(apiPost).not.toHaveBeenCalled();
@@ -44,14 +44,71 @@ describe('PullRequestRow', () => {
     await waitFor(() => expect(statusCalls()).toBe(2));
   });
 
-  it('keeps the confirmation open and reports a failed merge honestly', async () => {
+  it('requires the user to review an unconfirmed merge before attempting it again', async () => {
     vi.mocked(apiGet).mockResolvedValue(reply(base));
     vi.mocked(apiPost).mockRejectedValue(new Error('GitHub did not answer in time. The action may or may not have completed: refresh the pull request before retrying'));
     render(<PullRequestRow cwd="/w" branch="b" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Merge' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm merge #7' }));
     expect((await screen.findByRole('alert')).textContent).toContain('may or may not have completed');
+    expect(screen.getByRole('button', { name: 'Confirm merge #7' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Merge' })).toBeDisabled();
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: "I've checked on GitHub" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Merge' }));
     expect(screen.getByRole('button', { name: 'Confirm merge #7' })).toBeEnabled();
+    expect(apiPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds an action when a successful HTTP response lacks a matching receipt', async () => {
+    vi.mocked(apiGet).mockResolvedValue(reply(base));
+    vi.mocked(apiPost).mockResolvedValue({ done: true, action: 'ready', number: 8 });
+    render(<PullRequestRow cwd="/w" branch="b" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm merge #7' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('could not be confirmed');
+    expect(screen.getByRole('button', { name: 'Confirm merge #7' })).toBeDisabled();
+  });
+
+  it('holds an in-flight action for review after the row is remounted', async () => {
+    const action = deferred();
+    vi.mocked(apiGet).mockResolvedValue(reply(base));
+    vi.mocked(apiPost).mockReturnValue(action.promise);
+    const { unmount } = render(<PullRequestRow cwd="/w" branch="b" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm merge #7' }));
+    unmount();
+    render(<PullRequestRow cwd="/w" branch="b" />);
+    expect(await screen.findByRole('button', { name: 'Merge' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: "I've checked on GitHub" })).toBeEnabled();
+    expect(apiPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the recovery marker only after receiving the matching success receipt', async () => {
+    vi.mocked(apiGet).mockResolvedValue(reply(base));
+    vi.mocked(apiPost).mockResolvedValue({ done: true, action: 'merge', number: 7 });
+    const { unmount } = render(<PullRequestRow cwd="/w" branch="b" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm merge #7' }));
+    await waitFor(() => expect(screen.queryByRole('group')).toBeNull());
+    unmount();
+    render(<PullRequestRow cwd="/w" branch="b" />);
+    expect(await screen.findByRole('button', { name: 'Merge' })).toBeEnabled();
+  });
+
+  it('does not send an action if its recovery marker cannot be saved', async () => {
+    vi.mocked(apiGet).mockResolvedValue(reply(base));
+    render(<PullRequestRow cwd="/w" branch="b" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge' }));
+    const save = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable'); });
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm merge #7' }));
+      expect((await screen.findByRole('alert')).textContent).toContain('Cannot save the action recovery record');
+      expect(apiPost).not.toHaveBeenCalled();
+    } finally {
+      save.mockRestore();
+    }
   });
 
   it('cancelling the confirmation sends nothing', async () => {

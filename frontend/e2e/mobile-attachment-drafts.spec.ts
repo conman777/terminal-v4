@@ -127,3 +127,93 @@ test('reopening a conversation warns if another tab changed its files while it w
     await other.close();
   }
 });
+
+test('a competing tab cannot send an outdated mobile attachment selection', async ({ page, context }) => {
+  const session = { id: 'ss-competing-send', provider: 'codex', runtime: 'codex', title: 'Competing attachment thread', cwd: '/tmp/attachment-fixture', status: 'completed', model: 'fixture-model', updatedAt: '2026-10-26T10:00:00Z' };
+  let sends = 0;
+  await context.route(/\/api\/structured\/sessions(?:\?.*)?$/, route => route.fulfill({ json: [session] }));
+  await context.route(`**/api/structured/sessions/${session.id}`, route => route.fulfill({ json: session }));
+  await context.route(`**/api/structured/sessions/${session.id}/input`, route => {
+    sends += 1;
+    return route.fulfill({ json: { accepted: true } });
+  });
+  await context.route('**/api/files/attachment', route => {
+    const body = route.request().postData() || '';
+    return route.fulfill({ json: { path: body.includes('second.txt') ? '/tmp/attachment-fixture/second.txt' : '/tmp/attachment-fixture/first.txt' } });
+  });
+  const prepare = async (target: typeof page) => {
+    await target.setViewportSize({ width: 320, height: 700 });
+    await target.routeWebSocket(`**/api/structured/sessions/${session.id}/ws*`, socket => socket.send(JSON.stringify({ __terminal_meta: true, type: 'structured_event', event: { type: 'message_completed', role: 'assistant', content: 'Ready.', messageId: 'message', turnId: 'turn', seq: 1 } })));
+  };
+  await prepare(page);
+  await page.addInitScript(() => {
+    (window as any).blockFixtureStorageEvents = false;
+    window.addEventListener('storage', event => {
+      if ((window as any).blockFixtureStorageEvents && event.key?.includes('composerFiles:')) event.stopImmediatePropagation();
+    }, true);
+  });
+  await page.goto('/');
+  await page.getByLabel('Username', { exact: true }).fill(`competing-${randomUUID()}`);
+  await page.getByRole('button', { name: 'Open workspace', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Show full thread title: Competing attachment thread/ })).toBeVisible();
+  const composer = page.getByRole('textbox', { name: 'Command composer', exact: true });
+  await composer.fill('Keep this message.');
+  const firstChooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Attach file' }).click();
+  await (await firstChooser).setFiles({ name: 'first.txt', mimeType: 'text/plain', buffer: Buffer.from('first') });
+  await expect(page.getByLabel('Composer attachments')).toContainText('first.txt');
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled();
+
+  const second = await context.newPage();
+  try {
+    await prepare(second);
+    await second.addInitScript(() => {
+      (window as any).fixtureTransactions = 0;
+      const original = IDBDatabase.prototype.transaction;
+      IDBDatabase.prototype.transaction = function (...args) {
+        if (args[0] === 'lock') (window as any).fixtureTransactions += 1;
+        return original.apply(this, args);
+      };
+    });
+    await second.goto('/');
+    await expect(second.getByRole('button', { name: /Show full thread title: Competing attachment thread/ })).toBeVisible();
+    await expect(second.getByLabel('Composer attachments')).toContainText('first.txt');
+    await page.evaluate(() => { (window as any).blockFixtureStorageEvents = true; });
+    await page.evaluate(() => new Promise<void>((resolve, reject) => {
+      const opening = indexedDB.open('terminal-v4-file-selection-lock', 1);
+      opening.onupgradeneeded = () => opening.result.createObjectStore('lock');
+      opening.onerror = () => reject(opening.error);
+      opening.onsuccess = () => {
+        const store = opening.result.transaction('lock', 'readwrite').objectStore('lock');
+        (window as any).releaseFixtureLock = false;
+        let announced = false;
+        const keepAlive = () => {
+          const request = store.get('selection');
+          request.onsuccess = () => {
+            if (!announced) { announced = true; resolve(); }
+            if (!(window as any).releaseFixtureLock) keepAlive();
+          };
+        };
+        keepAlive();
+      };
+    }));
+    const previousTransactions = await second.evaluate(() => (window as any).fixtureTransactions);
+    const secondChooser = second.waitForEvent('filechooser');
+    await second.getByRole('button', { name: 'Attach file' }).click();
+    await (await secondChooser).setFiles({ name: 'second.txt', mimeType: 'text/plain', buffer: Buffer.from('second') });
+    await second.waitForFunction(previous => (window as any).fixtureTransactions > previous, previousTransactions);
+    await page.getByRole('button', { name: 'Send message' }).click();
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeDisabled();
+    await page.evaluate(() => { (window as any).releaseFixtureLock = true; });
+    await expect(page.getByRole('alert')).toContainText('changed in another tab');
+    await expect(composer).toHaveValue('Keep this message.');
+    await expect(page.getByLabel('Composer attachments')).toContainText('first.txt');
+    await expect(second.getByLabel('Composer attachments')).toContainText('second.txt');
+    await page.getByRole('button', { name: 'Review saved files' }).click();
+    await expect(page.getByRole('group', { name: 'Saved file selections' })).toContainText('/tmp/attachment-fixture/second.txt');
+    expect(sends).toBe(0);
+  } finally {
+    await page.evaluate(() => { (window as any).releaseFixtureLock = true; }).catch(() => {});
+    await second.close();
+  }
+});

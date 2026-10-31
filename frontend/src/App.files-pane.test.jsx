@@ -4,11 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { installSelectionPaneR1Fixture, R1 } from './test/selectionPaneR1Fixture';
 import { getEnvironmentStorage } from './utils/remoteEnvironments';
+import { useConversationLinks } from './contexts/ConversationLinksContext';
 
 vi.mock('./components/FileManager', () => ({
-  FileManager: ({ initialPath, onClose }) => {
+  FileManager: ({ initialPath, initialLineTarget, onClose }) => {
     const [path, setPath] = useState(initialPath);
-    return <section aria-label="Synthetic Files"><span>{path}</span><button onClick={() => setPath('/browsed')}>Browse elsewhere</button><button onClick={onClose}>Close Files</button></section>;
+    const links = useConversationLinks();
+    return <section aria-label="Synthetic Files"><span>{path}</span><span>{initialLineTarget?.path}</span><button onClick={() => links.openFile("src/cited.js", 7)}>Open citation</button><button onClick={() => setPath('/browsed')}>Browse elsewhere</button><button onClick={onClose}>Close Files</button></section>;
   },
 }));
 
@@ -44,10 +46,14 @@ describe('pane project Files action', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Browse elsewhere' }));
     fireEvent.click(within(paneB).getByRole('button', { name: 'Open project in Files' }));
     expect(screen.getByRole('region', { name: 'Synthetic Files' })).toHaveTextContent('/synthetic/project-2');
+    fireEvent.click(screen.getByRole('button', { name: 'Open citation' }));
+    expect(screen.getByRole('region', { name: 'Synthetic Files' })).toHaveTextContent('src/cited.js');
     fireEvent.click(paneA.querySelector('.split-terminal-pane'));
+    expect(screen.getByRole('region', { name: 'Synthetic Files' })).not.toHaveTextContent('src/cited.js');
     await waitFor(() => expect(screen.getByRole('region', { name: 'Synthetic Files' })).toHaveTextContent('/synthetic/project-1'));
     fireEvent.click(paneB.querySelector('.split-terminal-pane'));
     await waitFor(() => expect(screen.getByRole('region', { name: 'Synthetic Files' })).toHaveTextContent('/synthetic/project-2'));
+    expect(screen.getByRole('region', { name: 'Synthetic Files' })).not.toHaveTextContent('src/cited.js');
     fireEvent.click(screen.getByRole('button', { name: 'Browse elsewhere' }));
     fireEvent.click(within(paneA).getByRole('button', { name: 'Open project in Files' }));
     expect(screen.getByRole('region', { name: 'Synthetic Files' })).toHaveTextContent('/synthetic/project-1');

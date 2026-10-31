@@ -38,6 +38,20 @@ function parts(binding) {
   return { key: key.toLowerCase(), mod: tokens.includes('mod'), shift: tokens.includes('shift'), alt: tokens.includes('alt') };
 }
 
+export function bindingConflict(id, binding, bindings = loadBindings()) {
+  const candidate = parts(binding);
+  if (candidate.mod && !candidate.shift && !candidate.alt && /^[1-8]$/.test(candidate.key)) {
+    return 'This shortcut is reserved for switching panes.';
+  }
+  const conflict = KEYBINDING_ACTIONS.find(action => {
+    if (action.id === id) return false;
+    const existing = parts(bindings[action.id] || '');
+    return candidate.key === existing.key && candidate.mod === existing.mod
+      && candidate.shift === existing.shift && candidate.alt === existing.alt;
+  });
+  return conflict ? `This shortcut is already used by ${conflict.label}.` : null;
+}
+
 export function eventMatches(event, binding, mac = isMacPlatform()) {
   if (!binding) return false;
   const want = parts(binding);

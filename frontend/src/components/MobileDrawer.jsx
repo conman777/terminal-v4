@@ -148,7 +148,7 @@ export function MobileDrawer({
   const searchingThreads = Boolean(threadSearch.trim());
   const showArchivedThreads = searchingThreads ? searchArchivedExpanded : archivedExpanded;
   const [historySearch, setHistorySearch] = useState({ rows: [], loading: false, error: '' });
-  useEffect(() => { if (!isOpen) { setThreadSearch(''); setSearchArchivedExpanded(true); } }, [isOpen]);
+  useLayoutEffect(() => { if (!isOpen) { setThreadSearch(''); setSearchArchivedExpanded(true); } }, [isOpen]);
 
   useEffect(() => {
     const query = threadSearch.trim();

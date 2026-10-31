@@ -43,6 +43,23 @@
 .workspace-composer .status-composer-shell:focus-within { border-color: var(--accent-primary); }
 .workspace-composer .status-composer-shell.image-drag-over { border-color: var(--accent-primary); background: var(--bg-hover); }
 .workspace-composer .status-composer-shell.disabled { opacity: .7; }
+.workspace-composer .status-composer-shell.scroll-compact {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+}
+.workspace-composer .status-composer-shell.scroll-compact .status-composer-input {
+  flex: 1 1 120px;
+  min-width: 120px;
+  min-height: 32px;
+  max-height: 32px;
+  overflow: hidden;
+}
+.workspace-composer .status-composer-shell.scroll-compact .status-bar-right {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+}
 .desktop-status-bar.workspace-composer.pane-active .status-composer-shell {
   border-color: var(--border-default); background: var(--bg-surface); box-shadow: none;
 }
@@ -163,6 +180,10 @@
 .workspace-composer .status-composer-attachment-remove { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; }
 .workspace-composer .status-composer-attachment-remove:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .workspace-composer .status-composer-upload-error { padding: 8px; border-radius: 6px; color: var(--error); background: var(--bg-elevated); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.workspace-composer .status-large-paste-review { display: flex; flex-direction: column; gap: 8px; }
+.workspace-composer .status-large-paste-review p { margin: 0; }
+.workspace-composer .status-large-paste-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.workspace-composer .status-transfer-review { align-self: flex-start; min-height: 36px; padding: 6px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); cursor: pointer; }
 .workspace-composer .status-composer-upload-status { margin: 0; color: var(--text-secondary); font: 12px/1.5 var(--font-ui); }
 .workspace-composer .status-composer-voice-status { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font: 12px/1.5 var(--font-ui); }
 .workspace-composer .status-composer-voice-status button { border: 0; background: transparent; color: var(--text-primary); cursor: pointer; font: inherit; text-decoration: underline; padding: 6px; }
@@ -181,6 +202,9 @@
 .workspace-composer .composer-input-options { position: relative; }
 .workspace-composer .composer-input-options > summary { display: grid; place-items: center; width: 32px; min-height: 32px; border-radius: 6px; color: var(--text-secondary); cursor: pointer; list-style: none; }
 .workspace-composer .composer-input-options > summary::-webkit-details-marker { display: none; }
+.workspace-composer .composer-options-label { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+.workspace-composer .composer-context-reading { font-size: 10px; font-variant-numeric: tabular-nums; }
+.workspace-composer .composer-context-description { margin: 4px 8px 8px; color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
 .workspace-composer .composer-input-options > summary:hover, .workspace-composer .composer-input-options[open] > summary { background: var(--bg-hover); }
 .workspace-composer .composer-input-options-menu { left: 0; right: auto; }
 .workspace-composer .composer-input-options-menu :is(.status-bar-btn, .terminal-mic-button-inline) { width: 100%; height: auto; justify-content: flex-start; gap: 8px; padding: 6px 8px; font-size: 13px; text-align: left; }
@@ -212,6 +236,8 @@
   .workspace-composer :is(.status-bar-btn, .terminal-mic-button-inline, .status-send-btn) { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
   .workspace-composer :is(.status-ai-selector, .status-sandbox-toggle, .status-terminal-toggle, .status-branch-trigger, .status-view-mode-option, .status-ai-menu-item, .status-permission-option, .status-slash-option, .user-image-draft-actions button) { min-height: 44px; }
   .workspace-composer .status-composer-attachment-remove { width: 44px; height: 44px; }
+  .workspace-composer .status-transfer-review { min-height: 44px; }
+  .workspace-composer .status-composer-voice-status button { min-height: 44px; }
   .workspace-composer .terminal-mic-stop-inline { flex-basis: 44px; width: 44px; height: 44px; }
   .workspace-composer .composer-input-options > summary { width: 44px; min-height: 44px; }
   .workspace-composer .composer-input-options-menu { left: auto; right: -48px; width: min(280px, calc(100vw - 32px)); }

@@ -1,0 +1,5 @@
+.appearance-setting-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; color: var(--text-secondary); font-size: 13px; }
+.appearance-reset { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border-default); border-radius: 6px; background: transparent; color: var(--text-primary); font: inherit; cursor: pointer; }
+.appearance-reset:disabled { opacity: 0.5; cursor: default; }
+.appearance-reset:focus-visible { outline: 2px solid var(--accent-color, #818cf8); outline-offset: 2px; }
+@media (pointer: coarse) { .appearance-reset { min-height: 44px; } }

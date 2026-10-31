@@ -11,3 +11,6 @@
 .notes-load-health > p, .notes-load-health > [role=alert] { margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 13px; }
 .notes-load-health [role=alert] p { margin: 0 0 8px; color: var(--error); }
 .notes-load-health button { min-height: 32px; padding: 6px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); font: 13px/1.5 var(--font-ui); cursor: pointer; }
+
+.notes-save-error { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; color: var(--error); font-size: 13px; line-height: 1.5; }
+.notes-save-error button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); font: inherit; cursor: pointer; }

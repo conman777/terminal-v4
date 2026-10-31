@@ -6,6 +6,8 @@ import { resolveHomeApiUrl } from '../utils/apiBase';
 import './LoginPage.css';
 
 export default function LoginPage() {
+  const { login, loginWithPasskeyResult, error: authError, cleanupNotice, strictStatus } = useAuth();
+  const authUnavailable = strictStatus === 'unavailable';
   const errorId = useId();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -15,17 +17,16 @@ export default function LoginPage() {
   const [authMode, setAuthMode] = useState('password');
   const localTesting = authMode === 'local-testing';
   useEffect(() => {
+    if (authUnavailable) return undefined;
     const controller = new AbortController();
     fetch(resolveHomeApiUrl('/api/auth/mode'), { signal:controller.signal })
       .then(response => response.ok ? response.json() : null)
       .then(value => { if (!controller.signal.aborted && value?.mode === 'local-testing') setAuthMode('local-testing'); })
       .catch(() => {});
     return () => controller.abort();
-  }, []);
+  }, [authUnavailable]);
   const liveRef = useRef(true);
   useEffect(() => { liveRef.current = true; return () => { liveRef.current = false; }; }, []);
-
-  const { login, loginWithPasskeyResult, error: authError, cleanupNotice } = useAuth();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -89,6 +90,19 @@ export default function LoginPage() {
   };
 
   const error = localError || authError;
+
+  if (authUnavailable) {
+    return (
+      <main className="pro-login-wrapper">
+        <section className="pro-login-container" role="alert">
+          <div className="pro-login-form-wrapper">
+            <h1 className="pro-form-title">Sign-in is unavailable</h1>
+            <p className="pro-form-subtitle">Check that browser session storage is enabled, then reload this page. If the problem continues, contact your administrator. Your saved sign-in has not been changed.</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="pro-login-wrapper">

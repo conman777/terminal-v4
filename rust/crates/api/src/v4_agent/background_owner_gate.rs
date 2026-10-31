@@ -593,7 +593,7 @@ impl OwnerGate {
         owner: &str,
         launch: impl FnOnce() -> Result<T, String>,
     ) -> Result<(T, bool), String> {
-        self.admit_checked(owner, None, launch)
+        self.admit_checked(owner, None, None, None, launch)
     }
 
     pub(crate) fn admit_generation<T>(
@@ -605,46 +605,110 @@ impl OwnerGate {
         if generation < 0 {
             return Err("Invalid background authorization generation".into());
         }
-        self.admit_checked(owner, Some(generation), launch)
+        self.admit_checked(owner, Some(generation), None, None, launch)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn admit_actor_authority<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        admission: &crate::state::LocalAdmission,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<(T, bool), String> {
+        let (generation, _) = authority
+            .valid_for(owner, super::interaction::now_ms())
+            .ok_or("Background authorization is unavailable or expired")?;
+        admission.with_external_auth_fence(|check| {
+            self.admit_checked(
+                owner,
+                Some(generation),
+                Some(authority),
+                Some(check),
+                action,
+            )
+        })
     }
 
     fn admit_checked<T>(
         &self,
         owner: &str,
         generation: Option<i64>,
+        origin: Option<&crate::auth::LocalAuthority>,
+        identity_check: Option<&dyn Fn(&rusqlite::Connection) -> Result<(), String>>,
         launch: impl FnOnce() -> Result<T, String>,
     ) -> Result<(T, bool), String> {
         validate(owner, "admission")?;
-        let mut db = self
-            .db
-            .lock()
-            .map_err(|_| "Background owner control unavailable")?;
-        let tx = db
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| "Background owner control unavailable")?;
-        let held: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM background_owner_holds WHERE owner=?1)",
-                [owner],
-                |row| row.get(0),
-            )
-            .map_err(|_| "Cannot inspect background owner hold")?;
-        if held {
-            return Err("Background actions are held for this owner".into());
-        }
-        if let Some(generation) = generation {
-            let current: i64 = tx.query_row(
-                "SELECT COALESCE((SELECT generation FROM auth_generations WHERE user_id=?1), 0)",
-                [owner],
-                |row| row.get(0),
-            ).map_err(|_| "Cannot inspect background authorization generation")?;
-            if generation != current {
-                return Err("Background authorization has been revoked".into());
+        let fail_fast = identity_check.is_some();
+        let mut db = if fail_fast {
+            self.db
+                .try_lock()
+                .map_err(|_| "Background owner control is busy")?
+        } else {
+            self.db
+                .lock()
+                .map_err(|_| "Background owner control unavailable")?
+        };
+        let previous_timeout = if fail_fast {
+            let millis: u64 = db
+                .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+                .map_err(|_| "Background owner control unavailable")?;
+            db.busy_timeout(Duration::ZERO)
+                .map_err(|_| "Background owner control unavailable")?;
+            Some(Duration::from_millis(millis))
+        } else {
+            None
+        };
+        let result = (|| {
+            let tx = db
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|error| match error {
+                    rusqlite::Error::SqliteFailure(ref failure, _)
+                        if matches!(
+                            failure.code,
+                            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                        ) =>
+                    {
+                        "Background owner control is busy".to_string()
+                    }
+                    _ => "Background owner control unavailable".to_string(),
+                })?;
+            if let Some(check) = identity_check {
+                check(&tx)?;
             }
+            let held: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM background_owner_holds WHERE owner=?1)",
+                    [owner],
+                    |row| row.get(0),
+                )
+                .map_err(|_| "Cannot inspect background owner hold")?;
+            if held {
+                return Err("Background actions are held for this owner".into());
+            }
+            if let Some(origin) = origin {
+                crate::state::AppState::validate_local_authority(&tx, owner, origin)?;
+            }
+            if let Some(generation) = generation {
+                let current: i64 = tx.query_row(
+                    "SELECT COALESCE((SELECT generation FROM auth_generations WHERE user_id=?1), 0)",
+                    [owner],
+                    |row| row.get(0),
+                ).map_err(|_| "Cannot inspect background authorization generation")?;
+                if generation != current {
+                    return Err("Background authorization has been revoked".into());
+                }
+            }
+            let child = launch()?;
+            let identity_valid = identity_check.is_none_or(|check| check(&tx).is_ok());
+            let confirmed = tx.commit().is_ok() && identity_valid;
+            Ok((child, confirmed))
+        })();
+        let restored = previous_timeout.is_none_or(|timeout| db.busy_timeout(timeout).is_ok());
+        match result {
+            Ok((value, confirmed)) => Ok((value, confirmed && restored)),
+            Err(error) => Err(error),
         }
-        let child = launch()?;
-        let confirmed = tx.commit().is_ok();
-        Ok((child, confirmed))
     }
 }
 
@@ -656,6 +720,149 @@ mod tests {
         sync::{Arc, Barrier},
         thread,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn short_effect_admission_rechecks_the_originating_login_session() {
+        let root = tempfile::tempdir().unwrap();
+        let app = crate::state::AppState::new(terminal_v4_core::AppConfig {
+            data_dir: root.path().into(),
+            jwt_secret: "background-session-gate-fixture".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let old_session = uuid::Uuid::new_v4().to_string();
+        let fresh_session = uuid::Uuid::new_v4().to_string();
+        {
+            let db = app.lock_db().unwrap();
+            OwnerGate::initialize(&db).unwrap();
+            db.execute("INSERT INTO users(id, username, password_hash, created_at, updated_at, auth_protocol_min) VALUES ('owner','fixture','fixture','now','now',1)", []).unwrap();
+            for session in [&old_session, &fresh_session] {
+                db.execute("INSERT INTO auth_sessions(id,user_id,generation,logout_capability_hash,revoked_at,created_at) VALUES (?1,'owner',0,'fixture',NULL,'now')", [session]).unwrap();
+            }
+        }
+        let gate =
+            OwnerGate::open(rusqlite::Connection::open(root.path().join("terminal.db")).unwrap())
+                .unwrap();
+        let admission = app.local_admission().unwrap();
+        let old = crate::auth::LocalAuthority::for_test_session("owner", 0, i64::MAX, &old_session);
+        let fresh =
+            crate::auth::LocalAuthority::for_test_session("owner", 0, i64::MAX, &fresh_session);
+        assert_eq!(
+            gate.admit_actor_authority("owner", &old, &admission, || Ok("before"))
+                .unwrap(),
+            ("before", true)
+        );
+        assert!(app.logout_user_authorized("owner", &old).unwrap());
+        assert!(gate
+            .admit_actor_authority("owner", &old, &admission, || -> Result<(), String> {
+                panic!("revoked origin reached an effect")
+            })
+            .is_err());
+        assert_eq!(
+            gate.admit_actor_authority("owner", &fresh, &admission, || Ok("after"))
+                .unwrap(),
+            ("after", true)
+        );
+        assert!(gate
+            .admit_actor_authority(
+                "another-owner",
+                &fresh,
+                &admission,
+                || -> Result<(), String> { panic!("foreign origin reached an effect") }
+            )
+            .is_err());
+        let held = app.hold_auth_admission_for_test().unwrap();
+        let busy = gate
+            .admit_actor_authority("owner", &fresh, &admission, || -> Result<(), String> {
+                panic!("contended admission reached an effect")
+            })
+            .unwrap_err();
+        assert!(busy.to_lowercase().contains("busy"), "{busy}");
+        drop(held);
+        assert_eq!(
+            gate.admit_actor_authority("owner", &fresh, &admission, || Ok("retry"))
+                .unwrap(),
+            ("retry", true)
+        );
+        std::fs::remove_file(root.path().join("auth-admission.identity")).unwrap();
+        assert!(gate
+            .admit_actor_authority("owner", &fresh, &admission, || -> Result<(), String> {
+                panic!("missing installation marker reached an effect")
+            })
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn actor_admission_does_not_hold_auth_fence_while_owner_control_is_busy() {
+        let root = tempfile::tempdir().unwrap();
+        let app = crate::state::AppState::new(terminal_v4_core::AppConfig {
+            data_dir: root.path().into(),
+            jwt_secret: "busy-owner-gate-fixture".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        {
+            let db = app.lock_db().unwrap();
+            OwnerGate::initialize(&db).unwrap();
+            db.execute("INSERT INTO users(id, username, password_hash, created_at, updated_at, auth_protocol_min) VALUES ('owner','fixture','fixture','now','now',1)", []).unwrap();
+            db.execute("INSERT INTO auth_sessions(id,user_id,generation,logout_capability_hash,revoked_at,created_at) VALUES ('fixture-session','owner',0,'fixture',NULL,'now')", []).unwrap();
+        }
+        let gate = Arc::new(
+            OwnerGate::open(Connection::open(root.path().join("terminal.db")).unwrap()).unwrap(),
+        );
+        let admission = app.local_admission().unwrap();
+        let authority =
+            crate::auth::LocalAuthority::for_test_session("owner", 0, i64::MAX, "fixture-session");
+        let held = gate.db.lock().unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let worker = {
+            let gate = gate.clone();
+            let admission = admission.clone();
+            let authority = authority.clone();
+            thread::spawn(move || {
+                sent.send(gate.admit_actor_authority("owner", &authority, &admission, || Ok(())))
+                    .unwrap()
+            })
+        };
+        let result = received.recv_timeout(Duration::from_millis(300));
+        drop(held);
+        worker.join().unwrap();
+        let error = result
+            .expect("owner mutex blocked global auth fence")
+            .unwrap_err();
+        assert!(error.contains("busy"), "{error}");
+        drop(app.hold_auth_admission_for_test().unwrap());
+
+        let mut other = Connection::open(root.path().join("terminal.db")).unwrap();
+        let held = other
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let worker = {
+            let gate = gate.clone();
+            let admission = admission.clone();
+            let authority = authority.clone();
+            thread::spawn(move || {
+                sent.send(gate.admit_actor_authority("owner", &authority, &admission, || Ok(())))
+                    .unwrap()
+            })
+        };
+        let result = received.recv_timeout(Duration::from_millis(300));
+        held.rollback().unwrap();
+        worker.join().unwrap();
+        let error = result
+            .expect("database busy wait blocked global auth fence")
+            .unwrap_err();
+        assert!(error.contains("busy"), "{error}");
+        drop(app.hold_auth_admission_for_test().unwrap());
+        assert_eq!(
+            gate.admit_actor_authority("owner", &authority, &admission, || Ok("after contention"))
+                .unwrap(),
+            ("after contention", true)
+        );
+    }
 
     #[test]
     fn logout_rejects_missing_installation_marker_when_ledger_directory_exists() {

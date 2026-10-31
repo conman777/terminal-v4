@@ -3,6 +3,8 @@
 .agent-question legend { display: grid; gap: 2px; padding: 0; margin-bottom: 6px; }
 .agent-question-header { color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .agent-question-text { color: var(--text-primary); font-weight: 500; }
+.agent-question-hint, .agent-question-error { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.agent-question-error { color: var(--error); }
 .agent-question-options { display: grid; gap: 6px; }
 .agent-question-option {
   display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--border-default);

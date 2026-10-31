@@ -1,0 +1,21 @@
+.auth-recovery-notice {
+  position: fixed;
+  z-index: 11000;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .3);
+  font: 14px/1.4 var(--font-ui);
+}
+.auth-recovery-notice p { margin: 0 0 8px; }
+.auth-recovery-notice button { min-height: 44px; padding: 0 12px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); font: inherit; }
+.auth-recovery-notice button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }

@@ -19,6 +19,36 @@ beforeEach(() => {
 });
 
 describe('WorkspaceGitShipping', () => {
+  it('shows loading until Git status resolves, then displays the repository actions', async () => {
+    let resolveStatus;
+    apiFetch.mockReturnValue(new Promise(resolve => { resolveStatus = resolve; }));
+    render(<WorkspaceGitShipping cwd="/repo" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading Git status');
+    expect(screen.queryByText(/need a Git repository/)).toBeNull();
+    resolveStatus({ ok: true, json: async () => ({ branch: 'feature', files: [] }) });
+    expect(await screen.findByRole('button', { name: 'Commit, push & PR' })).toBeInTheDocument();
+  });
+
+  it('shows a retryable error when status fails', async () => {
+    apiFetch.mockRejectedValueOnce(new Error('offline'));
+    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ branch: 'feature', files: [] }) });
+    render(<WorkspaceGitShipping cwd="/repo" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Git status');
+    expect(screen.queryByText(/need a Git repository/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Git status' }));
+    expect(await screen.findByRole('button', { name: 'Commit, push & PR' })).toBeInTheDocument();
+  });
+
+  it('hides the previous workspace actions immediately when the workspace changes', async () => {
+    gitStatus({ branch: 'feature', files: [] });
+    const { rerender } = render(<WorkspaceGitShipping cwd="/repo" />);
+    expect(await screen.findByRole('button', { name: 'Commit, push & PR' })).toBeInTheDocument();
+    apiFetch.mockReturnValue(new Promise(() => {}));
+    rerender(<WorkspaceGitShipping cwd="/other" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading Git status');
+    expect(screen.queryByRole('button', { name: 'Commit, push & PR' })).toBeNull();
+  });
+
   it('shows the pull request row and merges only after confirming the reviewed head commit', async () => {
     gitStatus({ branch: 'feature', files: [] });
     apiPost.mockResolvedValue({ done: true });

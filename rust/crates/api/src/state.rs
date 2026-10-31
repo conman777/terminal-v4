@@ -1,4 +1,5 @@
 use bcrypt::{hash, verify, DEFAULT_COST};
+use rand::RngCore;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -6,23 +7,27 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use terminal_v4_core::{
-    AppConfig, AuthMeResponse, AuthResult, Bookmark, Note, SidebarProject, TerminalSandboxInfo,
-    TerminalSessionSnapshot, TerminalSessionSummary, TerminalStreamEvent, ThreadMetadata,
-    TokenPair, UserPublic, UserSettings, SANDBOX_MODES,
+    AppConfig, AuthMeResponse, AuthResult, AuthSession, Bookmark, Note, SidebarProject,
+    TerminalSandboxInfo, TerminalSessionSnapshot, TerminalSessionSummary, TerminalStreamEvent,
+    ThreadMetadata, TokenPair, UserPublic, UserSettings, SANDBOX_MODES,
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
 #[cfg(test)]
 use crate::auth::issue_access_token;
-use crate::auth::{issue_access_token_for_generation, AuthenticatedUser};
+use crate::auth::{issue_access_token_for_protocol, AuthenticatedUser};
 use crate::external_auth::{ExternalAuthProvider, ExternalAuthUser, PostgresExternalAuthProvider};
 use crate::structured::StructuredSessionManager;
 use crate::terminal::TerminalManager;
 
 const EXTERNAL_AUTH_MIRROR_PASSWORD_HASH: &str = "!external-auth-mirror!";
 const REFRESH_TOKEN_TTL_DAYS: i64 = 30;
+#[cfg(unix)]
+const AUTH_SESSION_RECEIPT_LIMIT: i64 = 64;
 const MOBILE_KEYBOARD_DEBUG_ENTRY_LIMIT: usize = 200;
+pub(crate) const NOTE_OWNER_AMBIGUOUS: &str =
+    "Note storage ownership is ambiguous. Administrator review is required.";
 
 #[cfg(unix)]
 mod auth_admission;
@@ -43,6 +48,20 @@ mod utility_persistence_tests;
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<AppStateInner>,
+}
+
+pub(crate) struct PreparedUtility<T> {
+    value: T,
+    publication: Option<(tempfile::NamedTempFile, PathBuf)>,
+}
+
+impl<T> PreparedUtility<T> {
+    pub(crate) fn commit(self) -> Result<T, String> {
+        if let Some((file, path)) = self.publication {
+            file.persist(path).map_err(|error| error.to_string())?;
+        }
+        Ok(self.value)
+    }
 }
 
 struct AppStateInner {
@@ -84,17 +103,144 @@ impl LocalAdmission {
         &self.root
     }
 
+    pub(crate) fn with_external_auth_fence<T>(
+        &self,
+        operation: impl FnOnce(&dyn Fn(&Connection) -> Result<(), String>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _fence = self.fence.try_acquire()?;
+        let check = |connection: &Connection| self.fence.validate(connection);
+        operation(&check)
+    }
+
     pub(crate) fn accept<T, E>(
         &self,
         owner: &str,
         authority: &crate::auth::LocalAuthority,
         accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
     ) -> Result<(Result<T, E>, bool), String> {
+        self.accept_checked(
+            owner,
+            |tx| {
+                AppState::validate_local_authority(tx, owner, authority)?;
+                Ok(())
+            },
+            accept,
+            false,
+        )
+    }
+
+    pub(crate) fn accept_paired<T, E>(
+        &self,
+        owner: &str,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+    ) -> Result<(Result<T, E>, bool), String> {
+        let guard = owner_input::acquire(&self.root, owner, std::time::Duration::ZERO)?;
+        self.accept_paired_with_guard(owner, grant, &guard, accept)
+    }
+
+    pub(crate) fn accept_paired_with_guard<T, E>(
+        &self,
+        owner: &str,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        guard: &owner_input::OwnerInputGuard,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+    ) -> Result<(Result<T, E>, bool), String> {
+        if !guard.matches_scope(&self.root, owner) {
+            return Err("Owner input guard scope mismatch".into());
+        }
+        self.accept_checked(
+            owner,
+            |tx| {
+                if owner_input::installed(tx)? {
+                    guard.bind(tx)?;
+                }
+                crate::paired_environments::validate_paired_grant_with_connection(tx, grant, owner)
+            },
+            accept,
+            true,
+        )
+    }
+
+    pub(crate) fn accept_legacy_queue<T, E>(
+        &self,
+        owner: &str,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+    ) -> Result<(Result<T, E>, bool), String> {
+        self.accept_checked(
+            owner,
+            |tx| {
+                if AppState::auth_protocol_minimum(tx, owner)? != 0 {
+                    return Err(
+                        "Legacy queued work requires review after authentication upgrade".into(),
+                    );
+                }
+                Ok(())
+            },
+            accept,
+            true,
+        )
+    }
+
+    pub(crate) fn try_accept_local<T, E>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+    ) -> Result<(Result<T, E>, bool), String> {
+        let _fence = self.fence.try_acquire()?;
+        let mut connection = Connection::open_with_flags(
+            self.root
+                .canonicalize()
+                .map_err(|_| "Authentication admission unavailable")?
+                .join("terminal.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|_| "Authentication admission unavailable")?;
+        connection
+            .busy_timeout(std::time::Duration::ZERO)
+            .map_err(|_| "Authentication admission unavailable")?;
+        self.accept_transaction(
+            owner,
+            &mut connection,
+            |tx| {
+                AppState::validate_local_authority(tx, owner, authority)?;
+                Ok(())
+            },
+            accept,
+            false,
+        )
+    }
+
+    fn accept_checked<T, E>(
+        &self,
+        owner: &str,
+        check_authority: impl Fn(&rusqlite::Transaction<'_>) -> Result<(), String>,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+        verify_after: bool,
+    ) -> Result<(Result<T, E>, bool), String> {
         let _fence = self.fence.acquire()?;
         let mut connection = self
             .db
             .lock()
             .map_err(|_| "Authentication database unavailable")?;
+        self.accept_transaction(
+            owner,
+            &mut connection,
+            check_authority,
+            accept,
+            verify_after,
+        )
+    }
+
+    fn accept_transaction<T, E>(
+        &self,
+        owner: &str,
+        connection: &mut Connection,
+        check_authority: impl Fn(&rusqlite::Transaction<'_>) -> Result<(), String>,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+        verify_after: bool,
+    ) -> Result<(Result<T, E>, bool), String> {
         self.fence.validate(&connection)?;
         let tx = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -130,18 +276,13 @@ impl LocalAdmission {
                     _ => return Err("Background installation identity is unavailable".into()),
                 }
             }
-            let current = AppState::auth_generation(&tx, owner)?;
-            let (generation, _) = authority
-                .valid_for(owner, crate::v4_agent::interaction::now_ms())
-                .ok_or("Credential is invalid or expired")?;
-            if generation != current {
-                return Err("Credential has been revoked".into());
-            }
-            Ok(())
+            check_authority(&tx)
         };
         check()?;
         let result = accept(&check);
-        Ok((result, tx.commit().is_ok()))
+        let valid = !verify_after || check().is_ok();
+        let committed = tx.commit().is_ok();
+        Ok((result, valid && committed))
     }
 }
 
@@ -214,6 +355,8 @@ struct StoredRefreshToken {
     id: String,
     user_id: String,
     expires_at: String,
+    auth_protocol: i64,
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +391,17 @@ pub struct HistoryQuery {
     pub after_ts: Option<i64>,
     pub before_seq: Option<i64>,
     pub after_seq: Option<i64>,
+}
+
+fn vault_database_error(error: rusqlite::Error) -> String {
+    #[cfg(unix)]
+    {
+        crate::vault_admission::database_error(error)
+    }
+    #[cfg(not(unix))]
+    {
+        error.to_string()
+    }
 }
 
 impl AppState {
@@ -789,12 +943,32 @@ impl AppState {
                 user_id,
                 std::time::Duration::from_secs(3),
             )?;
-            self.logout_user_with_guard(user_id, Some(&owner_guard))
+            self.logout_user_with_guard(user_id, Some(&owner_guard), None)
                 .map(|_| ())
         }
         #[cfg(not(unix))]
         {
-            self.logout_user_with_guard(user_id).map(|_| ())
+            self.logout_user_with_guard(user_id, None).map(|_| ())
+        }
+    }
+
+    pub(crate) fn logout_user_authorized(
+        &self,
+        user_id: &str,
+        authority: &crate::auth::LocalAuthority,
+    ) -> Result<bool, String> {
+        #[cfg(unix)]
+        {
+            let owner_guard = owner_input::acquire(
+                &self.inner.config.data_dir,
+                user_id,
+                std::time::Duration::from_secs(3),
+            )?;
+            self.logout_user_with_guard(user_id, Some(&owner_guard), Some(authority))
+        }
+        #[cfg(not(unix))]
+        {
+            self.logout_user_with_guard(user_id, Some(authority))
         }
     }
 
@@ -802,6 +976,7 @@ impl AppState {
         &self,
         user_id: &str,
         #[cfg(unix)] owner_guard: Option<&owner_input::OwnerInputGuard>,
+        authority: Option<&crate::auth::LocalAuthority>,
     ) -> Result<bool, String> {
         #[cfg(unix)]
         let _fence = self
@@ -820,6 +995,15 @@ impl AppState {
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
+        if let Some(authority) = authority {
+            let current = Self::auth_generation(&transaction, user_id)?;
+            if authority
+                .valid_for(user_id, crate::v4_agent::interaction::now_ms())
+                .is_none_or(|(generation, _)| generation != current)
+            {
+                return Ok(false);
+            }
+        }
         #[cfg(unix)]
         {
             let installed = owner_input::installed(&transaction)?;
@@ -838,6 +1022,63 @@ impl AppState {
                     .ok_or("Input owner lock unavailable")?
                     .bind(&transaction)?;
             }
+        }
+        if let Some(authority) = authority.filter(|authority| authority.auth_protocol() == 1) {
+            let current = Self::auth_generation(&transaction, user_id)?;
+            if authority
+                .valid_for(user_id, crate::v4_agent::interaction::now_ms())
+                .is_none_or(|(generation, _)| generation != current)
+                || Self::auth_protocol_minimum(&transaction, user_id)? != 1
+                || Self::validate_auth_session(
+                    &transaction,
+                    user_id,
+                    current,
+                    1,
+                    authority.session_id(),
+                )
+                .is_err()
+            {
+                return Ok(false);
+            }
+            let session_id = authority
+                .session_id()
+                .ok_or("Credential authority unavailable")?;
+            let changed = transaction.execute(
+                "UPDATE auth_sessions SET revoked_at=?1 WHERE id=?2 AND user_id=?3 AND generation=?4 AND revoked_at IS NULL",
+                params![iso_timestamp(), session_id, user_id, current],
+            ).map_err(|_| "Cannot revoke authentication session")?;
+            if changed != 1 {
+                return Ok(false);
+            }
+            transaction
+                .execute(
+                    "DELETE FROM refresh_tokens WHERE user_id=?1 AND session_id=?2",
+                    params![user_id, session_id],
+                )
+                .map_err(|_| "Cannot revoke authentication session")?;
+            if authority
+                .valid_for(user_id, crate::v4_agent::interaction::now_ms())
+                .is_none_or(|(generation, _)| generation != current)
+            {
+                return Ok(false);
+            }
+            #[cfg(unix)]
+            {
+                if owner_input::installed(&transaction)? {
+                    owner_guard
+                        .ok_or("Input owner lock unavailable")?
+                        .bind(&transaction)?;
+                }
+                self.inner
+                    .auth_admission
+                    .get()
+                    .ok_or("Authentication admission unavailable")?
+                    .validate(&transaction)?;
+            }
+            transaction
+                .commit()
+                .map_err(|_| "Authentication revocation outcome is uncertain")?;
+            return Ok(true);
         }
         #[cfg(unix)]
         {
@@ -895,6 +1136,172 @@ impl AppState {
             .validate(&transaction)?;
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(true)
+    }
+
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    pub(crate) fn revoke_session_with_receipt(
+        &self,
+        owner: &str,
+        session: &str,
+        capability: &str,
+        operation: &str,
+        incarnation: &str,
+    ) -> Result<Value, String> {
+        self.session_logout_receipt(owner, session, capability, operation, incarnation, true)?
+            .ok_or_else(|| "Authentication revocation unavailable".into())
+    }
+
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    pub(crate) fn lookup_session_logout_receipt(
+        &self,
+        owner: &str,
+        session: &str,
+        capability: &str,
+        operation: &str,
+        incarnation: &str,
+    ) -> Result<Option<Value>, String> {
+        self.session_logout_receipt(owner, session, capability, operation, incarnation, false)
+    }
+
+    #[cfg(unix)]
+    fn session_logout_receipt(
+        &self,
+        owner: &str,
+        session: &str,
+        capability: &str,
+        operation: &str,
+        incarnation: &str,
+        revoke: bool,
+    ) -> Result<Option<Value>, String> {
+        let canonical_uuid =
+            |value: &str| Uuid::parse_str(value).is_ok_and(|parsed| parsed.to_string() == value);
+        if owner.is_empty()
+            || owner.len() > 256
+            || owner.chars().any(char::is_control)
+            || !canonical_uuid(session)
+            || !canonical_uuid(operation)
+            || !canonical_uuid(incarnation)
+            || capability.len() != 64
+            || !capability
+                .bytes()
+                .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
+        {
+            return Err("Authentication revocation unavailable".into());
+        }
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let capability_hash = hash_token(capability);
+        {
+            let connection = self.lock_db()?;
+            admission.validate(&connection)?;
+            let exists: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM auth_sessions WHERE id=?1 AND user_id=?2 AND logout_capability_hash=?3)",
+                params![session, owner, capability_hash], |row| row.get(0),
+            ).map_err(|_| "Authentication revocation unavailable")?;
+            admission.validate(&connection)?;
+            if !exists {
+                return Err("Authentication revocation unavailable".into());
+            }
+        }
+        let owner_guard = owner_input::acquire(
+            &self.inner.config.data_dir,
+            owner,
+            std::time::Duration::from_secs(3),
+        )?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication revocation unavailable")?;
+        if owner_input::installed(&transaction)? {
+            owner_guard.bind(&transaction)?;
+        }
+        let record: Option<(i64, Option<String>, i64)> = transaction.query_row(
+            "SELECT generation, revoked_at, receipt_count FROM auth_sessions WHERE id=?1 AND user_id=?2 AND logout_capability_hash=?3",
+            params![session, owner, capability_hash], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(|_| "Authentication revocation unavailable")?;
+        let (generation, revoked_at, receipt_count) =
+            record.ok_or("Authentication revocation unavailable")?;
+        let actual_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM auth_session_logout_receipts WHERE user_id=?1 AND session_id=?2",
+            params![owner, session], |row| row.get(0),
+        ).map_err(|_| "Authentication revocation unavailable")?;
+        if receipt_count < 0 || receipt_count != actual_count {
+            return Err("Authentication receipt history is incomplete".into());
+        }
+        let previous: Option<(String, String, String)> = transaction.query_row(
+            "SELECT user_id, session_id, incarnation FROM auth_session_logout_receipts WHERE operation=?1",
+            params![operation], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(|_| "Authentication revocation unavailable")?;
+        let receipt = serde_json::json!({"owner": owner, "session": session, "operation": operation, "incarnation": incarnation, "status": "revoked"});
+        if let Some((previous_owner, previous_session, previous_incarnation)) = previous {
+            if previous_owner != owner
+                || previous_session != session
+                || previous_incarnation != incarnation
+                || revoked_at.is_none()
+            {
+                return Err("Authentication revocation unavailable".into());
+            }
+            admission.validate(&transaction)?;
+            if owner_input::installed(&transaction)? {
+                owner_guard.bind(&transaction)?;
+            }
+            return Ok(Some(receipt));
+        }
+        if !revoke {
+            return Ok(None);
+        }
+        if receipt_count >= AUTH_SESSION_RECEIPT_LIMIT {
+            return Err("Authentication receipt history is full".into());
+        }
+        let current_generation = Self::auth_generation(&transaction, owner)?;
+        if current_generation < generation || Self::auth_protocol_minimum(&transaction, owner)? != 1
+        {
+            return Err("Authentication revocation unavailable".into());
+        }
+        if revoked_at.is_none() {
+            let changed = transaction.execute(
+                "UPDATE auth_sessions SET revoked_at=?1 WHERE id=?2 AND user_id=?3 AND generation=?4 AND revoked_at IS NULL",
+                params![iso_timestamp(), session, owner, generation],
+            ).map_err(|_| "Authentication revocation unavailable")?;
+            if changed != 1 {
+                return Err("Authentication revocation unavailable".into());
+            }
+        }
+        transaction
+            .execute(
+                "DELETE FROM refresh_tokens WHERE user_id=?1 AND session_id=?2",
+                params![owner, session],
+            )
+            .map_err(|_| "Authentication revocation unavailable")?;
+        transaction.execute(
+            "INSERT INTO auth_session_logout_receipts(operation,user_id,session_id,incarnation,created_at) VALUES (?1,?2,?3,?4,?5)",
+            params![operation, owner, session, incarnation, iso_timestamp()],
+        ).map_err(|_| "Authentication revocation unavailable")?;
+        let next_count = receipt_count
+            .checked_add(1)
+            .ok_or("Authentication receipt history is full")?;
+        let counted = transaction.execute(
+            "UPDATE auth_sessions SET receipt_count=?1 WHERE id=?2 AND user_id=?3 AND receipt_count=?4",
+            params![next_count, session, owner, receipt_count],
+        ).map_err(|_| "Authentication revocation unavailable")?;
+        if counted != 1 {
+            return Err("Authentication receipt history is incomplete".into());
+        }
+        admission.validate(&transaction)?;
+        if owner_input::installed(&transaction)? {
+            owner_guard.bind(&transaction)?;
+        }
+        transaction
+            .commit()
+            .map_err(|_| "Authentication revocation outcome is uncertain")?;
+        Ok(Some(receipt))
     }
 
     #[cfg(all(test, unix))]
@@ -1016,13 +1423,7 @@ impl AppState {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| "Authentication admission unavailable")?;
         if let Some(authority) = authority {
-            let current = Self::auth_generation(&tx, owner)?;
-            let (generation, _) = authority
-                .valid_for(owner, crate::v4_agent::interaction::now_ms())
-                .ok_or("Credential is invalid or expired")?;
-            if generation != current {
-                return Err("Credential has been revoked".into());
-            }
+            Self::validate_local_authority(&tx, owner, authority)?;
         }
         if owner_input::installed(&tx)? {
             guard.bind(&tx)?;
@@ -1083,13 +1484,7 @@ impl AppState {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| "Authentication admission unavailable")?;
         guard.bind(&tx)?;
-        let current = Self::auth_generation(&tx, owner)?;
-        let (generation, _) = authority
-            .valid_for(owner, crate::v4_agent::interaction::now_ms())
-            .ok_or("Credential is invalid or expired")?;
-        if generation != current {
-            return Err("Credential has been revoked".into());
-        }
+        Self::validate_local_authority(&tx, owner, authority)?;
         let now = crate::v4_agent::interaction::now_ms();
         if reserved {
             guard.activate(&tx, session, operation, now)?;
@@ -1120,13 +1515,7 @@ impl AppState {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| "Authentication admission unavailable")?;
         guard.bind(&tx)?;
-        let current = Self::auth_generation(&tx, owner)?;
-        let (generation, _) = authority
-            .valid_for(owner, crate::v4_agent::interaction::now_ms())
-            .ok_or("Credential is invalid or expired")?;
-        if generation != current {
-            return Err("Credential has been revoked".into());
-        }
+        Self::validate_local_authority(&tx, owner, authority)?;
         admission.validate(&tx)?;
         tx.commit()
             .map_err(|_| "Authentication admission unavailable".into())
@@ -1154,13 +1543,7 @@ impl AppState {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| "Authentication admission unavailable")?;
         guard.bind(&tx)?;
-        let current = Self::auth_generation(&tx, owner)?;
-        let (credential_generation, _) = authority
-            .valid_for(owner, crate::v4_agent::interaction::now_ms())
-            .ok_or("Credential is invalid or expired")?;
-        if credential_generation != current {
-            return Err("Credential has been revoked".into());
-        }
+        Self::validate_local_authority(&tx, owner, authority)?;
         let now = crate::v4_agent::interaction::now_ms();
         let (operation, token) = owner_input::issue(
             &self.inner.config.jwt_secret,
@@ -1265,13 +1648,7 @@ impl AppState {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| "Authentication admission unavailable")?;
         guard.bind(&tx)?;
-        let current = Self::auth_generation(&tx, owner)?;
-        let (generation, _) = authority
-            .valid_for(owner, crate::v4_agent::interaction::now_ms())
-            .ok_or("Credential is invalid or expired")?;
-        if generation != current {
-            return Err("Credential has been revoked".into());
-        }
+        Self::validate_local_authority(&tx, owner, authority)?;
         let cutoff = guard.advance_watermark(&tx, crate::v4_agent::interaction::now_ms())?;
         admission.validate(&tx)?;
         tx.commit().map_err(|_| "Input watermark is uncertain")?;
@@ -1299,13 +1676,7 @@ impl AppState {
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|_| "Authentication admission unavailable")?;
         guard.bind(&tx)?;
-        let current = Self::auth_generation(&tx, owner)?;
-        let (generation, _) = authority
-            .valid_for(owner, crate::v4_agent::interaction::now_ms())
-            .ok_or("Credential is invalid or expired")?;
-        if generation != current {
-            return Err("Credential has been revoked".into());
-        }
+        Self::validate_local_authority(&tx, owner, authority)?;
         let status = guard.review(&tx, session, operation)?;
         admission.validate(&tx)?;
         tx.commit()
@@ -1324,6 +1695,84 @@ impl AppState {
             return Err("Token has been revoked".into());
         }
         Ok(())
+    }
+
+    pub(crate) fn validate_auth_claims(
+        &self,
+        user_id: &str,
+        generation: i64,
+        protocol: i64,
+        session_id: Option<&str>,
+    ) -> Result<(), String> {
+        let mut connection = self.lock_db()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| "Credential authority unavailable")?;
+        Self::verify_auth_protocol_integrity(&transaction)?;
+        let (current, exists, required): (i64, bool, Option<i64>) = transaction.query_row(
+            "SELECT COALESCE((SELECT generation FROM auth_generations WHERE user_id=?1), 0), EXISTS(SELECT 1 FROM users WHERE id=?1), (SELECT auth_protocol_min FROM users WHERE id=?1)",
+            params![user_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).map_err(|_| "Credential authority unavailable".to_string())?;
+        let required = if exists {
+            required.ok_or("Credential authority unavailable")?
+        } else {
+            0
+        };
+        if generation != current || !matches!(required, 0 | 1) || protocol != required {
+            return Err("Credential has been revoked or requires an upgraded client".into());
+        }
+        Self::validate_auth_session(&transaction, user_id, generation, protocol, session_id)?;
+        transaction
+            .commit()
+            .map_err(|_| "Credential authority unavailable")?;
+        Ok(())
+    }
+
+    fn validate_auth_session(
+        connection: &Connection,
+        user_id: &str,
+        generation: i64,
+        protocol: i64,
+        session_id: Option<&str>,
+    ) -> Result<(), String> {
+        match (protocol, session_id) {
+            (0, None) => Ok(()),
+            (1, Some(session_id)) => {
+                let active: bool = connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM auth_sessions WHERE id=?1 AND user_id=?2 AND generation=?3 AND revoked_at IS NULL)",
+                    params![session_id, user_id, generation], |row| row.get(0),
+                ).map_err(|_| "Credential authority unavailable")?;
+                if active {
+                    Ok(())
+                } else {
+                    Err("Credential has been revoked".into())
+                }
+            }
+            _ => Err("Credential authority unavailable".into()),
+        }
+    }
+
+    pub(crate) fn validate_local_authority(
+        connection: &Connection,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+    ) -> Result<(i64, i64), String> {
+        let (generation, expires) = authority
+            .valid_for(owner, crate::v4_agent::interaction::now_ms())
+            .ok_or("Credential is invalid or expired")?;
+        if Self::auth_generation(connection, owner)? != generation
+            || Self::auth_protocol_minimum(connection, owner)? != authority.auth_protocol()
+        {
+            return Err("Credential has been revoked".into());
+        }
+        Self::validate_auth_session(
+            connection,
+            owner,
+            generation,
+            authority.auth_protocol(),
+            authority.session_id(),
+        )?;
+        Ok((generation, expires))
     }
 
     #[cfg(unix)]
@@ -1346,13 +1795,7 @@ impl AppState {
             .map_err(|_| "Authentication admission unavailable")?;
         let check = || {
             admission.validate(&transaction)?;
-            let current = Self::auth_generation(&transaction, owner)?;
-            let (generation, _) = authority
-                .valid_for(owner, crate::v4_agent::interaction::now_ms())
-                .ok_or("Credential is invalid or expired")?;
-            if generation != current {
-                return Err("Credential has been revoked".into());
-            }
+            Self::validate_local_authority(&transaction, owner, authority)?;
             Ok(())
         };
         check()?;
@@ -1361,11 +1804,29 @@ impl AppState {
         Ok((result, committed))
     }
 
-    #[cfg(unix)]
     pub(crate) fn with_owner_review<T>(
         &self,
         owner: &str,
         authority: &crate::auth::LocalAuthority,
+        review: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &dyn Fn() -> Result<(), String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_owner_review_mapped(
+            owner,
+            authority,
+            |_| "Authentication admission unavailable".into(),
+            review,
+        )
+    }
+
+    #[cfg(unix)]
+    fn with_owner_review_mapped<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        map_database_error: impl FnOnce(rusqlite::Error) -> String,
         review: impl FnOnce(
             &rusqlite::Transaction<'_>,
             &dyn Fn() -> Result<(), String>,
@@ -1381,16 +1842,10 @@ impl AppState {
         admission.validate(&db)?;
         let tx = db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(|_| "Authentication admission unavailable")?;
+            .map_err(map_database_error)?;
         let check = || {
             admission.validate(&tx)?;
-            let current = Self::auth_generation(&tx, owner)?;
-            let (generation, _) = authority
-                .valid_for(owner, crate::v4_agent::interaction::now_ms())
-                .ok_or("Credential is invalid or expired")?;
-            if generation != current {
-                return Err("Credential has been revoked".into());
-            }
+            Self::validate_local_authority(&tx, owner, authority)?;
             Ok(())
         };
         check()?;
@@ -1398,6 +1853,167 @@ impl AppState {
         tx.commit()
             .map_err(|_| "Owner review outcome is uncertain")?;
         Ok(result)
+    }
+
+    #[cfg(not(unix))]
+    fn with_owner_review_mapped<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        map_database_error: impl FnOnce(rusqlite::Error) -> String,
+        review: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &dyn Fn() -> Result<(), String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut connection = self.lock_db()?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(map_database_error)?;
+        let check = || {
+            Self::validate_local_authority(&transaction, owner, authority)?;
+            Ok(())
+        };
+        check()?;
+        let result = review(&transaction, &check)?;
+        check()?;
+        transaction
+            .commit()
+            .map_err(|_| "Owner review outcome is uncertain")?;
+        Ok(result)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn try_with_owner_review<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        review: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &dyn Fn() -> Result<(), String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.try_acquire()?;
+        let mut db = Connection::open_with_flags(
+            self.config()
+                .data_dir
+                .canonicalize()
+                .map_err(|_| "Authentication admission unavailable")?
+                .join("terminal.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|_| "Authentication admission unavailable")?;
+        db.busy_timeout(std::time::Duration::ZERO)
+            .map_err(|_| "Authentication admission unavailable")?;
+        admission.validate(&db)?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        let check = || {
+            admission.validate(&tx)?;
+            Self::validate_local_authority(&tx, owner, authority)?;
+            Ok(())
+        };
+        check()?;
+        let result = review(&tx, &check)?;
+        tx.commit()
+            .map_err(|_| "Owner review outcome is uncertain")?;
+        Ok(result)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn try_with_paired_owner_review<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::PairedInputAuthority,
+        review: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &dyn Fn() -> Result<(), String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let guard = self.try_acquire_input_guard(owner)?;
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.try_acquire()?;
+        let mut db = Connection::open_with_flags(
+            self.config()
+                .data_dir
+                .canonicalize()
+                .map_err(|_| "Authentication admission unavailable")?
+                .join("terminal.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|_| "Authentication admission unavailable")?;
+        db.busy_timeout(std::time::Duration::ZERO)
+            .map_err(|_| "Authentication admission unavailable")?;
+        admission.validate(&db)?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        if owner_input::installed(&tx)? {
+            guard.bind(&tx)?;
+        }
+        let check = || {
+            admission.validate(&tx)?;
+            let expires = crate::paired_environments::validate_input_authority_with_connection(
+                &tx, authority, owner,
+            )?;
+            if crate::v4_agent::interaction::now_ms() >= expires {
+                return Err("Paired grant expired or revoked".into());
+            }
+            Ok(())
+        };
+        check()?;
+        let result = review(&tx, &check)?;
+        check()?;
+        tx.commit()
+            .map_err(|_| "Owner review outcome is uncertain")?;
+        Ok(result)
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn try_with_paired_owner_review<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::PairedInputAuthority,
+        review: impl FnOnce(&Transaction<'_>, &dyn Fn() -> Result<(), String>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut db = self.lock_db()?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(vault_database_error)?;
+        let check = || {
+            let expires = crate::paired_environments::validate_input_authority_with_connection(
+                &tx, authority, owner,
+            )?;
+            if crate::v4_agent::interaction::now_ms() >= expires {
+                return Err("Paired grant expired or revoked".into());
+            }
+            Ok(())
+        };
+        check()?;
+        let result = review(&tx, &check)?;
+        check()?;
+        tx.commit()
+            .map_err(|_| "Owner review outcome is uncertain")?;
+        Ok(result)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn hold_auth_admission_for_test(&self) -> Result<std::fs::File, String> {
+        self.inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?
+            .acquire()
     }
 
     fn auth_generation(connection: &Connection, user_id: &str) -> Result<i64, String> {
@@ -1408,6 +2024,30 @@ impl AppState {
                 |row| row.get(0),
             )
             .map_err(|error| error.to_string())
+    }
+
+    fn verify_auth_protocol_integrity(connection: &Connection) -> Result<(), String> {
+        let (recorded, actual, insert_trigger, update_trigger): (i64, i64, bool, bool) = connection.query_row(
+            "SELECT activated_count, (SELECT count(*) FROM users WHERE auth_protocol_min=1), EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='auth_protocol_account_insert'), EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='auth_protocol_account_activate') FROM auth_protocol_account_integrity WHERE id=1",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).map_err(|_| "Credential authority unavailable".to_string())?;
+        if recorded < 0 || recorded != actual || !insert_trigger || !update_trigger {
+            return Err("Credential authority unavailable".into());
+        }
+        Ok(())
+    }
+
+    fn auth_protocol_minimum(connection: &Connection, user_id: &str) -> Result<i64, String> {
+        Self::verify_auth_protocol_integrity(connection)?;
+        connection
+            .query_row(
+                "SELECT auth_protocol_min FROM users WHERE id=?",
+                params![user_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|value| value.unwrap_or(0))
+            .map_err(|_| "Credential authority unavailable".into())
     }
 
     pub fn change_password(
@@ -1498,6 +2138,13 @@ impl AppState {
 
     pub fn get_settings(&self, user: &AuthenticatedUser) -> Result<UserSettings, String> {
         let connection = self.lock_db()?;
+        Self::get_settings_from_connection(&connection, user)
+    }
+
+    fn get_settings_from_connection(
+        connection: &Connection,
+        user: &AuthenticatedUser,
+    ) -> Result<UserSettings, String> {
         let row = connection
             .query_row(
                 "SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode, recent_folders, pinned_folders, sidebar_projects FROM user_settings WHERE user_id = ?",
@@ -1576,13 +2223,51 @@ impl AppState {
         user: &AuthenticatedUser,
         patch: SettingsPatch,
     ) -> Result<(), String> {
-        self.ensure_user_row(user)?;
-
         let mut connection = self.lock_db()?;
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        Self::update_settings_in_transaction(&transaction, user, &patch)?;
+        transaction.commit().map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn get_settings_authorized(
+        &self,
+        user: &AuthenticatedUser,
+        authority: &crate::auth::LocalAuthority,
+    ) -> Result<UserSettings, String> {
+        self.with_owner_review(&user.user_id, authority, |transaction, check| {
+            Self::verify_auth_protocol_integrity(transaction)?;
+            let result = Self::get_settings_from_connection(transaction, user)?;
+            check()?;
+            Ok(result)
+        })
+    }
+
+    pub(crate) fn update_settings_authorized(
+        &self,
+        user: &AuthenticatedUser,
+        authority: &crate::auth::LocalAuthority,
+        patch: SettingsPatch,
+    ) -> Result<(), String> {
+        self.with_owner_review(&user.user_id, authority, |transaction, check| {
+            Self::verify_auth_protocol_integrity(transaction)?;
+            Self::update_settings_in_transaction(transaction, user, &patch)?;
+            check()?;
+            Ok(())
+        })
+    }
+
+    fn update_settings_in_transaction(
+        transaction: &Transaction<'_>,
+        user: &AuthenticatedUser,
+        patch: &SettingsPatch,
+    ) -> Result<(), String> {
         let now = iso_timestamp();
+        transaction.execute(
+            "INSERT INTO users (id, username, password_hash, created_at, updated_at) SELECT ?1, ?2, ?3, ?4, ?4 WHERE NOT EXISTS(SELECT 1 FROM users WHERE id=?1)",
+            params![user.user_id, external_auth_mirror_username(&user.user_id), EXTERNAL_AUTH_MIRROR_PASSWORD_HASH, now],
+        ).map_err(|error| error.to_string())?;
 
         transaction
             .execute(
@@ -1674,18 +2359,28 @@ impl AppState {
                 params![iso_timestamp(), user.user_id],
             )
             .map_err(|error| error.to_string())?;
-        transaction.commit().map_err(|error| error.to_string())
+        Ok(())
     }
 
     pub fn list_bookmarks(&self, user: &AuthenticatedUser) -> Result<Vec<Bookmark>, String> {
-        let _file_lock = self.lock_files()?;
+        self.with_utility_file(user, || self.prepare_bookmark_list(user))
+    }
+
+    pub(crate) fn prepare_bookmark_list(
+        &self,
+        user: &AuthenticatedUser,
+    ) -> Result<PreparedUtility<Vec<Bookmark>>, String> {
         let path = self.bookmarks_path(&user.user_id)?;
         let bookmarks = load_bookmarks_from_path(&path)?;
-        if !path.try_exists().map_err(|error| error.to_string())? {
-            write_json_file(&path, &bookmarks)?;
-        }
-
-        Ok(bookmarks)
+        let publication = if path.try_exists().map_err(|error| error.to_string())? {
+            None
+        } else {
+            Some((prepare_json_file(&path, &bookmarks)?, path))
+        };
+        Ok(PreparedUtility {
+            value: bookmarks,
+            publication,
+        })
     }
 
     pub fn create_bookmark(
@@ -1695,7 +2390,18 @@ impl AppState {
         command: String,
         category: String,
     ) -> Result<Bookmark, String> {
-        let _file_lock = self.lock_files()?;
+        self.with_utility_file(user, || {
+            self.prepare_bookmark_create(user, name, command, category)
+        })
+    }
+
+    pub(crate) fn prepare_bookmark_create(
+        &self,
+        user: &AuthenticatedUser,
+        name: String,
+        command: String,
+        category: String,
+    ) -> Result<PreparedUtility<Bookmark>, String> {
         let path = self.bookmarks_path(&user.user_id)?;
         let mut bookmarks = load_bookmarks_from_path(&path)?;
 
@@ -1708,8 +2414,10 @@ impl AppState {
             updated_at: None,
         };
         bookmarks.push(bookmark.clone());
-        write_json_file(&path, &bookmarks)?;
-        Ok(bookmark)
+        Ok(PreparedUtility {
+            value: bookmark,
+            publication: Some((prepare_json_file(&path, &bookmarks)?, path)),
+        })
     }
 
     pub fn update_bookmark(
@@ -1718,14 +2426,27 @@ impl AppState {
         bookmark_id: &str,
         updates: BookmarkUpdate,
     ) -> Result<Option<Bookmark>, String> {
-        let _file_lock = self.lock_files()?;
+        self.with_utility_file(user, || {
+            self.prepare_bookmark_update(user, bookmark_id, updates)
+        })
+    }
+
+    pub(crate) fn prepare_bookmark_update(
+        &self,
+        user: &AuthenticatedUser,
+        bookmark_id: &str,
+        updates: BookmarkUpdate,
+    ) -> Result<PreparedUtility<Option<Bookmark>>, String> {
         let path = self.bookmarks_path(&user.user_id)?;
         let mut bookmarks = load_bookmarks_from_path(&path)?;
         let Some(bookmark) = bookmarks
             .iter_mut()
             .find(|bookmark| bookmark.id == bookmark_id)
         else {
-            return Ok(None);
+            return Ok(PreparedUtility {
+                value: None,
+                publication: None,
+            });
         };
 
         if let Some(name) = updates.name {
@@ -1739,8 +2460,10 @@ impl AppState {
         }
         bookmark.updated_at = Some(iso_timestamp());
         let updated = bookmark.clone();
-        write_json_file(&path, &bookmarks)?;
-        Ok(Some(updated))
+        Ok(PreparedUtility {
+            value: Some(updated),
+            publication: Some((prepare_json_file(&path, &bookmarks)?, path)),
+        })
     }
 
     pub fn delete_bookmark(
@@ -1748,7 +2471,14 @@ impl AppState {
         user: &AuthenticatedUser,
         bookmark_id: &str,
     ) -> Result<bool, String> {
-        let _file_lock = self.lock_files()?;
+        self.with_utility_file(user, || self.prepare_bookmark_delete(user, bookmark_id))
+    }
+
+    pub(crate) fn prepare_bookmark_delete(
+        &self,
+        user: &AuthenticatedUser,
+        bookmark_id: &str,
+    ) -> Result<PreparedUtility<bool>, String> {
         let path = self.bookmarks_path(&user.user_id)?;
         let bookmarks = load_bookmarks_from_path(&path)?;
         let original_len = bookmarks.len();
@@ -1757,30 +2487,76 @@ impl AppState {
             .filter(|bookmark| bookmark.id != bookmark_id)
             .collect();
         if filtered.len() == original_len {
-            return Ok(false);
+            return Ok(PreparedUtility {
+                value: false,
+                publication: None,
+            });
         }
-        write_json_file(&path, &filtered)?;
-        Ok(true)
+        Ok(PreparedUtility {
+            value: true,
+            publication: Some((prepare_json_file(&path, &filtered)?, path)),
+        })
     }
 
     pub fn list_notes(&self, user: &AuthenticatedUser) -> Result<Vec<Note>, String> {
-        let _file_lock = self.lock_files()?;
-        let path = self.notes_path(&user.user_id)?;
-        let notes = load_notes_from_path(&path)?;
-        if !path.try_exists().map_err(|error| error.to_string())? {
-            write_json_file(&path, &notes)?;
-        }
-        Ok(notes)
+        self.with_utility_file(user, || self.prepare_note_list(user))
     }
 
-    pub fn create_note(
+    pub(crate) fn note_storage_id(&self, user: &AuthenticatedUser) -> Result<String, String> {
+        sanitize_id(&user.user_id).map(|id| id.to_ascii_lowercase())
+    }
+
+    pub(crate) fn verify_note_owner(connection: &Connection, owner: &str) -> Result<(), String> {
+        let target = sanitize_id(owner)?.to_ascii_lowercase();
+        let mut statement = connection
+            .prepare("SELECT id FROM users LIMIT 20001")
+            .map_err(|_| "Note ownership verification is unavailable")?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|_| "Note ownership verification is unavailable")?;
+        let mut found = false;
+        for (index, row) in rows.enumerate() {
+            if index >= 20000 {
+                return Err("Note ownership verification exceeds its limit".into());
+            }
+            let candidate = row.map_err(|_| "Note ownership verification is unavailable")?;
+            if candidate == owner {
+                found = true;
+            } else if sanitize_id(&candidate).is_ok_and(|id| id.eq_ignore_ascii_case(&target)) {
+                return Err(NOTE_OWNER_AMBIGUOUS.into());
+            }
+        }
+        if found {
+            Ok(())
+        } else {
+            Err(NOTE_OWNER_AMBIGUOUS.into())
+        }
+    }
+
+    pub(crate) fn prepare_note_list(
+        &self,
+        user: &AuthenticatedUser,
+    ) -> Result<PreparedUtility<Vec<Note>>, String> {
+        let path = self.notes_path(&user.user_id)?;
+        let notes = load_notes_from_path(&path)?;
+        let publication = if path.try_exists().map_err(|error| error.to_string())? {
+            None
+        } else {
+            Some((prepare_json_file(&path, &notes)?, path))
+        };
+        Ok(PreparedUtility {
+            value: notes,
+            publication,
+        })
+    }
+
+    pub(crate) fn prepare_note_create(
         &self,
         user: &AuthenticatedUser,
         title: String,
         content: String,
         category: String,
-    ) -> Result<Note, String> {
-        let _file_lock = self.lock_files()?;
+    ) -> Result<PreparedUtility<Note>, String> {
         let path = self.notes_path(&user.user_id)?;
         let mut notes = load_notes_from_path(&path)?;
         let note = Note {
@@ -1792,23 +2568,26 @@ impl AppState {
             updated_at: None,
         };
         notes.push(note.clone());
-        write_json_file(&path, &notes)?;
-        Ok(note)
+        Ok(PreparedUtility {
+            value: note,
+            publication: Some((prepare_json_file(&path, &notes)?, path)),
+        })
     }
 
-    pub fn update_note(
+    pub(crate) fn prepare_note_update(
         &self,
         user: &AuthenticatedUser,
         note_id: &str,
         updates: NoteUpdate,
-    ) -> Result<Option<Note>, String> {
-        let _file_lock = self.lock_files()?;
+    ) -> Result<PreparedUtility<Option<Note>>, String> {
         let path = self.notes_path(&user.user_id)?;
         let mut notes = load_notes_from_path(&path)?;
         let Some(note) = notes.iter_mut().find(|note| note.id == note_id) else {
-            return Ok(None);
+            return Ok(PreparedUtility {
+                value: None,
+                publication: None,
+            });
         };
-
         if let Some(title) = updates.title {
             note.title = title;
         }
@@ -1820,12 +2599,17 @@ impl AppState {
         }
         note.updated_at = Some(iso_timestamp());
         let updated = note.clone();
-        write_json_file(&path, &notes)?;
-        Ok(Some(updated))
+        Ok(PreparedUtility {
+            value: Some(updated),
+            publication: Some((prepare_json_file(&path, &notes)?, path)),
+        })
     }
 
-    pub fn delete_note(&self, user: &AuthenticatedUser, note_id: &str) -> Result<bool, String> {
-        let _file_lock = self.lock_files()?;
+    pub(crate) fn prepare_note_delete(
+        &self,
+        user: &AuthenticatedUser,
+        note_id: &str,
+    ) -> Result<PreparedUtility<bool>, String> {
         let path = self.notes_path(&user.user_id)?;
         let notes = load_notes_from_path(&path)?;
         let original_len = notes.len();
@@ -1834,10 +2618,54 @@ impl AppState {
             .filter(|note| note.id != note_id)
             .collect();
         if filtered.len() == original_len {
-            return Ok(false);
+            return Ok(PreparedUtility {
+                value: false,
+                publication: None,
+            });
         }
-        write_json_file(&path, &filtered)?;
-        Ok(true)
+        Ok(PreparedUtility {
+            value: true,
+            publication: Some((prepare_json_file(&path, &filtered)?, path)),
+        })
+    }
+
+    fn with_utility_file<T>(
+        &self,
+        user: &AuthenticatedUser,
+        prepare: impl FnOnce() -> Result<PreparedUtility<T>, String>,
+    ) -> Result<T, String> {
+        let _file_lock = self.try_lock_note_files()?;
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::notes_exclusive(
+            &self.config().data_dir,
+            &self.note_storage_id(user)?,
+        )?;
+        prepare()?.commit()
+    }
+
+    pub fn create_note(
+        &self,
+        user: &AuthenticatedUser,
+        title: String,
+        content: String,
+        category: String,
+    ) -> Result<Note, String> {
+        self.with_utility_file(user, || {
+            self.prepare_note_create(user, title, content, category)
+        })
+    }
+
+    pub fn update_note(
+        &self,
+        user: &AuthenticatedUser,
+        note_id: &str,
+        updates: NoteUpdate,
+    ) -> Result<Option<Note>, String> {
+        self.with_utility_file(user, || self.prepare_note_update(user, note_id, updates))
+    }
+
+    pub fn delete_note(&self, user: &AuthenticatedUser, note_id: &str) -> Result<bool, String> {
+        self.with_utility_file(user, || self.prepare_note_delete(user, note_id))
     }
 
     pub fn list_mobile_keyboard_debug_entries(
@@ -1901,11 +2729,37 @@ impl AppState {
 
     // --- Vault ---
 
+    pub(crate) fn with_authorized_vault<T>(
+        &self,
+        user: &AuthenticatedUser,
+        authority: &crate::auth::LocalAuthority,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_owner_review_mapped(
+            &user.user_id,
+            authority,
+            vault_database_error,
+            |transaction, check| {
+                Self::verify_auth_protocol_integrity(transaction)?;
+                let result = operation(transaction)?;
+                check()?;
+                Ok(result)
+            },
+        )
+    }
+
     pub fn list_vault_keys(
         &self,
         user: &AuthenticatedUser,
     ) -> Result<Vec<crate::vault::VaultEntry>, String> {
         let connection = self.lock_db()?;
+        Self::list_vault_keys_from_connection(&connection, user)
+    }
+
+    pub(crate) fn list_vault_keys_from_connection(
+        connection: &Connection,
+        user: &AuthenticatedUser,
+    ) -> Result<Vec<crate::vault::VaultEntry>, String> {
         let mut stmt = connection
             .prepare("SELECT id, key_name, key_value, created_at FROM api_key_vault WHERE user_id = ? ORDER BY created_at")
             .map_err(|e| e.to_string())?;
@@ -1934,13 +2788,15 @@ impl AppState {
         key_value: &str,
         created_at: &str,
     ) -> Result<(), String> {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&self.config().data_dir, &user.user_id)?;
         let connection = self.lock_db()?;
         connection
             .execute(
                 "INSERT INTO api_key_vault (id, user_id, key_name, key_value, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![id, user.user_id, key_name, key_value, created_at],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(vault_database_error)?;
         Ok(())
     }
 
@@ -1950,6 +2806,14 @@ impl AppState {
         key_id: &str,
     ) -> Result<Option<crate::vault::VaultEntry>, String> {
         let connection = self.lock_db()?;
+        Self::get_vault_key_from_connection(&connection, user, key_id)
+    }
+
+    pub(crate) fn get_vault_key_from_connection(
+        connection: &Connection,
+        user: &AuthenticatedUser,
+        key_id: &str,
+    ) -> Result<Option<crate::vault::VaultEntry>, String> {
         let mut stmt = connection
             .prepare("SELECT id, key_name, key_value, created_at FROM api_key_vault WHERE id = ? AND user_id = ?")
             .map_err(|e| e.to_string())?;
@@ -1973,21 +2837,25 @@ impl AppState {
         original: &str,
         encrypted: &str,
     ) -> Result<(), String> {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&self.config().data_dir, &user.user_id)?;
         self.lock_db()?.execute(
             "UPDATE api_key_vault SET key_value = ?1 WHERE id = ?2 AND user_id = ?3 AND key_value = ?4",
             params![encrypted, key_id, user.user_id, original],
-        ).map_err(|error| error.to_string())?;
+        ).map_err(vault_database_error)?;
         Ok(())
     }
 
     pub fn delete_vault_key(&self, user: &AuthenticatedUser, key_id: &str) -> Result<bool, String> {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&self.config().data_dir, &user.user_id)?;
         let connection = self.lock_db()?;
         let count = connection
             .execute(
                 "DELETE FROM api_key_vault WHERE id = ? AND user_id = ?",
                 rusqlite::params![key_id, user.user_id],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(vault_database_error)?;
         Ok(count > 0)
     }
 
@@ -2105,7 +2973,8 @@ impl AppState {
                     username TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    auth_protocol_min INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -2114,6 +2983,8 @@ impl AppState {
                     token_hash TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    auth_protocol INTEGER NOT NULL DEFAULT 0,
+                    session_id TEXT,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
@@ -2121,6 +2992,25 @@ impl AppState {
                     user_id TEXT PRIMARY KEY,
                     generation INTEGER NOT NULL CHECK(generation >= 0)
                 );
+
+                CREATE TABLE IF NOT EXISTS auth_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    logout_capability_hash TEXT NOT NULL,
+                    revoked_at TEXT,
+                    receipt_count INTEGER NOT NULL DEFAULT 0 CHECK(receipt_count >= 0),
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS auth_session_logout_receipts (
+                    operation TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    incarnation TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_auth_session_logout_receipts_session ON auth_session_logout_receipts(user_id,session_id);
 
                 CREATE TABLE IF NOT EXISTS user_settings (
                     user_id TEXT PRIMARY KEY,
@@ -2168,6 +3058,11 @@ impl AppState {
                     created_at TEXT NOT NULL,
                     UNIQUE(user_id, key_name)
                 );
+                CREATE TABLE IF NOT EXISTS vault_owner_fences (
+                    owner_hash TEXT PRIMARY KEY,
+                    device TEXT NOT NULL,
+                    inode TEXT NOT NULL
+                );
                 ",
             )
             .map_err(|error| error.to_string())?;
@@ -2206,15 +3101,54 @@ impl AppState {
                     .map_err(|error| format!("Failed to migrate user_settings.{name}: {error}"))?;
             }
         }
-        transaction.commit().map_err(|error| error.to_string())
-    }
-
-    fn ensure_user_row(&self, user: &AuthenticatedUser) -> Result<(), String> {
-        if self.get_user_by_id(&user.user_id)?.is_some() {
-            Ok(())
-        } else {
-            self.upsert_external_auth_mirror_user(&user.user_id)
+        for (table, column) in [
+            ("users", "auth_protocol_min"),
+            ("refresh_tokens", "auth_protocol"),
+        ] {
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+                    params![table, column],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if !exists {
+                transaction
+                    .execute_batch(&format!(
+                        "ALTER TABLE {table} ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+                    ))
+                    .map_err(|error| format!("Failed to migrate {table}.{column}: {error}"))?;
+            }
         }
+        let has_session_id: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('refresh_tokens') WHERE name='session_id')",
+            [], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if !has_session_id {
+            transaction
+                .execute_batch("ALTER TABLE refresh_tokens ADD COLUMN session_id TEXT")
+                .map_err(|error| format!("Failed to migrate refresh_tokens.session_id: {error}"))?;
+        }
+        let has_receipt_count: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('auth_sessions') WHERE name='receipt_count')",
+            [], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if !has_receipt_count {
+            transaction.execute_batch("ALTER TABLE auth_sessions ADD COLUMN receipt_count INTEGER NOT NULL DEFAULT 0 CHECK(receipt_count >= 0)")
+                .map_err(|error| format!("Failed to migrate auth_sessions.receipt_count: {error}"))?;
+        }
+        transaction.execute_batch("CREATE TABLE IF NOT EXISTS auth_protocol_account_integrity (id INTEGER PRIMARY KEY CHECK(id=1), activated_count INTEGER NOT NULL CHECK(activated_count>=0));
+            INSERT OR IGNORE INTO auth_protocol_account_integrity (id, activated_count) VALUES (1, 0);
+            CREATE TRIGGER IF NOT EXISTS auth_protocol_account_insert AFTER INSERT ON users WHEN NEW.auth_protocol_min=1 BEGIN
+                UPDATE auth_protocol_account_integrity SET activated_count=activated_count+1 WHERE id=1;
+                SELECT CASE WHEN changes()!=1 THEN RAISE(ABORT, 'authentication protocol installation unavailable') END;
+            END;
+            CREATE TRIGGER IF NOT EXISTS auth_protocol_account_activate AFTER UPDATE OF auth_protocol_min ON users WHEN NEW.auth_protocol_min=1 AND OLD.auth_protocol_min!=1 BEGIN
+                UPDATE auth_protocol_account_integrity SET activated_count=activated_count+1 WHERE id=1;
+                SELECT CASE WHEN changes()!=1 THEN RAISE(ABORT, 'authentication protocol installation unavailable') END;
+            END;")
+            .map_err(|error| format!("Failed to initialize authentication protocol integrity: {error}"))?;
+        transaction.commit().map_err(|error| error.to_string())
     }
 
     fn upsert_external_auth_mirror_user(&self, user_id: &str) -> Result<(), String> {
@@ -2279,17 +3213,133 @@ impl AppState {
         &self,
         user: UserPublic,
     ) -> Result<AuthResult, String> {
+        self.issue_auth_result_for_public_user_protocol(user, 0)
+    }
+
+    #[cfg(all(test, unix, feature = "native-codex-queue-preview"))]
+    pub(crate) fn issue_upgraded_test_session(&self, owner: &str) -> Result<AuthResult, String> {
+        self.upsert_external_auth_mirror_user(owner)?;
+        self.issue_auth_result_for_public_user_protocol(
+            UserPublic {
+                id: owner.into(),
+                username: "fixture".into(),
+                created_at: iso_timestamp(),
+            },
+            1,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn issue_auth_session_for_test(
+        &self,
+        user: UserPublic,
+    ) -> Result<AuthResult, String> {
+        self.issue_auth_result_for_public_user_protocol(user, 1)
+    }
+
+    fn issue_auth_result_for_public_user_protocol(
+        &self,
+        user: UserPublic,
+        protocol: i64,
+    ) -> Result<AuthResult, String> {
         crate::auth::validate_allowed_username(
             self.config().allowed_username.as_deref(),
             &user.username,
         )?;
+        if !matches!(protocol, 0 | 1) {
+            return Err("Unsupported authentication protocol".into());
+        }
+        #[cfg(not(unix))]
+        if protocol != 0 {
+            return Err("Upgraded authentication is unavailable on this platform".into());
+        }
+        #[cfg(unix)]
+        let owner_guard = if protocol == 1 {
+            Some(owner_input::acquire(
+                &self.inner.config.data_dir,
+                &user.id,
+                std::time::Duration::from_secs(3),
+            )?)
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let admission_guard = if protocol == 1 {
+            Some(
+                self.inner
+                    .auth_admission
+                    .get()
+                    .ok_or("Authentication admission unavailable")?
+                    .acquire()?,
+            )
+        } else {
+            None
+        };
         let mut connection = self.lock_db()?;
+        #[cfg(unix)]
+        if admission_guard.is_some() {
+            self.inner
+                .auth_admission
+                .get()
+                .ok_or("Authentication admission unavailable")?
+                .validate(&connection)?;
+        }
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
-        let refresh_token = Self::insert_refresh_token(&transaction, &user.id)?;
+        let required = Self::auth_protocol_minimum(&transaction, &user.id)?;
+        if required == 0 && protocol == 1 {
+            #[cfg(unix)]
+            if owner_input::installed(&transaction)? {
+                owner_guard
+                    .as_ref()
+                    .ok_or("Authentication admission unavailable")?
+                    .bind(&transaction)?;
+            }
+            let updated = transaction
+                .execute(
+                    "UPDATE users SET auth_protocol_min=1 WHERE id=? AND auth_protocol_min=0",
+                    params![user.id],
+                )
+                .map_err(|error| error.to_string())?;
+            if updated != 1 {
+                return Err("Credential authority unavailable".into());
+            }
+            transaction
+                .execute(
+                    "DELETE FROM refresh_tokens WHERE user_id=?",
+                    params![user.id],
+                )
+                .map_err(|error| error.to_string())?;
+            transaction.execute("INSERT INTO auth_generations (user_id, generation) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET generation=generation+1", params![user.id]).map_err(|error| error.to_string())?;
+            Self::verify_auth_protocol_integrity(&transaction)?;
+        } else if required != protocol {
+            return Err("This account requires an upgraded client".into());
+        }
         let generation = Self::auth_generation(&transaction, &user.id)?;
-        let result = self.auth_result_for_user(user, refresh_token, generation);
+        let session = if protocol == 1 {
+            let mut bytes = [0u8; 32];
+            rand::rng().fill_bytes(&mut bytes);
+            let capability = hex::encode(bytes);
+            let session_id = Uuid::new_v4().to_string();
+            transaction.execute(
+                "INSERT INTO auth_sessions (id,user_id,generation,logout_capability_hash,revoked_at,created_at) VALUES (?1,?2,?3,?4,NULL,?5)",
+                params![session_id, user.id, generation, hash_token(&capability), iso_timestamp()],
+            ).map_err(|_| "Cannot create authentication session")?;
+            Some(AuthSession {
+                id: session_id,
+                logout_capability: Some(capability),
+            })
+        } else {
+            None
+        };
+        let refresh_token = Self::insert_scoped_refresh_token(
+            &transaction,
+            &user.id,
+            protocol,
+            session.as_ref().map(|value| value.id.as_str()),
+        )?;
+        let result = self.auth_result_for_user(user, refresh_token, generation, protocol, session);
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(result)
     }
@@ -2299,18 +3349,23 @@ impl AppState {
         user: UserPublic,
         refresh_token: String,
         generation: i64,
+        auth_protocol: i64,
+        session: Option<AuthSession>,
     ) -> AuthResult {
         AuthResult {
             user: user.clone(),
             tokens: TokenPair {
-                access_token: issue_access_token_for_generation(
+                access_token: issue_access_token_for_protocol(
                     &self.inner.config.jwt_secret,
                     &user.id,
                     &user.username,
                     generation,
+                    auth_protocol,
+                    session.as_ref().map(|value| value.id.as_str()),
                 ),
                 refresh_token,
             },
+            session,
         }
     }
 
@@ -2331,18 +3386,48 @@ impl AppState {
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        let required = Self::auth_protocol_minimum(&transaction, &user.id)?;
+        if !matches!(required, 0 | 1) || stored_token.auth_protocol != required {
+            return Ok(None);
+        }
+        let generation = Self::auth_generation(&transaction, &user.id)?;
+        if Self::validate_auth_session(
+            &transaction,
+            &user.id,
+            generation,
+            stored_token.auth_protocol,
+            stored_token.session_id.as_deref(),
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
         let consumed = transaction
             .execute(
-                "DELETE FROM refresh_tokens WHERE id = ? AND user_id = ? AND expires_at >= ?",
-                params![stored_token.id, user.id, iso_timestamp()],
+                "DELETE FROM refresh_tokens WHERE id = ? AND user_id = ? AND expires_at >= ? AND auth_protocol = ?",
+                params![stored_token.id, user.id, iso_timestamp(), stored_token.auth_protocol],
             )
             .map_err(|error| error.to_string())?;
         if consumed == 0 {
             return Ok(None);
         }
-        let refresh_token = Self::insert_refresh_token(&transaction, &user.id)?;
-        let generation = Self::auth_generation(&transaction, &user.id)?;
-        let result = self.auth_result_for_user(user, refresh_token, generation);
+        let refresh_token = Self::insert_scoped_refresh_token(
+            &transaction,
+            &user.id,
+            stored_token.auth_protocol,
+            stored_token.session_id.as_deref(),
+        )?;
+        let session = stored_token.session_id.as_ref().map(|id| AuthSession {
+            id: id.clone(),
+            logout_capability: None,
+        });
+        let result = self.auth_result_for_user(
+            user,
+            refresh_token,
+            generation,
+            stored_token.auth_protocol,
+            session,
+        );
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(Some(result))
     }
@@ -2443,13 +3528,26 @@ impl AppState {
             .map(|value| value.map(|user| to_public_user(&user)))
     }
 
-    fn insert_refresh_token(connection: &Connection, user_id: &str) -> Result<String, String> {
+    fn insert_refresh_token(
+        connection: &Connection,
+        user_id: &str,
+        auth_protocol: i64,
+    ) -> Result<String, String> {
+        Self::insert_scoped_refresh_token(connection, user_id, auth_protocol, None)
+    }
+
+    fn insert_scoped_refresh_token(
+        connection: &Connection,
+        user_id: &str,
+        auth_protocol: i64,
+        session_id: Option<&str>,
+    ) -> Result<String, String> {
         let token = Uuid::new_v4().to_string();
         let token_hash = hash_token(&token);
         let expires_at = OffsetDateTime::now_utc() + time::Duration::days(REFRESH_TOKEN_TTL_DAYS);
         connection
             .execute(
-                "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at, auth_protocol, session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     Uuid::new_v4().to_string(),
                     user_id,
@@ -2457,7 +3555,9 @@ impl AppState {
                     expires_at
                         .format(&Rfc3339)
                         .expect("rfc3339 formatting should succeed"),
-                    iso_timestamp()
+                    iso_timestamp(),
+                    auth_protocol,
+                    session_id
                 ],
             )
             .map_err(|error| error.to_string())?;
@@ -2509,13 +3609,15 @@ impl AppState {
         let connection = self.lock_db()?;
         connection
             .query_row(
-                "SELECT id, user_id, expires_at FROM refresh_tokens WHERE token_hash = ?",
+                "SELECT id, user_id, expires_at, auth_protocol, session_id FROM refresh_tokens WHERE token_hash = ?",
                 params![token_hash],
                 |row| {
                     Ok(StoredRefreshToken {
                         id: row.get(0)?,
                         user_id: row.get(1)?,
                         expires_at: row.get(2)?,
+                        auth_protocol: row.get(3)?,
+                        session_id: row.get(4)?,
                     })
                 },
             )
@@ -2549,11 +3651,25 @@ impl AppState {
             .map_err(|_| "Database lock poisoned".to_string())
     }
 
+    pub(crate) fn try_lock_db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        self.inner
+            .db
+            .try_lock()
+            .map_err(|_| "Database is busy or unavailable".to_string())
+    }
+
     fn lock_files(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
         self.inner
             .file_lock
             .lock()
             .map_err(|_| "File lock poisoned".to_string())
+    }
+
+    pub(crate) fn try_lock_note_files(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+        self.inner
+            .file_lock
+            .try_lock()
+            .map_err(|_| "Notes storage is busy or unavailable".into())
     }
 }
 
@@ -2797,6 +3913,15 @@ fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Stri
 }
 
 fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    let temporary = prepare_json_file(path, value)?;
+    temporary.persist(path).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn prepare_json_file<T: serde::Serialize>(
+    path: &Path,
+    value: &T,
+) -> Result<tempfile::NamedTempFile, String> {
     use std::io::Write;
     let contents = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     let parent = path.parent().ok_or("Missing data directory")?;
@@ -2809,8 +3934,7 @@ fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), St
         .as_file()
         .sync_all()
         .map_err(|error| error.to_string())?;
-    temporary.persist(path).map_err(|error| error.to_string())?;
-    Ok(())
+    Ok(temporary)
 }
 
 fn iso_timestamp() -> String {

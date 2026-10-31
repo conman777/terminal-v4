@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 
-export function BookmarkForm({ bookmark, draft, onDraftChange, onSave, onSaved, onCancel }) {
+export function BookmarkForm({ bookmark, draft, onDraftChange, onSave, onSaved, onCancel, uncertain = false, onUncertainChange, pending = false, saveUnavailable = '' }) {
   const [name, setName] = useState(draft?.name ?? bookmark?.name ?? '');
   const [command, setCommand] = useState(draft?.command ?? bookmark?.command ?? '');
   const [category, setCategory] = useState(draft?.category ?? bookmark?.category ?? 'General');
@@ -10,15 +10,18 @@ export function BookmarkForm({ bookmark, draft, onDraftChange, onSave, onSaved, 
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!isSaving && name.trim() && command.trim() && category.trim()) {
+    if (!isSaving && !pending && !uncertain && !saveUnavailable && name.trim() && command.trim() && category.trim()) {
       const submittedRevision = revisionRef.current;
       setIsSaving(true);
       setSaveError('');
       try {
         await onSave({ name: name.trim(), command: command.trim(), category: category.trim() });
         if (revisionRef.current === submittedRevision) onSaved?.();
-      } catch {
-        setSaveError('Could not save bookmark. Your changes are still here; try again.');
+      } catch (error) {
+        if (error?.outcomeUncertain) {
+          onUncertainChange?.(true);
+          setSaveError('The bookmark change may have completed. Check the saved bookmarks before trying again. Your draft is still here.');
+        } else setSaveError('Could not save bookmark. Your changes are still here; try again.');
       } finally {
         setIsSaving(false);
       }
@@ -28,13 +31,15 @@ export function BookmarkForm({ bookmark, draft, onDraftChange, onSave, onSaved, 
   return (
     <form className="bookmark-form" onSubmit={handleSubmit}>
       {saveError && <p role="alert">{saveError}</p>}
+      {uncertain && !saveError && <p role="alert">The bookmark change may have completed. Check the saved bookmarks before trying again. Your draft is still here.</p>}
+      {uncertain && <button type="button" onClick={() => { onUncertainChange?.(false); setSaveError(''); }}>I checked; enable retry</button>}
       <div className="form-group">
         <label htmlFor="bookmark-name">Name</label>
         <input
           id="bookmark-name"
           type="text"
           value={name}
-          disabled={isSaving}
+          disabled={isSaving || pending}
           onChange={(e) => { revisionRef.current += 1; setName(e.target.value); onDraftChange?.({ name: e.target.value, command, category }); }}
           placeholder="e.g., Start development server"
           maxLength={100}
@@ -47,7 +52,7 @@ export function BookmarkForm({ bookmark, draft, onDraftChange, onSave, onSaved, 
         <textarea
           id="bookmark-command"
           value={command}
-          disabled={isSaving}
+          disabled={isSaving || pending}
           onChange={(e) => { revisionRef.current += 1; setCommand(e.target.value); onDraftChange?.({ name, command: e.target.value, category }); }}
           placeholder="e.g., npm run dev"
           rows={3}
@@ -62,7 +67,7 @@ export function BookmarkForm({ bookmark, draft, onDraftChange, onSave, onSaved, 
           id="bookmark-category"
           type="text"
           value={category}
-          disabled={isSaving}
+          disabled={isSaving || pending}
           onChange={(e) => { revisionRef.current += 1; setCategory(e.target.value); onDraftChange?.({ name, command, category: e.target.value }); }}
           placeholder="e.g., Claude, Git, Docker"
           maxLength={50}
@@ -71,11 +76,11 @@ export function BookmarkForm({ bookmark, draft, onDraftChange, onSave, onSaved, 
       </div>
 
       <div className="form-actions">
-        <button type="button" className="btn-secondary" onClick={onCancel} disabled={isSaving}>
+        <button type="button" className="btn-secondary" onClick={onCancel} disabled={isSaving || pending}>
           Cancel
         </button>
-        <button type="submit" className="btn-primary" disabled={isSaving}>
-          {isSaving ? 'Saving...' : bookmark ? 'Update' : 'Save'}
+        <button type="submit" className="btn-primary" title={saveUnavailable || undefined} disabled={isSaving || pending || uncertain || Boolean(saveUnavailable)}>
+          {isSaving || pending ? 'Saving...' : bookmark ? 'Update' : 'Save'}
         </button>
       </div>
     </form>

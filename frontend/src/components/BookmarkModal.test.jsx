@@ -11,6 +11,90 @@ describe('BookmarkModal editing', () => {
     { id: 'beta', name: 'Beta', command: 'echo beta', category: 'Work' },
   ];
 
+  it('explains when running bookmark commands is unavailable', () => {
+    render(<BookmarkModal isOpen bookmarks={bookmarks} onClose={vi.fn()} executionUnavailable="Running bookmark commands is unavailable in this secure session." />);
+    expect(screen.getByText('Running bookmark commands is unavailable in this secure session.')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Execute bookmark/ }).every(button => button.disabled)).toBe(true);
+  });
+
+  it('keeps a draft editable but disables saving when the session is unavailable', () => {
+    render(<BookmarkModal isOpen bookmarks={bookmarks} onClose={vi.fn()} saveUnavailable="Sign in to save this draft." />);
+    fireEvent.click(screen.getByTitle('Add bookmark'));
+    const name = screen.getByLabelText('Name');
+    expect(name).toBeEnabled();
+    fireEvent.change(name, { target: { value: 'Keep draft' } });
+    expect(name).toHaveValue('Keep draft');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('hides the bookmark draft during an ownership hold and restores it after retry', () => {
+    const retry = vi.fn();
+    const props = { isOpen: true, bookmarks, onClose: vi.fn(), onRetryLoad: retry };
+    const { rerender } = render(<BookmarkModal {...props} />);
+    fireEvent.click(screen.getByTitle('Add bookmark'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Private draft' } });
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'echo private' } });
+    rerender(<BookmarkModal {...props} scopeHeld scopeHoldMessage="Administrator review is required." />);
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+    expect(screen.queryByText('Alpha')).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Administrator review is required.');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading bookmarks' }));
+    expect(retry).toHaveBeenCalledOnce();
+    rerender(<BookmarkModal {...props} scopeHeld={false} />);
+    expect(screen.getByLabelText('Name')).toHaveValue('Private draft');
+    expect(screen.getByLabelText('Command')).toHaveValue('echo private');
+  });
+
+  it('keeps an unconfirmed save held across closing until the user checks and enables retry', async () => {
+    const onAdd = vi.fn().mockRejectedValueOnce(Object.assign(new Error('Unconfirmed'), { outcomeUncertain: true })).mockResolvedValueOnce();
+    const props = { bookmarks, onClose: vi.fn(), onAdd };
+    const { rerender } = render(<BookmarkModal {...props} isOpen />);
+    fireEvent.click(screen.getByTitle('Add bookmark'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Draft' } });
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'echo draft' } });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
+    expect(screen.getByRole('alert')).toHaveTextContent(/may have completed/i);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    rerender(<BookmarkModal {...props} isOpen={false} />);
+    rerender(<BookmarkModal {...props} isOpen />);
+    expect(screen.getByLabelText('Name')).toHaveValue('Draft');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'I checked; enable retry' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
+    expect(onAdd).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not allow a second save when the same editor is reopened during a pending save', async () => {
+    let finish;
+    const onAdd = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    render(<BookmarkModal isOpen bookmarks={bookmarks} onClose={vi.fn()} onAdd={onAdd} />);
+    fireEvent.click(screen.getByTitle('Add bookmark'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Draft' } });
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'echo draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit bookmark' })[0]);
+    fireEvent.click(screen.getByTitle('Add bookmark'));
+    expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled();
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+  });
+
+  it('holds the reopened editor if the earlier pending save becomes unconfirmed', async () => {
+    let fail;
+    const onAdd = vi.fn(() => new Promise((_resolve, reject) => { fail = reject; }));
+    render(<BookmarkModal isOpen bookmarks={bookmarks} onClose={vi.fn()} onAdd={onAdd} />);
+    fireEvent.click(screen.getByTitle('Add bookmark'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Draft' } });
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'echo draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit bookmark' })[0]);
+    fireEvent.click(screen.getByTitle('Add bookmark'));
+    await act(async () => fail(Object.assign(new Error('Unconfirmed'), { outcomeUncertain: true })));
+    expect(screen.getByRole('alert')).toHaveTextContent(/may have completed/i);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.getByLabelText('Name')).toHaveValue('Draft');
+  });
+
   it('loads the newly selected bookmark before updating its target', async () => {
     const onUpdate = vi.fn().mockResolvedValue();
     render(<BookmarkModal isOpen bookmarks={bookmarks} onUpdate={onUpdate} />);

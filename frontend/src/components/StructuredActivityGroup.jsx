@@ -28,18 +28,18 @@ export function summarizeActivity(messages) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-export function StructuredToolResult({ message: msg, sessionId }) {
+export function StructuredToolResult({ message: msg, sessionId, workspacePath, onProjectFileClick }) {
   const content = Array.isArray(msg.content) ? msg.content : [];
   const resultText = msg.result || content.filter(block => block?.type === 'text').map(block => block.text).join('\n')
     || (content.some(block => block?.type === 'v4_image') ? 'Image result' : '');
   return <>
-    <ToolCallBlock item={{ type: 'tool_use', tool: msg.toolName, toolInput: msg.toolInput,
+    <ToolCallBlock workspacePath={workspacePath} onProjectFileClick={onProjectFileClick} item={{ type: 'tool_use', tool: msg.toolName, toolInput: msg.toolInput,
       result: { toolResult: resultText, isError: Boolean(msg.isError) } }} />
     <V4ToolImages sessionId={sessionId} content={content} />
   </>;
 }
 
-export function StructuredActivityGroup({ messages, sessionId, renderToolResult }) {
+export function StructuredActivityGroup({ messages, sessionId, workspacePath, onProjectFileClick, renderToolResult }) {
   const [open, setOpen] = useState(false);
   if (messages.length === 0) return null;
   const failed = messages.filter(message => message.isError).length;
@@ -52,7 +52,7 @@ export function StructuredActivityGroup({ messages, sessionId, renderToolResult 
     </summary>
     {open && <div className="conversation-activity-items">{messages.map((message, index) => renderToolResult
       ? renderToolResult(message, index)
-      : <StructuredToolResult key={message.toolCallId || message.messageId || index} message={message} sessionId={sessionId} />)}</div>}
+      : <StructuredToolResult key={message.toolCallId || message.messageId || index} message={message} sessionId={sessionId} workspacePath={workspacePath} onProjectFileClick={onProjectFileClick} />)}</div>}
   </details>;
 }
 

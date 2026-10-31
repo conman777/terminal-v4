@@ -115,6 +115,37 @@ describe('useStructuredSession websocket lifecycle', () => {
     expect(MockWebSocket.instances[0].url).toContain('token=fresh-token');
   });
 
+  it.each([
+    'Local sign-in history is damaged; contact your administrator',
+    'Token refresh outcome uncertain; sign in again',
+    'Token refresh temporarily unavailable',
+  ])('holds reconnect after an unrecoverable refresh: %s', async message => {
+    getAccessToken.mockReturnValue('expired-token');
+    isAccessTokenExpired.mockReturnValue(true);
+    refreshTokens.mockRejectedValue(new Error(message));
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-held-refresh', active: true }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(result.current.connectionState).toBe('unavailable');
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect([refreshTokens.mock.calls.length, MockWebSocket.instances.length]).toEqual([1, 0]);
+    refreshTokens.mockResolvedValue({ accessToken: 'fresh-token' });
+    await act(async () => { result.current.reconnect(); await Promise.resolve(); await Promise.resolve(); });
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0].url).toContain('token=fresh-token');
+  });
+
+  it('continues reconnecting for other transient refresh errors', async () => {
+    getAccessToken.mockReturnValue('expired-token');
+    isAccessTokenExpired.mockReturnValue(true);
+    refreshTokens.mockRejectedValueOnce(new Error('Temporary network issue'))
+      .mockResolvedValue({ accessToken: 'fresh-token' });
+    renderHook(() => useStructuredSession({ sessionId: 'ss-transient-refresh', active: true }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(refreshTokens).toHaveBeenCalledTimes(2);
+    expect(MockWebSocket.instances[0].url).toContain('token=fresh-token');
+  });
+
   it('does not reconnect a stale session after the hook switches to a new session id', async () => {
     const { rerender } = renderHook(
       ({ sessionId }) => useStructuredSession({ sessionId, active: true }),

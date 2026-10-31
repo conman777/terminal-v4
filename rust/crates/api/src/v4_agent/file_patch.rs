@@ -13,11 +13,12 @@ pub(super) fn properties() -> Value {
             "expected_count":{"type":"integer","minimum":1,"maximum":1000}
         },"required":["old","new"],"additionalProperties":false}},
         "expected_revision":{"type":"string"},
-        "dry_run":{"type":"boolean"}
+        "dry_run":{"type":"boolean"},
+        "validate_syntax":{"type":"string","description":"Validate the complete result before writing; currently only json is supported."}
     })
 }
 
-pub(super) const DESCRIPTION: &str = "Atomically apply 1-50 ordered replacement hunks to one workspace file; all hunks apply or the file is unchanged. Each hunk replaces exactly expected_count (default 1) literal matches of old. If a hunk has no exact match, a unique match that differs only in per-line leading/trailing whitespace is used and new is re-indented; ambiguous matches fail. Optional expected_revision (a revision returned by a previous apply_patch) rejects stale files. dry_run validates and returns the current and resulting revision without writing.";
+pub(super) const DESCRIPTION: &str = "Atomically apply 1-50 ordered replacement hunks to one workspace file; all hunks apply or the file is unchanged. Each hunk replaces exactly expected_count (default 1) literal matches of old. If a hunk has no exact match, a unique match that differs only in per-line leading/trailing whitespace is used and new is re-indented; ambiguous matches fail. Optional expected_revision (a revision returned by a previous apply_patch) rejects stale files. dry_run validates and returns the current and resulting revision without writing. Optional validate_syntax checks the complete result before writing; currently only json is supported, and unsupported languages are rejected.";
 
 fn revision(content: &str) -> String {
     hex::encode(Sha256::digest(content.as_bytes()))
@@ -87,6 +88,16 @@ pub(super) fn apply(path: &Path, input: &Value) -> Result<String, String> {
         None => None,
         Some(v) => Some(v.as_str().ok_or("expected_revision must be a string")?),
     };
+    let validate_json = match input.get("validate_syntax") {
+        None => false,
+        Some(Value::String(language)) if language == "json" => true,
+        Some(Value::String(language)) => {
+            return Err(format!(
+                "Unsupported validate_syntax language: {language}; only json is supported"
+            ));
+        }
+        Some(_) => return Err("validate_syntax must be a string (only json is supported)".into()),
+    };
     let original = super::read(path)?;
     let before = revision(&original);
     if expected_revision.is_some_and(|expected| expected != before) {
@@ -131,6 +142,10 @@ pub(super) fn apply(path: &Path, input: &Value) -> Result<String, String> {
         if content.len() as u64 > super::FILE_BYTES {
             return Err(fail("result exceeds 512 KB"));
         }
+    }
+    if validate_json {
+        serde_json::from_str::<Value>(&content)
+            .map_err(|err| format!("JSON syntax validation failed: {err}; no changes written"))?;
     }
     let after = revision(&content);
     if dry_run {
@@ -279,6 +294,92 @@ mod tests {
         assert_eq!(out["resultRevision"], revision("A\n"));
         assert_eq!(out["revision"], revision("a\n"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\n");
+    }
+
+    #[test]
+    fn syntax_validation_checks_complete_result_before_writing() {
+        let original = "{\"value\": 1}";
+        let (root, path) = setup(original);
+        let out = patch(
+            root.path(),
+            json!({"validate_syntax":"json", "hunks":[
+                {"old":"1", "new":"["}, {"old":"[}", "new":"[2, 3]}"}
+            ]}),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\"value\": [2, 3]}"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["changed"],
+            true
+        );
+        let current = std::fs::read_to_string(&path).unwrap();
+        let err = patch(
+            root.path(),
+            json!({"validate_syntax":"json", "hunks":[
+                {"old":"[2, 3]", "new":"[2,"}
+            ]}),
+        )
+        .unwrap_err();
+        assert!(err.contains("JSON"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), current);
+    }
+
+    #[test]
+    fn syntax_validation_dry_run_checks_result_without_mutation() {
+        let original = "{\"value\": 1}";
+        let (root, path) = setup(original);
+        let out: Value = serde_json::from_str(
+            &patch(
+                root.path(),
+                json!({
+                    "validate_syntax":"json", "dry_run":true,
+                    "hunks":[{"old":"1", "new":"2"}]
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["resultRevision"], revision("{\"value\": 2}"));
+        let err = patch(
+            root.path(),
+            json!({"validate_syntax":"json", "dry_run":true,
+            "hunks":[{"old":"1", "new":"invalid"}]}),
+        )
+        .unwrap_err();
+        assert!(err.contains("JSON"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn syntax_validation_rejects_stale_revision_and_unsupported_requests() {
+        let original = "{\"value\": 1}";
+        let (root, path) = setup(original);
+        let err = patch(
+            root.path(),
+            json!({"validate_syntax":"json", "expected_revision":revision("stale"),
+            "hunks":[{"old":"1", "new":"2"}]}),
+        )
+        .unwrap_err();
+        assert!(err.contains("expected_revision"), "{err}");
+        for language in [json!("python"), json!("JSON"), json!(null), json!(true)] {
+            let err = patch(
+                root.path(),
+                json!({"validate_syntax":language,
+                "hunks":[{"old":"1", "new":"2"}]}),
+            )
+            .unwrap_err();
+            assert!(err.contains("validate_syntax"), "{err}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn syntax_validation_schema_is_exposed() {
+        let props = properties();
+        assert_eq!(props["validate_syntax"]["type"], "string");
     }
 
     #[test]

@@ -1,9 +1,10 @@
+import '../test/authIndexedDB';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext';
 import { apiFetch } from '../utils/api';
-import { clearTokens, getAccessToken, getRefreshToken, getUser, getAuthInitializing, setAuthInitializing, setTokens, setUser } from '../utils/auth';
-import { setEnvironmentIdentity, setActiveEnvironment } from '../utils/remoteEnvironments';
+import { clearTokens, getAccessToken, getRefreshToken, getUser, getAuthInitializing, setAuthInitializing, setTokens, setUser, captureAuthScope, reportDamagedAuth, refreshTokens } from '../utils/auth';
+import { setEnvironmentIdentity, setActiveEnvironment, getEnvironmentSignal } from '../utils/remoteEnvironments';
 import { getComposerDraftStore } from '../utils/composerDraftStore';
 import { getCompactionIntentStore } from '../utils/compactionIntentStore';
 
@@ -43,6 +44,18 @@ function savedWork() {
   return { ordinary, intent, bytes: Object.fromEntries(keys.map(key => [key, localStorage.getItem(key)])) };
 }
 
+async function damageRefreshHistory() {
+  const request = indexedDB.open('terminal-v4-auth-coordination', 1);
+  request.onupgradeneeded = () => request.result.createObjectStore('refresh');
+  const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction('refresh', 'readwrite');
+    tx.objectStore('refresh').put('damaged', 'consumed');
+    tx.oncomplete = resolve; tx.onerror = tx.onabort = () => reject(tx.error);
+  });
+  db.close();
+}
+
 beforeEach(() => {
   vi.stubGlobal('navigator', { locks: { request: async (_name, _options, run) => run() } });
   clearTokens(true); localStorage.clear(); setAuthInitializing(false); setEnvironmentIdentity(null); setActiveEnvironment(null);
@@ -57,6 +70,73 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('real AuthProvider and apiFetch lifecycle', () => {
+  it('keeps the workspace and drafts when initialization finds damaged refresh history', async () => {
+    const saved = savedWork();
+    await damageRefreshHistory();
+    handler = url => url === '/api/auth/me' ? response(401) : standard(url);
+    render(<AuthProvider><Probe /></AuthProvider>);
+    await waitFor(() => expect(auth.authNotice).toMatch(/sign.in history.*damaged/i));
+    expect(screen.getByTestId('auth-user')).toHaveTextContent(oldUser.id);
+    expect(calls.filter(call => call.url === '/api/auth/refresh')).toHaveLength(0);
+    for (const [key, value] of Object.entries(saved.bytes)) expect(localStorage.getItem(key)).toBe(value);
+  });
+
+  it('keeps the workspace and drafts when an active request finds damaged refresh history', async () => {
+    await mount();
+    const saved = savedWork();
+    await damageRefreshHistory();
+    handler = url => url.endsWith('/compact') ? response(401) : standard(url);
+    const outcome = await settle(send());
+    expect(outcome.error?.message).toBe('Local sign-in history is damaged; contact your administrator');
+    expect(screen.getByTestId('auth-user')).toHaveTextContent(oldUser.id);
+    expect(auth.authNotice).toMatch(/sign.in history.*damaged/i);
+    expect(calls.filter(call => call.url === '/api/auth/refresh')).toHaveLength(0);
+    for (const [key, value] of Object.entries(saved.bytes)) expect(localStorage.getItem(key)).toBe(value);
+    act(() => { window.dispatchEvent(new StorageEvent('storage', { key: 'terminal_access_token', newValue: 'other-view', storageArea: localStorage })); });
+    expect(auth.authNotice).toMatch(/sign.in history.*damaged/i);
+  });
+
+  it('keeps an unsaved in-memory draft and its environment when refresh history is damaged', async () => {
+    await mount();
+    setEnvironmentIdentity(oldUser.id, window.location.origin);
+    const signal = getEnvironmentSignal();
+    const draft = getComposerDraftStore('ss-unsaved-fixture');
+    const original = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (String(key).includes('composerDraft:')) throw new Error('Synthetic storage full');
+      return original.call(this, key, value);
+    });
+    act(() => { draft.setText('Keep unsaved text'); });
+    expect(draft.getSnapshot().error).toMatch(/could not be saved/i);
+    await damageRefreshHistory();
+    handler = url => url.endsWith('/compact') ? response(401) : standard(url);
+    await settle(send());
+    expect(auth.authNotice).toMatch(/save any unsaved drafts/i);
+    expect(screen.getByTestId('auth-user')).toHaveTextContent(oldUser.id);
+    expect(signal.aborted).toBe(false);
+    expect(getComposerDraftStore('ss-unsaved-fixture').getSnapshot().text).toBe('Keep unsaved text');
+  });
+
+  it('does not sign out a newer login when an older damaged-history result arrives', async () => {
+    await mount();
+    const oldScope = captureAuthScope();
+    await act(async () => { await auth.login('new-fixture', 'synthetic-password'); });
+    expect(reportDamagedAuth(oldScope)).toBe(false);
+    expectNewAuth();
+    expect(auth.error).toBeNull();
+  });
+
+  it('keeps the workspace when a direct session refresh finds damaged history', async () => {
+    await mount();
+    const saved = savedWork();
+    await damageRefreshHistory();
+    const outcome = await settle(refreshTokens().then(value => ({ value }), error => ({ error })));
+    expect(outcome.error?.message).toBe('Local sign-in history is damaged; contact your administrator');
+    expect(screen.getByTestId('auth-user')).toHaveTextContent(oldUser.id);
+    expect(auth.authNotice).toMatch(/sign.in history.*damaged/i);
+    expect(calls.filter(call => call.url === '/api/auth/refresh')).toHaveLength(0);
+    for (const [key, value] of Object.entries(saved.bytes)) expect(localStorage.getItem(key)).toBe(value);
+  });
   it.each(['password', 'local-testing'])('unreachable %s sign-in reports the actual app address', async mode => {
     await mount();
     handler = () => { throw new TypeError('Failed to fetch'); };
@@ -114,6 +194,20 @@ describe('real AuthProvider and apiFetch lifecycle', () => {
     };
     const outcome = await settle(send()); expect(outcome.error).toBeTruthy(); expect(getAccessToken()).toBe('old-access'); expect(getRefreshToken()).toBe('old-refresh');
     expect(screen.getByTestId('auth-user')).toHaveTextContent(oldUser.id); expect(screen.queryByLabelText('Username')).toBeNull(); expect(posts()).toHaveLength(1);
+    expect(auth.authNotice).toMatch(/refresh.*could not be confirmed/i);
+  });
+
+  it('does not show an old refresh warning over a newer login', async () => {
+    await mount();
+    const delayed = deferred();
+    handler = url => url.endsWith('/compact') ? response(401) : url === '/api/auth/refresh' ? delayed.promise : standard(url);
+    const request = send();
+    await waitFor(() => expect(calls.some(call => call.url === '/api/auth/refresh')).toBe(true));
+    await act(async () => { await auth.login('new-fixture', 'synthetic-password'); });
+    delayed.resolve(response(503));
+    await settle(request);
+    expectNewAuth();
+    expect(auth.authNotice).toBe('');
   });
 
   it('successful inline refresh resends the exact serialized UUID/body once under the refreshed credentials', async () => {

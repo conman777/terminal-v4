@@ -155,6 +155,20 @@ pub(crate) struct OwnerInputGuard {
 }
 
 impl OwnerInputGuard {
+    pub(crate) fn matches_scope(&self, root: &Path, owner: &str) -> bool {
+        let owner_hash = hex::encode(Sha256::digest(owner.as_bytes()));
+        self.owner_hash == owner_hash
+            && self.path.file_name().is_some_and(|name| {
+                name == std::ffi::OsStr::new(&format!("auth-input-{owner_hash}.lock"))
+            })
+            && self
+                .path
+                .parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .zip(root.canonicalize().ok())
+                .is_some_and(|(actual, expected)| actual == expected)
+    }
+
     pub(super) fn has_unresolved(
         &self,
         tx: &rusqlite::Transaction<'_>,
@@ -453,7 +467,11 @@ mod tests {
     #[test]
     fn owner_lock_serializes_same_owner_without_blocking_other_owners() {
         let root = tempfile::tempdir().unwrap();
+        let other_root = tempfile::tempdir().unwrap();
         let first = acquire(root.path(), "alice", Duration::from_millis(100)).unwrap();
+        assert!(first.matches_scope(root.path(), "alice"));
+        assert!(!first.matches_scope(root.path(), "bob"));
+        assert!(!first.matches_scope(other_root.path(), "alice"));
         assert!(acquire(root.path(), "alice", Duration::from_millis(30)).is_err());
         let other = acquire(root.path(), "bob", Duration::from_millis(100)).unwrap();
         drop(first);

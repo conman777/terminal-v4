@@ -169,6 +169,13 @@ struct TerminalManagerInner {
     // Lifecycle admission precedes sessions, batcher, then state. Readers skip it.
     lifecycle: Mutex<()>,
     sessions: Mutex<HashMap<String, Arc<LiveSession>>>,
+    #[cfg(all(test, unix))]
+    admitted_create_pause: StdMutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
 }
 
 struct LiveSession {
@@ -396,6 +403,8 @@ impl TerminalManager {
                 shutting_down: AtomicBool::new(false),
                 lifecycle: Mutex::new(()),
                 sessions: Mutex::new(HashMap::new()),
+                #[cfg(all(test, unix))]
+                admitted_create_pause: StdMutex::new(None),
             }),
         }
     }
@@ -563,6 +572,58 @@ impl TerminalManager {
         admission: Option<TerminalAdmission<'_>>,
     ) -> Result<TerminalCreation, String> {
         let _lifecycle = self.inner.lifecycle.lock().await;
+        self.create_session_locked(user_id, options, intent, admission)
+            .await
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn create_session_authorized(
+        &self,
+        user_id: &str,
+        options: TerminalCreateOptions,
+        intent: TerminalCreateIntent,
+        app: &crate::state::AppState,
+        local: Option<&crate::auth::LocalAuthority>,
+        paired: Option<&crate::auth::PairedInputAuthority>,
+        cancelled: &AtomicBool,
+    ) -> Result<TerminalCreation, String> {
+        let _lifecycle = self.inner.lifecycle.lock().await;
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(format!(
+                "{TERMINAL_UNAUTHORIZED}Terminal request was cancelled"
+            ));
+        }
+        let _owner = self
+            .terminal_owner_guard(app, user_id, local, paired)
+            .await?;
+        let credential = credential_admission(app, user_id, local, paired);
+        let admission = || {
+            if cancelled.load(Ordering::SeqCst) {
+                return Err("Terminal request was cancelled".into());
+            }
+            credential()
+        };
+        let result = self
+            .create_session_locked(user_id, options, intent, Some(&admission))
+            .await;
+        #[cfg(test)]
+        {
+            let pause = self.inner.admitted_create_pause.lock().unwrap().take();
+            if let Some((entered, release)) = pause {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+        }
+        result
+    }
+
+    async fn create_session_locked(
+        &self,
+        user_id: &str,
+        options: TerminalCreateOptions,
+        intent: TerminalCreateIntent,
+        admission: Option<TerminalAdmission<'_>>,
+    ) -> Result<TerminalCreation, String> {
         admit(admission)?;
         if let Some(request_id) = intent.request_id.as_deref() {
             if let Some(session) = self
@@ -730,6 +791,76 @@ impl TerminalManager {
         admission: Option<TerminalAdmission<'_>>,
     ) -> Result<Option<TerminalSessionSnapshot>, String> {
         let _lifecycle = self.inner.lifecycle.lock().await;
+        self.restore_session_locked(user_id, session_id, cols, rows, admission)
+            .await
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn restore_session_authorized(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        cols: Option<i64>,
+        rows: Option<i64>,
+        app: &crate::state::AppState,
+        local: Option<&crate::auth::LocalAuthority>,
+        paired: Option<&crate::auth::PairedInputAuthority>,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<TerminalSessionSnapshot>, String> {
+        let _lifecycle = self.inner.lifecycle.lock().await;
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(format!(
+                "{TERMINAL_UNAUTHORIZED}Terminal request was cancelled"
+            ));
+        }
+        let _owner = self
+            .terminal_owner_guard(app, user_id, local, paired)
+            .await?;
+        let credential = credential_admission(app, user_id, local, paired);
+        let admission = || {
+            if cancelled.load(Ordering::SeqCst) {
+                return Err("Terminal request was cancelled".into());
+            }
+            credential()
+        };
+        self.restore_session_locked(user_id, session_id, cols, rows, Some(&admission))
+            .await
+    }
+
+    #[cfg(unix)]
+    async fn terminal_owner_guard(
+        &self,
+        app: &crate::state::AppState,
+        user_id: &str,
+        local: Option<&crate::auth::LocalAuthority>,
+        paired: Option<&crate::auth::PairedInputAuthority>,
+    ) -> Result<crate::state::owner_input::OwnerInputGuard, String> {
+        if local.is_some() == paired.is_some() {
+            return Err(format!(
+                "{TERMINAL_UNAUTHORIZED}A local account or paired device credential is required"
+            ));
+        }
+        let owner = user_id.to_owned();
+        let auth_app = app.clone();
+        let guard = tokio::task::spawn_blocking(move || auth_app.acquire_input_guard(&owner))
+            .await
+            .map_err(|_| "Terminal owner admission unavailable")??;
+        if !guard.matches_scope(&self.inner.config.data_dir, user_id) {
+            return Err("Terminal owner admission scope mismatch".into());
+        }
+        app.verify_owner_input_guard(&guard)?;
+        admit(Some(&credential_admission(app, user_id, local, paired)))?;
+        Ok(guard)
+    }
+
+    async fn restore_session_locked(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        cols: Option<i64>,
+        rows: Option<i64>,
+        admission: Option<TerminalAdmission<'_>>,
+    ) -> Result<Option<TerminalSessionSnapshot>, String> {
         admit(admission)?;
         let maybe_active = {
             let sessions = self.inner.sessions.lock().await;
@@ -767,6 +898,7 @@ impl TerminalManager {
                 }
             };
             persist_session_state(&self.inner.config, &session).await?;
+            admit(admission)?;
             if !session.closed.load(Ordering::SeqCst) {
                 return Ok(Some(snapshot));
             }
@@ -814,28 +946,36 @@ impl TerminalManager {
                 uses_tmux,
                 has_existing_tmux,
                 SpawnExtras {
-                    thread: None,
+                    thread: restored_thread,
                     admission,
                 },
             )
             .await?;
-        let maybe_session = {
-            let sessions = self.inner.sessions.lock().await;
-            sessions.get(session_id).cloned()
-        };
-        if let Some(session) = maybe_session {
-            let _publication = session.batcher.lock().await;
-            {
-                let mut state = session.state.lock().await;
-                state.sandbox = restored_sandbox;
-                state.thread = restored_thread;
-            }
-            persist_session_state(&self.inner.config, &session).await?;
+        if let Err(error) = admit(admission) {
+            let rollback = self
+                .suspend_locked(user_id, session_id, has_existing_tmux)
+                .await;
+            return Err(match rollback {
+                Ok(_) => error,
+                Err(cleanup) => {
+                    format!("{error}; restored terminal cleanup is unconfirmed: {cleanup}")
+                }
+            });
         }
         Ok(Some(snapshot))
     }
 
     pub async fn write(&self, user_id: &str, session_id: &str, input: &str) -> Result<(), String> {
+        self.write_admitted(user_id, session_id, input, None).await
+    }
+
+    pub(crate) async fn write_admitted(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        input: &str,
+        admission: Option<TerminalAdmission<'_>>,
+    ) -> Result<(), String> {
         tracing::debug!(
             "TerminalManager::write session={session_id} input_len={}",
             input.len()
@@ -865,6 +1005,7 @@ impl TerminalManager {
             }
         }
 
+        admit(admission)?;
         tracing::debug!("TerminalManager::write calling io.write");
         session.io.write(normalize_newlines(input)).await?;
 
@@ -979,6 +1120,15 @@ impl TerminalManager {
     }
     pub(crate) async fn suspend(&self, user_id: &str, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.inner.lifecycle.lock().await;
+        self.suspend_locked(user_id, session_id, false).await
+    }
+
+    async fn suspend_locked(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        keep_tmux: bool,
+    ) -> Result<bool, String> {
         let mut sessions = self.inner.sessions.lock().await;
         let Some(session) = sessions.get(session_id).cloned() else {
             return Ok(load_persisted_session(&self.inner.config, user_id, session_id)?.is_some());
@@ -997,7 +1147,7 @@ impl TerminalManager {
         }
         let _workspace_activity = crate::workspace_activity::enter(Path::new(&cwd))?;
         session.finalizing.store(true, Ordering::SeqCst);
-        if uses_tmux {
+        if uses_tmux && !keep_tmux {
             crate::tmux::kill_session(session_id).await?;
             session.state.lock().await.uses_tmux = false;
         }
@@ -1014,7 +1164,7 @@ impl TerminalManager {
         session.closed.store(true, Ordering::SeqCst);
         {
             let mut state = session.state.lock().await;
-            state.uses_tmux = false;
+            state.uses_tmux = uses_tmux && keep_tmux;
             state.is_busy = false;
             state.updated_at = iso_timestamp();
         }
@@ -1259,6 +1409,48 @@ impl TerminalManager {
         admission: Option<TerminalAdmission<'_>>,
     ) -> Result<Option<ThreadMetadata>, String> {
         let _lifecycle = self.inner.lifecycle.lock().await;
+        self.update_thread_locked(user_id, session_id, updates, admission)
+            .await
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn update_thread_authorized(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        updates: ThreadUpdate,
+        app: &crate::state::AppState,
+        local: Option<&crate::auth::LocalAuthority>,
+        paired: Option<&crate::auth::PairedInputAuthority>,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<ThreadMetadata>, String> {
+        let _lifecycle = self.inner.lifecycle.lock().await;
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(format!(
+                "{TERMINAL_UNAUTHORIZED}Terminal request was cancelled"
+            ));
+        }
+        let _owner = self
+            .terminal_owner_guard(app, user_id, local, paired)
+            .await?;
+        let credential = credential_admission(app, user_id, local, paired);
+        let admission = || {
+            if cancelled.load(Ordering::SeqCst) {
+                return Err("Terminal request was cancelled".into());
+            }
+            credential()
+        };
+        self.update_thread_locked(user_id, session_id, updates, Some(&admission))
+            .await
+    }
+
+    async fn update_thread_locked(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        updates: ThreadUpdate,
+        admission: Option<TerminalAdmission<'_>>,
+    ) -> Result<Option<ThreadMetadata>, String> {
         admit(admission)?;
         let maybe_active = {
             let sessions = self.inner.sessions.lock().await;
@@ -1269,6 +1461,7 @@ impl TerminalManager {
             admit(admission)?;
             let thread = {
                 let mut state = session.state.lock().await;
+                admit(admission)?;
                 if state.user_id != user_id {
                     return Ok(None);
                 }
@@ -1303,6 +1496,7 @@ impl TerminalManager {
         apply_thread_update(&mut thread, updates);
         persisted.thread = Some(thread.clone());
         persisted.updated_at = iso_timestamp();
+        admit(admission)?;
         save_persisted_session(&self.inner.config, user_id, &persisted)?;
         Ok(Some(thread))
     }
@@ -6532,6 +6726,62 @@ mod thread_terminal_admission_tests {
     }
 
     #[tokio::test]
+    async fn link_update_rechecks_admission_after_waiting_for_terminal_state() {
+        let fixture = fixture();
+        let created = fixture
+            .manager
+            .create_session(OWNER, fixture.options())
+            .await
+            .unwrap();
+        let session = fixture
+            .manager
+            .inner
+            .sessions
+            .lock()
+            .await
+            .get(&created.id)
+            .unwrap()
+            .clone();
+        let state = session.state.lock().await;
+        let ended = AtomicBool::new(false);
+        let admission = || {
+            if ended.load(Ordering::SeqCst) {
+                revoked()
+            } else {
+                Ok(())
+            }
+        };
+        let linking = fixture.manager.update_thread_admitted(
+            OWNER,
+            &created.id,
+            ThreadUpdate {
+                companion_of: Some(Some(THREAD.into())),
+                ..ThreadUpdate::default()
+            },
+            Some(&admission),
+        );
+        tokio::pin!(linking);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut linking)
+                .await
+                .is_err()
+        );
+        ended.store(true, Ordering::SeqCst);
+        drop(state);
+        let result = linking.await;
+        let linked = fixture
+            .manager
+            .get_thread(OWNER, &created.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .companion_of;
+        fixture.manager.close(OWNER, &created.id).await.unwrap();
+        assert!(result.unwrap_err().starts_with(TERMINAL_UNAUTHORIZED));
+        assert!(linked.is_none());
+    }
+
+    #[tokio::test]
     async fn link_update_denied_after_waiting_leaves_the_terminal_unlinked() {
         let fixture = fixture();
         let created = fixture
@@ -6649,6 +6899,97 @@ mod thread_terminal_admission_tests {
     }
 
     #[tokio::test]
+    async fn restore_revoked_after_publication_stops_new_shell_and_preserves_history_and_thread() {
+        let fixture = fixture();
+        let id = "restore-revoked-after-publication";
+        let mut thread = default_thread_metadata(None);
+        thread.companion_of = Some(THREAD.into());
+        save_persisted_session(
+            fixture.config(),
+            OWNER,
+            &StoredTerminalSession {
+                id: id.into(),
+                title: "retained".into(),
+                shell: fixture.shell.clone(),
+                cwd: fixture.folder.path().to_string_lossy().into_owned(),
+                created_at: iso_timestamp(),
+                updated_at: iso_timestamp(),
+                history: vec![TerminalStreamEvent {
+                    text: "prior output".into(),
+                    ts: 1,
+                    seq: Some(1),
+                }],
+                uses_tmux: false,
+                sandbox: None,
+                thread: Some(thread),
+            },
+        )
+        .unwrap();
+        let calls = AtomicUsize::new(0);
+        let admission = || {
+            if calls.fetch_add(1, Ordering::SeqCst) + 1 >= 4 {
+                revoked()
+            } else {
+                Ok(())
+            }
+        };
+        let result = fixture
+            .manager
+            .restore_session_admitted(OWNER, id, None, None, Some(&admission))
+            .await;
+        if result.is_ok() {
+            fixture.manager.close(OWNER, id).await.unwrap();
+            panic!("restore returned after its authorization ended");
+        }
+        assert!(result.unwrap_err().starts_with(TERMINAL_UNAUTHORIZED));
+        let retained = load_persisted_session(fixture.config(), OWNER, id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                fixture.manager.is_active(id).await,
+                retained.thread.unwrap().companion_of.as_deref() == Some(THREAD),
+                retained
+                    .history
+                    .iter()
+                    .any(|entry| entry.text == "prior output")
+            ),
+            (false, true, true)
+        );
+        sleep(Duration::from_millis(200)).await;
+        for pid in fixture.started_pids() {
+            fixture.assert_gone(&pid).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_revoked_while_reading_an_active_terminal_leaves_the_existing_shell_running() {
+        let fixture = fixture();
+        let created = fixture
+            .manager
+            .create_session(OWNER, fixture.options())
+            .await
+            .unwrap();
+        fixture.wait_for_pids(1).await;
+        let calls = AtomicUsize::new(0);
+        let admission = || {
+            if calls.fetch_add(1, Ordering::SeqCst) + 1 >= 3 {
+                revoked()
+            } else {
+                Ok(())
+            }
+        };
+        let result = fixture
+            .manager
+            .restore_session_admitted(OWNER, &created.id, None, None, Some(&admission))
+            .await;
+        assert!(result.unwrap_err().starts_with(TERMINAL_UNAUTHORIZED));
+        assert!(fixture.manager.is_active(&created.id).await);
+        fixture.manager.close(OWNER, &created.id).await.unwrap();
+        fixture.assert_gone(&fixture.started_pids()[0]).await;
+    }
+
+    #[tokio::test]
     async fn restore_denied_after_waiting_starts_no_process_and_keeps_the_journal() {
         let fixture = fixture();
         let id = "restore-owned";
@@ -6759,12 +7100,22 @@ mod thread_terminal_route_tests {
 
     impl Harness {
         async fn call(&self, method: &str, uri: &str, body: Value) -> (StatusCode, Value) {
+            self.call_with_token(method, uri, body, &self.token).await
+        }
+
+        async fn call_with_token(
+            &self,
+            method: &str,
+            uri: &str,
+            body: Value,
+            token: &str,
+        ) -> (StatusCode, Value) {
             let response = crate::app(self.state.clone())
                 .oneshot(
                     Request::builder()
                         .method(method)
                         .uri(uri)
-                        .header("Authorization", format!("Bearer {}", self.token))
+                        .header("Authorization", format!("Bearer {token}"))
                         .header("Content-Type", "application/json")
                         .body(Body::from(body.to_string()))
                         .unwrap(),
@@ -6820,6 +7171,535 @@ mod thread_terminal_route_tests {
             drop(held);
             request.await
         }
+    }
+
+    #[tokio::test]
+    async fn create_route_waits_for_owner_admission_before_starting_a_shell() {
+        let harness = harness().await;
+        let guard = harness.state.acquire_input_guard(&harness.owner).unwrap();
+        let request = harness.call(
+            "POST",
+            "/api/terminal",
+            harness.create_body("88888888-8888-4888-8888-888888888888"),
+        );
+        tokio::pin!(request);
+        if let Ok((status, body)) =
+            tokio::time::timeout(Duration::from_millis(150), &mut request).await
+        {
+            if status == StatusCode::CREATED {
+                harness
+                    .state
+                    .terminal_manager()
+                    .close(&harness.owner, body["session"]["id"].as_str().unwrap())
+                    .await
+                    .unwrap();
+            }
+            panic!("terminal creation bypassed the owner admission lock: {status}");
+        }
+        assert_eq!(harness.journal_count(), 0);
+        drop(guard);
+        let (status, body) = request.await;
+        assert_eq!(status, StatusCode::CREATED);
+        harness
+            .state
+            .terminal_manager()
+            .close(&harness.owner, body["session"]["id"].as_str().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn logout_waits_until_an_admitted_terminal_create_finishes() {
+        let harness = harness().await;
+        let manager = harness.state.terminal_manager();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *manager.inner.admitted_create_pause.lock().unwrap() = Some((entered_tx, release_rx));
+        let state = harness.state.clone();
+        let token = harness.token.clone();
+        let body = harness.create_body("cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd");
+        let creation = tokio::spawn(async move {
+            crate::app(state)
+                .oneshot(
+                    Request::post("/api/terminal")
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(Duration::from_secs(5), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let state = harness.state.clone();
+        let owner = harness.owner.clone();
+        let mut logout = tokio::task::spawn_blocking(move || state.logout_user(&owner));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), &mut logout)
+                .await
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        let response = creation.await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        logout.await.unwrap().unwrap();
+        manager
+            .close(&harness.owner, body["session"]["id"].as_str().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn paired_revocation_waits_until_an_admitted_terminal_create_finishes() {
+        let harness = harness().await;
+        let (grant_id, token) =
+            crate::paired_environments::synthetic_input_grant(&harness.state, &harness.owner);
+        let manager = harness.state.terminal_manager();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        *manager.inner.admitted_create_pause.lock().unwrap() = Some((entered_tx, release_rx));
+        let state = harness.state.clone();
+        let body = harness.create_body("bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc");
+        let creation = tokio::spawn(async move {
+            crate::app(state)
+                .oneshot(
+                    Request::post("/api/terminal")
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(Duration::from_secs(5), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let path = format!("/api/environments/grants/{grant_id}");
+        let revoke = harness.call("DELETE", &path, Value::Null);
+        tokio::pin!(revoke);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), &mut revoke)
+                .await
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        let response = creation.await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(revoke.await.0, StatusCode::NO_CONTENT);
+        manager
+            .close(&harness.owner, body["session"]["id"].as_str().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnected_create_waiting_for_lifecycle_does_not_start_a_shell() {
+        let harness = harness().await;
+        let manager = harness.state.terminal_manager();
+        let held = manager.inner.lifecycle.lock().await;
+        let state = harness.state.clone();
+        let token = harness.token.clone();
+        let body = harness.create_body("efefefef-efef-4fef-8fef-efefefefefef");
+        let request = tokio::spawn(async move {
+            crate::app(state)
+                .oneshot(
+                    Request::post("/api/terminal")
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        sleep(Duration::from_millis(200)).await;
+        request.abort();
+        let _ = request.await;
+        drop(held);
+        let settled = manager.inner.lifecycle.lock().await;
+        drop(settled);
+        let sessions = manager.list_sessions(&harness.owner).await.unwrap();
+        for session in &sessions {
+            manager.close(&harness.owner, &session.id).await.unwrap();
+        }
+        assert_eq!((sessions.len(), harness.journal_count()), (0, 0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnected_restore_waiting_for_lifecycle_does_not_start_a_shell() {
+        let harness = harness().await;
+        let manager = harness.state.terminal_manager();
+        let id = "restore-disconnected";
+        save_persisted_session(
+            harness.state.config(),
+            &harness.owner,
+            &StoredTerminalSession {
+                id: id.into(),
+                title: "retained".into(),
+                shell: "/bin/sh".into(),
+                cwd: harness.folder.path().to_string_lossy().into_owned(),
+                created_at: iso_timestamp(),
+                updated_at: iso_timestamp(),
+                history: vec![],
+                uses_tmux: false,
+                sandbox: None,
+                thread: None,
+            },
+        )
+        .unwrap();
+        let before = fs::read(harness.journal(id)).unwrap();
+        let held = manager.inner.lifecycle.lock().await;
+        let state = harness.state.clone();
+        let token = harness.token.clone();
+        let request = tokio::spawn(async move {
+            crate::app(state)
+                .oneshot(
+                    Request::post(format!("/api/terminal/{id}/restore"))
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        sleep(Duration::from_millis(200)).await;
+        request.abort();
+        let _ = request.await;
+        drop(held);
+        let settled = manager.inner.lifecycle.lock().await;
+        drop(settled);
+        let active = manager.is_active(id).await;
+        if active {
+            manager.close(&harness.owner, id).await.unwrap();
+        }
+        assert!(!active);
+        assert_eq!(fs::read(harness.journal(id)).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn paired_create_queued_before_grant_revocation_does_not_start_a_shell() {
+        let harness = harness().await;
+        let (grant_id, token) =
+            crate::paired_environments::synthetic_input_grant(&harness.state, &harness.owner);
+        let manager = harness.state.terminal_manager();
+        let held = manager.inner.lifecycle.lock().await;
+        let request = harness.call_with_token(
+            "POST",
+            "/api/terminal",
+            harness.create_body("abababab-abab-4bab-8bab-abababababab"),
+            &token,
+        );
+        tokio::pin!(request);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), &mut request)
+                .await
+                .is_err()
+        );
+        let (revoked, _) = harness
+            .call(
+                "DELETE",
+                &format!("/api/environments/grants/{grant_id}"),
+                Value::Null,
+            )
+            .await;
+        assert_eq!(revoked, StatusCode::NO_CONTENT);
+        drop(held);
+        let (status, _) = request.await;
+        assert_eq!(
+            (status, harness.journal_count()),
+            (StatusCode::UNAUTHORIZED, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_route_waits_for_owner_admission_before_starting_a_shell() {
+        let harness = harness().await;
+        let id = "restore-owner-fence";
+        save_persisted_session(
+            harness.state.config(),
+            &harness.owner,
+            &StoredTerminalSession {
+                id: id.into(),
+                title: "retained".into(),
+                shell: "/bin/sh".into(),
+                cwd: harness.folder.path().to_string_lossy().into_owned(),
+                created_at: iso_timestamp(),
+                updated_at: iso_timestamp(),
+                history: vec![],
+                uses_tmux: false,
+                sandbox: None,
+                thread: None,
+            },
+        )
+        .unwrap();
+        let guard = harness.state.acquire_input_guard(&harness.owner).unwrap();
+        let path = format!("/api/terminal/{id}/restore");
+        let request = harness.call("POST", &path, json!({}));
+        tokio::pin!(request);
+        if let Ok((status, _)) =
+            tokio::time::timeout(Duration::from_millis(150), &mut request).await
+        {
+            if status == StatusCode::OK {
+                harness
+                    .state
+                    .terminal_manager()
+                    .close(&harness.owner, id)
+                    .await
+                    .unwrap();
+            }
+            panic!("terminal restore bypassed the owner admission lock: {status}");
+        }
+        assert!(!harness.state.terminal_manager().is_active(id).await);
+        drop(guard);
+        let (status, _) = request.await;
+        assert_eq!(status, StatusCode::OK);
+        harness
+            .state
+            .terminal_manager()
+            .close(&harness.owner, id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_route_waits_for_owner_admission_before_updating_thread() {
+        let harness = harness().await;
+        let (_, created) = harness
+            .call(
+                "POST",
+                "/api/terminal",
+                json!({"cwd": harness.folder.path().to_string_lossy(), "shell":"/bin/sh"}),
+            )
+            .await;
+        let id = created["session"]["id"].as_str().unwrap().to_owned();
+        let path = format!("/api/terminal/{id}/thread");
+        let guard = harness.state.acquire_input_guard(&harness.owner).unwrap();
+        let request = harness.call("PATCH", &path, json!({"companionOf":THREAD}));
+        tokio::pin!(request);
+        if let Ok((status, _)) =
+            tokio::time::timeout(Duration::from_millis(150), &mut request).await
+        {
+            drop(guard);
+            harness
+                .state
+                .terminal_manager()
+                .close(&harness.owner, &id)
+                .await
+                .unwrap();
+            panic!("terminal thread update bypassed owner admission: {status}");
+        }
+        assert!(harness
+            .state
+            .terminal_manager()
+            .get_thread(&harness.owner, &id)
+            .await
+            .unwrap()
+            .unwrap()
+            .companion_of
+            .is_none());
+        drop(guard);
+        assert_eq!(request.await.0, StatusCode::OK);
+        harness
+            .state
+            .terminal_manager()
+            .close(&harness.owner, &id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retained_terminal_link_waits_for_owner_admission_before_persisting() {
+        let harness = harness().await;
+        let id = "retained-link-fence";
+        save_persisted_session(
+            harness.state.config(),
+            &harness.owner,
+            &StoredTerminalSession {
+                id: id.into(),
+                title: "retained".into(),
+                shell: "/bin/sh".into(),
+                cwd: harness.folder.path().to_string_lossy().into_owned(),
+                created_at: iso_timestamp(),
+                updated_at: iso_timestamp(),
+                history: vec![],
+                uses_tmux: false,
+                sandbox: None,
+                thread: None,
+            },
+        )
+        .unwrap();
+        let before = fs::read(harness.journal(id)).unwrap();
+        let guard = harness.state.acquire_input_guard(&harness.owner).unwrap();
+        let path = format!("/api/terminal/{id}/thread");
+        let request = harness.call("PATCH", &path, json!({"companionOf":THREAD}));
+        tokio::pin!(request);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), &mut request)
+                .await
+                .is_err()
+        );
+        assert_eq!(fs::read(harness.journal(id)).unwrap(), before);
+        drop(guard);
+        assert_eq!(request.await.0, StatusCode::OK);
+        let saved: Value = serde_json::from_slice(&fs::read(harness.journal(id)).unwrap()).unwrap();
+        assert_eq!(saved["thread"]["companionOf"], THREAD);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnected_link_waiting_for_lifecycle_does_not_update_thread() {
+        let harness = harness().await;
+        let (_, created) = harness
+            .call(
+                "POST",
+                "/api/terminal",
+                json!({"cwd": harness.folder.path().to_string_lossy(), "shell":"/bin/sh"}),
+            )
+            .await;
+        let id = created["session"]["id"].as_str().unwrap().to_owned();
+        let before: Value =
+            serde_json::from_slice(&fs::read(harness.journal(&id)).unwrap()).unwrap();
+        let manager = harness.state.terminal_manager();
+        let held = manager.inner.lifecycle.lock().await;
+        let app = harness.state.clone();
+        let token = harness.token.clone();
+        let path = format!("/api/terminal/{id}/thread");
+        let request = tokio::spawn(async move {
+            crate::app(app)
+                .oneshot(
+                    Request::patch(path)
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(json!({"companionOf":THREAD}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        sleep(Duration::from_millis(200)).await;
+        request.abort();
+        let _ = request.await;
+        drop(held);
+        let settled = manager.inner.lifecycle.lock().await;
+        drop(settled);
+        let thread = manager
+            .get_thread(&harness.owner, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        let journal: Value =
+            serde_json::from_slice(&fs::read(harness.journal(&id)).unwrap()).unwrap();
+        manager.close(&harness.owner, &id).await.unwrap();
+        assert_eq!(
+            (thread.companion_of, &journal["thread"]),
+            (None, &before["thread"])
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnected_link_waiting_for_terminal_state_does_not_update_thread() {
+        let harness = harness().await;
+        let (_, created) = harness
+            .call(
+                "POST",
+                "/api/terminal",
+                json!({"cwd": harness.folder.path().to_string_lossy(), "shell":"/bin/sh"}),
+            )
+            .await;
+        let id = created["session"]["id"].as_str().unwrap().to_owned();
+        let manager = harness.state.terminal_manager();
+        let session = manager
+            .inner
+            .sessions
+            .lock()
+            .await
+            .get(&id)
+            .unwrap()
+            .clone();
+        let held = session.state.lock().await;
+        let app = harness.state.clone();
+        let token = harness.token.clone();
+        let path = format!("/api/terminal/{id}/thread");
+        let request = tokio::spawn(async move {
+            crate::app(app)
+                .oneshot(
+                    Request::patch(path)
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(json!({"companionOf":THREAD}).to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        });
+        sleep(Duration::from_millis(200)).await;
+        request.abort();
+        let _ = request.await;
+        drop(held);
+        let settled = manager.inner.lifecycle.lock().await;
+        drop(settled);
+        let thread = manager
+            .get_thread(&harness.owner, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        manager.close(&harness.owner, &id).await.unwrap();
+        assert_eq!(thread.companion_of, None);
+    }
+
+    #[tokio::test]
+    async fn paired_link_queued_before_grant_revocation_leaves_thread_unchanged() {
+        let harness = harness().await;
+        let (_, created) = harness
+            .call(
+                "POST",
+                "/api/terminal",
+                json!({"cwd": harness.folder.path().to_string_lossy(), "shell":"/bin/sh"}),
+            )
+            .await;
+        let id = created["session"]["id"].as_str().unwrap().to_owned();
+        let (grant_id, token) =
+            crate::paired_environments::synthetic_input_grant(&harness.state, &harness.owner);
+        let manager = harness.state.terminal_manager();
+        let held = manager.inner.lifecycle.lock().await;
+        let path = format!("/api/terminal/{id}/thread");
+        let request =
+            harness.call_with_token("PATCH", &path, json!({"companionOf":THREAD}), &token);
+        tokio::pin!(request);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), &mut request)
+                .await
+                .is_err()
+        );
+        let (revoked, _) = harness
+            .call(
+                "DELETE",
+                &format!("/api/environments/grants/{grant_id}"),
+                Value::Null,
+            )
+            .await;
+        assert_eq!(revoked, StatusCode::NO_CONTENT);
+        drop(held);
+        let status = request.await.0;
+        let thread = manager
+            .get_thread(&harness.owner, &id)
+            .await
+            .unwrap()
+            .unwrap();
+        manager.close(&harness.owner, &id).await.unwrap();
+        assert_eq!(
+            (status, thread.companion_of),
+            (StatusCode::UNAUTHORIZED, None)
+        );
     }
 
     #[tokio::test]

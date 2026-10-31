@@ -22,6 +22,8 @@ pub(crate) struct LocalAuthority {
     owner: String,
     generation: i64,
     expires_at_ms: i64,
+    session_id: Option<String>,
+    auth_protocol: i64,
 }
 
 impl LocalAuthority {
@@ -38,12 +40,35 @@ impl LocalAuthority {
     #[cfg(unix)]
     pub(crate) fn from_verified_queue(
         proof: crate::followup_queue::VerifiedQueueAuthority,
-    ) -> Self {
-        let (owner, generation, expires_at_ms) = proof.into_parts();
-        Self {
-            owner,
-            generation,
-            expires_at_ms,
+    ) -> Result<Self, String> {
+        match proof {
+            crate::followup_queue::VerifiedQueueAuthority::Local {
+                owner,
+                generation,
+                expires_at_ms,
+                auth_protocol,
+                auth_session_id,
+            } => {
+                let valid_session = match (auth_protocol, auth_session_id.as_deref()) {
+                    (0, None) => true,
+                    (1, Some(value)) => uuid::Uuid::parse_str(value)
+                        .is_ok_and(|id| !id.is_nil() && id.to_string() == value),
+                    _ => false,
+                };
+                if !valid_session {
+                    return Err("Invalid persisted queue authority".into());
+                }
+                Ok(Self {
+                    owner,
+                    generation,
+                    expires_at_ms,
+                    session_id: auth_session_id,
+                    auth_protocol,
+                })
+            }
+            crate::followup_queue::VerifiedQueueAuthority::Paired(_) => {
+                Err("Paired queued authority is not supported by this dispatch path".into())
+            }
         }
     }
 
@@ -65,7 +90,27 @@ impl LocalAuthority {
             owner: owner.into(),
             generation,
             expires_at_ms,
+            session_id: None,
+            auth_protocol: 0,
         })
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn from_persisted_session_claims(
+        owner: &str,
+        generation: i64,
+        expires_at_ms: i64,
+        session_id: &str,
+    ) -> Result<Self, String> {
+        let id =
+            uuid::Uuid::parse_str(session_id).map_err(|_| "Invalid persisted session authority")?;
+        if id.is_nil() || id.to_string() != session_id {
+            return Err("Invalid persisted session authority".into());
+        }
+        let mut authority = Self::from_persisted_queue_claims(owner, generation, expires_at_ms)?;
+        authority.auth_protocol = 1;
+        authority.session_id = Some(session_id.into());
+        Ok(authority)
     }
 
     #[cfg(test)]
@@ -74,7 +119,33 @@ impl LocalAuthority {
             owner: owner.into(),
             generation,
             expires_at_ms,
+            session_id: None,
+            auth_protocol: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_session(
+        owner: &str,
+        generation: i64,
+        expires_at_ms: i64,
+        session: &str,
+    ) -> Self {
+        Self {
+            owner: owner.into(),
+            generation,
+            expires_at_ms,
+            session_id: Some(session.into()),
+            auth_protocol: 1,
+        }
+    }
+
+    pub(crate) fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    pub(crate) fn auth_protocol(&self) -> i64 {
+        self.auth_protocol
     }
 }
 
@@ -118,6 +189,10 @@ struct Claims {
     token_kind: String,
     #[serde(default)]
     generation: i64,
+    #[serde(default)]
+    auth_protocol: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
 }
 
 pub async fn require_auth(
@@ -298,7 +373,12 @@ pub(crate) fn authenticate_local_with_authority(
     )
     .and_then(|user| {
         let claims = decode_claims(&state.config().jwt_secret, token)?;
-        state.validate_auth_generation(&user.user_id, claims.generation)?;
+        state.validate_auth_claims(
+            &user.user_id,
+            claims.generation,
+            claims.auth_protocol,
+            claims.session_id.as_deref(),
+        )?;
         let user = runtime_identity(state, user)?;
         let authority = LocalAuthority {
             owner: user.user_id.clone(),
@@ -307,6 +387,8 @@ pub(crate) fn authenticate_local_with_authority(
                 .ok()
                 .and_then(|seconds| seconds.checked_mul(1000))
                 .ok_or("Invalid token expiration")?,
+            session_id: claims.session_id,
+            auth_protocol: claims.auth_protocol,
         };
         Ok((user, authority))
     })
@@ -325,7 +407,12 @@ pub(crate) fn authenticate_runtime_preview_token(
     )
     .and_then(|user| {
         let claims = decode_claims(&state.config().jwt_secret, token)?;
-        state.validate_auth_generation(&user.user_id, claims.generation)?;
+        state.validate_auth_claims(
+            &user.user_id,
+            claims.generation,
+            claims.auth_protocol,
+            claims.session_id.as_deref(),
+        )?;
         runtime_identity(state, user)
     })
 }
@@ -482,16 +569,37 @@ pub fn issue_access_token(secret: &str, user_id: &str, username: &str) -> String
 
 #[cfg(test)]
 pub fn issue_preview_token(secret: &str, user_id: &str, username: &str) -> String {
-    issue_token(secret, user_id, username, "preview", 900, 0)
+    issue_token(secret, user_id, username, "preview", 900, 0, 0, None)
 }
 
+#[cfg(test)]
 pub(crate) fn issue_access_token_for_generation(
     secret: &str,
     user_id: &str,
     username: &str,
     generation: i64,
 ) -> String {
-    issue_token(secret, user_id, username, "access", 3600, generation)
+    issue_access_token_for_protocol(secret, user_id, username, generation, 0, None)
+}
+
+pub(crate) fn issue_access_token_for_protocol(
+    secret: &str,
+    user_id: &str,
+    username: &str,
+    generation: i64,
+    auth_protocol: i64,
+    session_id: Option<&str>,
+) -> String {
+    issue_token(
+        secret,
+        user_id,
+        username,
+        "access",
+        3600,
+        generation,
+        auth_protocol,
+        session_id,
+    )
 }
 
 pub(crate) fn preview_token_for_access(state: &AppState, access: &str) -> Result<String, String> {
@@ -504,6 +612,8 @@ pub(crate) fn preview_token_for_access(state: &AppState, access: &str) -> Result
         "preview",
         900,
         claims.generation,
+        claims.auth_protocol,
+        claims.session_id.as_deref(),
     ))
 }
 
@@ -514,6 +624,8 @@ fn issue_token(
     token_kind: &str,
     ttl_seconds: usize,
     generation: i64,
+    auth_protocol: i64,
+    session_id: Option<&str>,
 ) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -529,6 +641,8 @@ fn issue_token(
             exp: now + ttl_seconds,
             token_kind: token_kind.to_string(),
             generation,
+            auth_protocol,
+            session_id: session_id.map(str::to_owned),
         },
         &EncodingKey::from_secret(secret.as_bytes()),
     )
@@ -551,6 +665,129 @@ mod revocation_tests {
     use axum::{http::Request, middleware, routing::get, Router};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn losing_a_transitioned_user_row_does_not_reenable_legacy_tokens() {
+        let data = tempfile::tempdir().unwrap();
+        let state = AppState::new(terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            jwt_secret: "protocol-loss-fixture".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        state
+            .create_local_user_for_test("fixture", "fixture-password")
+            .unwrap();
+        let login = state
+            .login("fixture", "fixture-password")
+            .await
+            .unwrap()
+            .unwrap();
+        {
+            let db = state.lock_db().unwrap();
+            db.execute(
+                "UPDATE users SET auth_protocol_min=1 WHERE id=?",
+                [&login.user.id],
+            )
+            .unwrap();
+            db.execute("DELETE FROM users WHERE id=?", [&login.user.id])
+                .unwrap();
+        }
+        assert!(authenticate_local_token(&state, &login.tokens.access_token).is_err());
+    }
+
+    #[tokio::test]
+    async fn account_protocol_rejects_legacy_tokens_after_transition_and_preserves_preview_version()
+    {
+        let data = tempfile::tempdir().unwrap();
+        let state = AppState::new(terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            jwt_secret: "protocol-fixture".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        state
+            .create_local_user_for_test("fixture", "fixture-password")
+            .unwrap();
+        let login = state
+            .login("fixture", "fixture-password")
+            .await
+            .unwrap()
+            .unwrap();
+        {
+            let db = state.lock_db().unwrap();
+            let has_column: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('users') WHERE name='auth_protocol_min')", [], |row| row.get(0)).unwrap();
+            if !has_column {
+                db.execute_batch(
+                    "ALTER TABLE users ADD COLUMN auth_protocol_min INTEGER NOT NULL DEFAULT 0",
+                )
+                .unwrap();
+            }
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as usize;
+        let upgraded = encode(&Header::default(), &json!({
+            "sub": login.user.id, "username": login.user.username, "exp": now + 3600, "iat": now,
+            "token_kind": "access", "generation": 0, "auth_protocol": 1
+        }), &EncodingKey::from_secret(state.config().jwt_secret.as_bytes())).unwrap();
+        let legacy_without_protocol = encode(&Header::default(), &json!({
+            "sub": login.user.id, "username": login.user.username, "exp": now + 3600, "iat": now,
+            "token_kind": "access", "generation": 0
+        }), &EncodingKey::from_secret(state.config().jwt_secret.as_bytes())).unwrap();
+        assert!(authenticate_local_token(&state, &login.tokens.access_token).is_ok());
+        assert!(authenticate_local_token(&state, &legacy_without_protocol).is_ok());
+        assert!(authenticate_local_token(&state, &upgraded).is_err());
+        let old_preview = preview_token_for_access(&state, &legacy_without_protocol).unwrap();
+        let old_resource =
+            crate::preview::auth_urls::resource_token(&state, &old_preview, "/preview/").unwrap();
+        state
+            .lock_db()
+            .unwrap()
+            .execute(
+                "UPDATE users SET auth_protocol_min = 1 WHERE id = ?",
+                [&login.user.id],
+            )
+            .unwrap();
+        assert!(authenticate_local_token(&state, &login.tokens.access_token).is_err());
+        assert!(authenticate_local_token(&state, &legacy_without_protocol).is_err());
+        assert!(authenticate_runtime_preview_token(&state, &old_preview, "/preview/").is_err());
+        assert!(crate::preview::auth_urls::authenticate_resource_token(
+            &state,
+            &old_resource,
+            "GET",
+            "/preview/"
+        )
+        .is_err());
+        assert!(authenticate_local_token(&state, &upgraded).is_ok());
+        let preview = preview_token_for_access(&state, &upgraded).unwrap();
+        let preview_claims = decode::<serde_json::Value>(
+            &preview,
+            &DecodingKey::from_secret(state.config().jwt_secret.as_bytes()),
+            &Validation::default(),
+        )
+        .unwrap()
+        .claims;
+        assert_eq!(preview_claims["auth_protocol"], 1);
+        let resource =
+            crate::preview::auth_urls::resource_token(&state, &preview, "/preview/").unwrap();
+        let claims = decode::<serde_json::Value>(
+            &resource,
+            &DecodingKey::from_secret(state.config().jwt_secret.as_bytes()),
+            &Validation::default(),
+        )
+        .unwrap()
+        .claims;
+        assert_eq!(claims["auth_protocol"], 1);
+        assert!(crate::preview::auth_urls::authenticate_resource_token(
+            &state,
+            &resource,
+            "GET",
+            "/preview/"
+        )
+        .is_ok());
+    }
 
     #[test]
     fn local_authority_expires_at_the_token_deadline_and_is_owner_bound() {
@@ -604,7 +841,7 @@ mod revocation_tests {
             .verify_reservation_authority(&scope, incarnation, &reservation)
             .unwrap()
             .unwrap();
-        let restored = LocalAuthority::from_verified_queue(proof);
+        let restored = LocalAuthority::from_verified_queue(proof).unwrap();
         assert_eq!(
             restored.valid_for("alice", expiration - 1),
             Some((4, expiration))

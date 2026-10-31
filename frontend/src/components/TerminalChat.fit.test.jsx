@@ -26,6 +26,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   resize(cols, rows) { this.cols = cols; this.rows = rows; this.resizeListener?.({ cols, rows }); }
   dispose() { this.disposed = true; }
   focus() {} blur() {} refresh() {} scrollToBottom() {}
+  registerLinkProvider(provider) { this.linkProvider = provider; return { dispose() {} }; }
   hasSelection() { return false; }
 } }));
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class {
@@ -45,7 +46,7 @@ vi.mock('../contexts/TerminalSessionContext', () => ({ useTerminalSession: () =>
 vi.mock('../hooks/useMobileDetect', () => ({ useMobileDetect: () => false }));
 vi.mock('../hooks/useIdleDetection', () => ({ useIdleDetection: () => ({ hasUserInputRef: { current: false }, markUserInput() {}, resetUserInput() {}, resetIdleTimer() {}, cleanup() {} }) }));
 vi.mock('../hooks/useFaviconFlash', () => ({ useFaviconFlash: () => ({ startFaviconFlash() {}, stopFaviconFlash() {} }) }));
-vi.mock('../utils/auth', () => ({ getAccessToken: () => 'synthetic', isAccessTokenExpired: () => false, refreshTokens: async () => ({ accessToken: 'synthetic' }) }));
+vi.mock('../utils/auth', async original => ({ ...(await original()), getAccessToken: () => 'synthetic', isAccessTokenExpired: () => false, refreshTokens: async () => ({ accessToken: 'synthetic' }) }));
 vi.mock('../utils/api', () => ({ uploadScreenshot: vi.fn(), apiFetch: async (url, options = {}) => {
   fx.requests.push({ url, ...options });
   if (url.endsWith('/resize')) return { ok: true, json: async () => {
@@ -96,6 +97,20 @@ describe('TerminalChat retained visible pane fitting', () => {
   afterEach(() => {
     setActiveEnvironment(null);
     vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+  });
+
+  it('only provides file links for the active scoped terminal', async () => {
+    const view = render(<TerminalChat {...props} />);
+    await tick();
+    const term = fx.terms[0];
+    term.buffer.active.getLine = index => index === 0 ? { translateToString: () => '/repo/current/src/app.js:2 /outside/secret.js:3' } : undefined;
+    const provide = () => { let links; term.linkProvider.provideLinks(1, result => { links = result; }); return links; };
+    expect(provide()).toBeUndefined();
+    view.rerender(<TerminalChat {...props} filePreviewThreadId="thread-a" filePreviewRoot="/repo/current" />);
+    const links = provide();
+    expect(links.map(({ text, range }) => ({ text, range }))).toEqual([{ text: '/repo/current/src/app.js:2', range: { start: { x: 1, y: 1 }, end: { x: 26, y: 1 } } }]);
+    view.rerender(<TerminalChat {...props} filePreviewThreadId="thread-a" filePreviewRoot="/repo/current" isPrimary={false} />);
+    expect(provide()).toBeUndefined();
   });
 
   it.each([

@@ -42,13 +42,32 @@ test.beforeEach(async ({ page }) => {
   }] } }));
   await page.route(/\/api\/structured\/sessions(?:\?.*)?$/, route => route.fulfill({ json: [session] }));
   await page.route(`**/api/structured/sessions/${session.id}`, route => route.fulfill({ json: session }));
+  await page.route(`**/api/structured/sessions/${session.id}/approval-capability`, route => route.fulfill({ json: { protocol: 1, mode: 'legacy', outstanding: false } }));
   await page.routeWebSocket(`**/api/structured/sessions/${session.id}/ws*`, ws => {
-    for (const event of transcript) ws.send(JSON.stringify({ __terminal_meta: true, type: 'structured_event', event }));
+    for (const event of [...transcript, { type: 'context_usage', usage: { contextTokens: 50000, contextWindow: 200000 }, seq: 4 }]) ws.send(JSON.stringify({ __terminal_meta: true, type: 'structured_event', event }));
   });
   await page.goto('/');
   await page.getByLabel('Username', { exact: true }).fill(`mobile-${randomUUID()}`);
   await page.getByRole('button', { name: 'Open workspace', exact: true }).click();
   await expect(page.getByText('The conversation remains the focus.', { exact: true })).toBeVisible();
+});
+
+test('phone context reading remains within the More control at narrow widths', async ({ page }, testInfo) => {
+  const more = page.getByLabel('More composer actions', { exact: true });
+  for (const width of [320, 393]) {
+    await page.setViewportSize({ width, height: 640 });
+    await expect(more).toContainText('25%');
+    await expect(more).toHaveAccessibleDescription('Last provider-reported context: 50,000 of 200,000 tokens.');
+    const bounds = await more.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.width).toBeGreaterThanOrEqual(44);
+    expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    await expect(more).toBeInViewport({ ratio: 1 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`phone-context-${width}.png`) });
+  }
+  await more.click();
+  await expect(page.getByRole('button', { name: 'Session context', exact: true })).toBeVisible();
 });
 
 test('a multiline mobile draft stays readable when the composer loses focus', async ({ page }) => {
@@ -339,7 +358,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 393, height: 852 }
         ...transcript,
         { type: 'message_completed', role: 'user', content: 'Investigate the project.', messageId: 'investigation-user', turnId: 'investigation', seq: 4 },
         { type: 'tool_started', toolName: 'delegate_task_background', toolCallId: 'child', toolInput: { prompt: 'Inspect the fixture project.' }, turnId: 'investigation', seq: 5 },
-        { type: 'tool_completed', toolName: 'delegate_task_background', toolCallId: 'child', result: JSON.stringify({ status: 'running', delivery: 'The result will be delivered when the parent is ready.', operation_id: 'internal-operation' }), turnId: 'investigation', seq: 6 },
+        { type: 'tool_completed', toolName: 'delegate_task_background', toolCallId: 'child', result: JSON.stringify({ status: 'running', delivery: 'Check the parent queue and retained task result before resuming; delivery may require review.', operation_id: 'internal-operation' }), turnId: 'investigation', seq: 6 },
         { type: 'message_completed', role: 'assistant', content: 'The investigation is underway.', messageId: 'investigation-answer', turnId: 'investigation', seq: 7 },
         { type: 'turn_completed', turnId: 'investigation', status: 'completed', seq: 8 },
       ]) ws.send(JSON.stringify({ __terminal_meta: true, type: 'structured_event', event }));
@@ -350,8 +369,11 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 393, height: 852 }
     const card = page.getByRole('button', { name: /Background investigation.*Inspect the fixture project.*Started/ });
     await expect(card).toBeVisible();
     await expect(card).not.toContainText('Completed');
+    await expect(card).toContainText('Delivery details');
+    await expect(card).not.toContainText('Result follows in the queue');
     await card.click();
-    await expect(page.getByText('The result will be delivered when the parent is ready.', { exact: true })).toBeVisible();
+    await expect(page.getByText('Check the parent queue and retained task result before resuming; delivery may require review.', { exact: true })).toBeVisible();
+    await expect(page.getByText('Find retained results in Project tools → Tasks & schedules.', { exact: true })).toBeVisible();
     const raw = page.locator('.cc-todo-raw').filter({ hasText: 'Raw result' });
     await expect(raw).not.toHaveAttribute('open', '');
     await raw.locator('summary').click();
@@ -377,6 +399,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 393, height: 852 }
     const review = page.getByRole('group', { name: 'Approval required' });
     await expect(review.getByText('Run a read-only background investigation?')).toBeVisible();
     await expect(review.getByText('Inspect notes in the fixture project.', { exact: true })).toBeVisible();
+    await expect(review.getByText(/If delivered, the result is held for review/)).toBeVisible();
     await expect(review.getByLabel('Approval details')).toBeHidden();
     const geometry = await review.evaluate(node => {
       const fields = node.querySelector('.structured-delegation-fields')!;
@@ -394,6 +417,24 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 393, height: 852 }
     await expect(review.getByLabel('Approval details')).toContainText('internal-operation');
     await review.getByRole('button', { name: 'Approve', exact: true }).click();
     await expect.poll(() => decision).toEqual({ approved: true, approvalId: 'delegation-approval' });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+
+  test(`paired investigation approval explains delivery at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.routeWebSocket(`**/api/structured/sessions/${session.id}/ws*`, ws => {
+      for (const event of [
+        ...transcript,
+        { type: 'turn_started', turnId: 'paired-turn', seq: 4 },
+        { type: 'approval_required', approvalId: 'paired-approval', turnId: 'paired-turn', toolName: 'delegate_task_background', toolInput: { prompt: 'Inspect notes.', workspace: '/tmp/fixture', provider: 'deepseek', model: 'deepseek-chat', permission: 'read_only_child', paired_authorization: { owner: 'fixture' } }, seq: 5 },
+      ]) ws.send(JSON.stringify({ __terminal_meta: true, type: 'structured_event', event }));
+    });
+    await page.reload();
+    const review = page.getByRole('group', { name: 'Approval required' });
+    await expect(review.getByText(/can run the result automatically while your authorization remains valid/)).toBeVisible();
+    const approve = review.getByRole('button', { name: 'Approve', exact: true });
+    await expect(approve).toBeInViewport();
+    expect((await approve.boundingBox())!.height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }

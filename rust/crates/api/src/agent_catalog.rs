@@ -39,6 +39,7 @@ fn accepts_key(provider: &str) -> bool {
 fn provider_name(provider: &str) -> String {
     format!("terminal-v4:provider:{provider}")
 }
+#[cfg(test)]
 fn credentials(
     state: &AppState,
     user: &AuthenticatedUser,
@@ -61,6 +62,70 @@ fn credentials(
         })
         .collect())
 }
+
+fn credentials_in_connection(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    connection: &rusqlite::Connection,
+) -> Result<HashMap<String, String>, String> {
+    let cipher = vault::VaultCipher::load(&state.config().data_dir)?;
+    Ok(AppState::list_vault_keys_from_connection(connection, user)?
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .key_name
+                .strip_prefix("terminal-v4:provider:")
+                .and_then(|id| {
+                    cipher
+                        .decrypt(&entry.key_value)
+                        .ok()
+                        .map(|secret| (id.to_owned(), secret))
+                })
+        })
+        .collect())
+}
+
+async fn credential_snapshot(
+    state: AppState,
+    user: AuthenticatedUser,
+    local: Option<Extension<crate::auth::LocalAuthority>>,
+    paired: Option<Extension<crate::auth::PairedInputAuthority>>,
+) -> Result<HashMap<String, String>, ApiError> {
+    tokio::task::spawn_blocking(move || match (local, paired) {
+        (Some(Extension(authority)), None) => {
+            state.with_authorized_vault(&user, &authority, |tx| {
+                credentials_in_connection(&state, &user, tx)
+            })
+        }
+        (None, Some(Extension(authority))) => {
+            state.try_with_paired_owner_review(&user.user_id, &authority, |tx, check| {
+                let credentials = credentials_in_connection(&state, &user, tx)?;
+                check()?;
+                Ok(credentials)
+            })
+        }
+        _ => Err("Credential is invalid or expired".into()),
+    })
+    .await
+    .map_err(|_| ApiError::internal("Credential worker unavailable"))?
+    .map_err(credential_authority_error)
+}
+
+fn credential_authority_error(error: String) -> ApiError {
+    if matches!(
+        error.as_str(),
+        "Paired grant expired or revoked"
+            | "Paired grant does not authorize this input"
+            | "Paired grant is invalid"
+    ) {
+        ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "The session is no longer valid".into(),
+        }
+    } else {
+        crate::vault_authority_error(error)
+    }
+}
 fn mask(secret: &str) -> String {
     let suffix: String = secret
         .chars()
@@ -82,6 +147,7 @@ struct ApiKeyInput {
 async fn save_key(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<crate::auth::LocalAuthority>>,
     Path(provider): Path<String>,
     Json(input): Json<ApiKeyInput>,
 ) -> Result<([(header::HeaderName, &'static str); 1], Json<Value>), ApiError> {
@@ -110,32 +176,28 @@ async fn save_key(
     } else {
         secret.to_owned()
     };
-    let encrypted = vault::VaultCipher::load(&state.config().data_dir)
-        .and_then(|cipher| cipher.encrypt(&stored))
-        .map_err(|_| ApiError::internal("Could not encrypt credential"))?;
+    let authority = crate::settings_local_authority(authority)?;
+    let masked = mask(secret);
     let name = provider_name(&provider);
-    let mut database = state.lock_db().map_err(ApiError::internal)?;
-    let transaction = database
-        .transaction()
-        .map_err(|_| ApiError::internal("Could not save credential"))?;
-    transaction
-        .execute(
-            "DELETE FROM api_key_vault WHERE user_id=?1 AND key_name=?2",
-            rusqlite::params![user.user_id, name],
-        )
-        .map_err(|_| ApiError::internal("Could not save credential"))?;
-    transaction.execute("INSERT INTO api_key_vault (id,user_id,key_name,key_value,created_at) VALUES (?1,?2,?3,?4,?5)",rusqlite::params![uuid::Uuid::new_v4().to_string(),user.user_id,name,encrypted,crate::iso_timestamp()]).map_err(|_|ApiError::internal("Could not save credential"))?;
-    transaction
-        .commit()
-        .map_err(|_| ApiError::internal("Could not save credential"))?;
+    tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&state.config().data_dir, &user.user_id)?;
+        state.with_authorized_vault(&user, &authority, |tx| {
+            let encrypted = vault::VaultCipher::load(&state.config().data_dir).and_then(|cipher| cipher.encrypt(&stored)).map_err(|_| "Could not encrypt credential".to_string())?;
+            tx.execute("DELETE FROM api_key_vault WHERE user_id=?1 AND key_name=?2", rusqlite::params![user.user_id, name]).map_err(|_| "Could not save credential".to_string())?;
+            tx.execute("INSERT INTO api_key_vault (id,user_id,key_name,key_value,created_at) VALUES (?1,?2,?3,?4,?5)", rusqlite::params![uuid::Uuid::new_v4().to_string(), user.user_id, name, encrypted, crate::iso_timestamp()]).map_err(|_| "Could not save credential".to_string())?;
+            Ok(())
+        })
+    }).await.map_err(|_| ApiError::internal("Credential worker unavailable"))?.map_err(crate::vault_authority_error)?;
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
-        Json(json!({"provider":provider,"configured":true,"masked":mask(secret)})),
+        Json(json!({"provider":provider,"configured":true,"masked":masked})),
     ))
 }
 async fn delete_key(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<crate::auth::LocalAuthority>>,
     Path(provider): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     if !accepts_key(&provider) {
@@ -144,14 +206,22 @@ async fn delete_key(
             message: "Provider does not accept API keys".into(),
         });
     }
-    state
-        .lock_db()
-        .map_err(ApiError::internal)?
-        .execute(
-            "DELETE FROM api_key_vault WHERE user_id=?1 AND key_name=?2",
-            rusqlite::params![user.user_id, provider_name(&provider)],
-        )
-        .map_err(|_| ApiError::internal("Could not remove credential"))?;
+    let authority = crate::settings_local_authority(authority)?;
+    tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&state.config().data_dir, &user.user_id)?;
+        state.with_authorized_vault(&user, &authority, |tx| {
+            tx.execute(
+                "DELETE FROM api_key_vault WHERE user_id=?1 AND key_name=?2",
+                rusqlite::params![user.user_id, provider_name(&provider)],
+            )
+            .map_err(|_| "Could not remove credential".to_string())?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Credential worker unavailable"))?
+    .map_err(crate::vault_authority_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 fn home() -> Option<PathBuf> {
@@ -217,8 +287,11 @@ async fn native_state(provider: &str, label: &str) -> Value {
 async fn catalog(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    local: Option<Extension<crate::auth::LocalAuthority>>,
+    paired: Option<Extension<crate::auth::PairedInputAuthority>>,
 ) -> Result<([(header::HeaderName, &'static str); 1], Json<Value>), ApiError> {
-    let credentials = credentials(&state, &user)?;
+    let credentials =
+        credential_snapshot(state.clone(), user.clone(), local.clone(), paired.clone()).await?;
     let mut agents = Vec::new();
     for (provider, label) in [
         ("codex", "Codex"),
@@ -306,6 +379,8 @@ async fn catalog(
             agents.push(json!({"id":id,"label":format!("{name} · {}",&profile_id[profile_id.len().saturating_sub(8)..]),"runtime":"v4","available":ready,"runtimeAvailable":true,"configured":ready,"status":if ready{"ready"}else{"cleanup-pending"},"launchCommand":null,"models":models,"modelInventory":inventory,"reasoningLevels":[],"connectionProfile":{"profileId":profile_id,"revision":revision,"transport":profile["transport"]},"capabilities":{"tools":true,"nativeRuntime":true,"structured":true,"durableTasks":false,"cli":false,"imageInput":false,"learning":true},"help":"Choose a model supported by this saved connection. Runs in a V4 conversation."}));
         }
     }
+    // The profile actor is asynchronous; recheck before returning its owner-scoped metadata.
+    credential_snapshot(state, user, local, paired).await?;
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
         Json(json!({"defaultAgent":"codex","agents":agents})),
@@ -314,8 +389,10 @@ async fn catalog(
 async fn authentication(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    local: Option<Extension<crate::auth::LocalAuthority>>,
+    paired: Option<Extension<crate::auth::PairedInputAuthority>>,
 ) -> Result<([(header::HeaderName, &'static str); 1], Json<Value>), ApiError> {
-    let credentials = credentials(&state, &user)?;
+    let credentials = credential_snapshot(state, user, local, paired).await?;
     let mut providers = vec![
         json!({"id":"codex","label":"Codex","methods":["oauth"],"command":"codex login","help":"Sign in using the native Codex CLI.","configured":null}),
         json!({"id":"claude","label":"Claude Code","methods":["oauth"],"command":"claude auth login","help":"Sign in using the native Claude CLI.","configured":null}),
@@ -348,6 +425,76 @@ mod tests {
     use terminal_v4_core::AppConfig;
     use tower::ServiceExt;
 
+    #[test]
+    fn paired_storage_failure_is_not_misreported_as_a_revoked_grant() {
+        assert_eq!(
+            credential_authority_error("Paired grant storage unavailable".into()).status,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            credential_authority_error("Paired grant expired or revoked".into()).status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn catalog_rechecks_authority_after_waiting_for_profile_lookup() {
+        use std::time::Duration;
+        for paired in [false, true] {
+            let data = tempfile::tempdir().unwrap();
+            let state = AppState::new(AppConfig {
+                data_dir: data.path().into(),
+                jwt_secret: "catalog-race".into(),
+                ..Default::default()
+            })
+            .unwrap();
+            state
+                .create_local_user_for_test("fixture", "fixture-password")
+                .unwrap();
+            let login = state
+                .login("fixture", "fixture-password")
+                .await
+                .unwrap()
+                .unwrap();
+            let (grant, token) = if paired {
+                let (grant, token) =
+                    crate::paired_environments::synthetic_input_grant(&state, &login.user.id);
+                (Some(grant), token)
+            } else {
+                (None, login.tokens.access_token)
+            };
+            let (release, enqueued) = state.provider_connections().pause_profile_lookup_for_test();
+            let request = Request::builder()
+                .uri("/api/agent/catalog")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap();
+            let app = crate::app(state.clone());
+            let task = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+            enqueued.recv_timeout(Duration::from_secs(5)).unwrap();
+            if let Some(grant) = grant {
+                state
+                    .lock_db()
+                    .unwrap()
+                    .execute("DELETE FROM paired_grants WHERE id=?1", [grant])
+                    .unwrap();
+            } else {
+                state.logout_user(&login.user.id).unwrap();
+            }
+            release.send(()).unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "paired={paired}"
+            );
+        }
+    }
+
     fn state() -> AppState {
         AppState::new(AppConfig {
             data_dir: tempfile::tempdir().unwrap().keep(),
@@ -355,6 +502,41 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn provider_key_save_and_delete_report_busy_during_owner_image_request() {
+        let state = state();
+        let app = router(state.clone());
+        let lease = crate::vault_admission::shared(&state.config().data_dir, "owner").unwrap();
+        for (method, body) in [
+            ("PUT", r#"{"apiKey":"synthetic-credential"}"#),
+            ("DELETE", ""),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(
+                    method,
+                    "/api/agent/auth/openai-api/api-key",
+                    Some("owner"),
+                    body,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(json(response).await["error"], crate::vault_admission::BUSY);
+        }
+        drop(lease);
+        let response = app
+            .oneshot(request(
+                "PUT",
+                "/api/agent/auth/openai-api/api-key",
+                Some("owner"),
+                r#"{"apiKey":"synthetic-credential"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
     #[cfg(unix)]
     #[tokio::test]

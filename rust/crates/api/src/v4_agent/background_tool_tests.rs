@@ -249,9 +249,15 @@ fn advertised_background_actions_match_dispatch() {
             .collect::<Vec<_>>(),
         vec![
             "background_start",
+            "background_list",
             "background_status",
             "background_wait",
+            "background_wait_output",
+            "background_follow_output",
             "background_cancel",
+            "background_write",
+            "background_write_bytes",
+            "background_close_input",
             "background_read_output"
         ]
     );
@@ -337,6 +343,7 @@ async fn expired_credential_cannot_release_output_after_delayed_approval() {
     let manager =
         BackgroundProcesses::create(&root.path().canonicalize().unwrap().join("ledger")).unwrap();
     let background = BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: "owner".into(),
             session: "session".into(),
@@ -423,6 +430,7 @@ async fn logout_during_output_review_rejects_the_stale_release_after_cleanup() {
     )
     .unwrap();
     let background = BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: "owner".into(),
             session: "session".into(),
@@ -1144,6 +1152,7 @@ async fn expired_or_cancelled_while_waiting_for_admission_never_claims_or_spawns
     let manager =
         BackgroundProcesses::create(&root.path().canonicalize().unwrap().join("ledger")).unwrap();
     let request = BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: "owner".into(),
             session: "session".into(),
@@ -1208,6 +1217,7 @@ async fn workspace_replaced_while_waiting_for_admission_is_rejected() {
     let manager =
         BackgroundProcesses::create(&root.path().canonicalize().unwrap().join("ledger")).unwrap();
     let request = BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: "owner".into(),
             session: "session".into(),

@@ -39,6 +39,91 @@ pub(crate) async fn interactive_fixture(
 }
 
 #[tokio::test]
+async fn multi_select_is_owner_bound_and_only_identical_retries_are_accepted() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let manager = StructuredSessionManager::new(AppConfig {
+        data_dir: data.path().into(),
+        ..Default::default()
+    });
+    let id = manager
+        .create_session(
+            "owner",
+            workspace.path().to_str().unwrap(),
+            Some("deepseek"),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+    let turn_id = Uuid::new_v4().to_string();
+    let interaction = interactive_fixture(&manager, &id, &turn_id).await;
+    let (_, mut events) = manager.subscribe("owner", &id).await.unwrap();
+    let approval_id = Uuid::new_v4().to_string();
+    let request = ApprovalRequest {
+        id: approval_id.clone(),
+        scope: ActionScope {
+            owner: "owner".into(),
+            session_id: id.clone(),
+            turn_id,
+        },
+        tool_call_id: "multi-call".into(),
+        tool_name: "ask_user".into(),
+        tool_input: json!({"questions":[{"id":"devices","question":"Which?","multiSelect":true,"options":[{"label":"Phone"},{"label":"Desktop"}]}]}),
+        description: "Question".into(),
+        expires_at: crate::v4_agent::interaction::now_ms() + 30_000,
+    };
+    let waiting = tokio::spawn(async move { interaction.question(request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let answer = json!({"devices":["Phone","Desktop","Tablet"]});
+    assert!(manager
+        .approve_bound("other", &id, Some(&approval_id), true, Some(answer.clone()))
+        .await
+        .is_err());
+    assert!(manager
+        .approve_bound(
+            "owner",
+            &id,
+            Some(&approval_id),
+            true,
+            Some(json!({"devices":["Phone","Phone"]}))
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        manager
+            .approve_bound("owner", &id, Some(&approval_id), true, Some(answer.clone()))
+            .await
+            .unwrap()
+            .status,
+        "accepted"
+    );
+    assert_eq!(waiting.await.unwrap().unwrap(), Some(answer.clone()));
+    assert_eq!(
+        manager
+            .approve_bound("owner", &id, Some(&approval_id), true, Some(answer))
+            .await
+            .unwrap()
+            .status,
+        "already_decided"
+    );
+    assert!(manager
+        .approve_bound(
+            "owner",
+            &id,
+            Some(&approval_id),
+            true,
+            Some(json!({"devices":["Desktop","Phone","Tablet"]}))
+        )
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn questions_are_owner_scoped_and_retries_require_identical_answers() {
     let data = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();

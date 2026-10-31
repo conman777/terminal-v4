@@ -6,6 +6,7 @@ import { splitContext } from './composer-context/composerContext';
 import { getComposerDraftStore } from '../utils/composerDraftStore';
 import { setActiveEnvironment, setEnvironmentIdentity } from '../utils/remoteEnvironments';
 import { resetPullRequestMentionCache } from '../hooks/useCurrentPullRequest';
+import { loadStash, stashDraft } from '../utils/draftStash';
 
 const terminals = new Map();
 let activeSessionId = null;
@@ -94,6 +95,17 @@ describe('stashing a draft', () => {
     openStash();
     await waitFor(() => expect(screen.getByLabelText('composer').value).toBe(''));
     expect([screen.queryByRole('alert'), screen.getByRole('button', { name: 'Stashed drafts' }).textContent]).toEqual([null, expect.stringContaining('Stash (1)')]);
+  });
+
+  it('keeps the typed draft and saved drafts when the stash is full', async () => {
+    for (let index = 0; index < 20; index += 1) stashDraft(`Draft ${index}`, index + 1);
+    const saved = loadStash();
+    render(<TerminalPane {...props({ sessions: [thread('ss-a', 'A')] })} />);
+    typeDraft('Keep the new draft');
+    openStash();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Stash this draft' }));
+    expect([screen.getByLabelText('composer').value, loadStash()]).toEqual(['Keep the new draft', saved]);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/stash is full.*restore/i);
   });
 
   it('does not show one account\'s stash after another account signs in', async () => {

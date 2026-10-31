@@ -11,16 +11,21 @@ describe('threadDrawerLayout', () => {
   });
 
   it('rejects stored data that is not a plausible layout', () => {
-    expect(normalizeDrawerLayout({ splitId: '../../etc', ratio: 'wide', height: -4 })).toEqual({ splitId: null, ratio: 0.5, height: 180 });
-    expect(normalizeDrawerLayout('nope')).toEqual({ splitId: null, ratio: 0.5, height: 260 });
+    expect(normalizeDrawerLayout({ splitId: '../../etc', direction: 'invalid', ratio: 'wide', height: -4 })).toEqual({ splitId: null, direction: 'side-by-side', ratio: 0.5, height: 180 });
+    expect(normalizeDrawerLayout('nope')).toEqual({ splitId: null, direction: 'side-by-side', ratio: 0.5, height: 260 });
   });
 
   it('keeps each thread separate and survives corrupt storage', () => {
     const one = drawerLayoutKey('ss-one'), two = drawerLayoutKey('ss-two');
-    writeDrawerLayout(one, { splitId: 'pty-9', ratio: 0.35, height: 320 });
-    expect([readDrawerLayout(one), readDrawerLayout(two)]).toEqual([{ splitId: 'pty-9', ratio: 0.35, height: 320 }, { splitId: null, ratio: 0.5, height: 260 }]);
+    writeDrawerLayout(one, { splitId: 'pty-9', direction: 'stacked', ratio: 0.35, height: 320 });
+    expect([readDrawerLayout(one), readDrawerLayout(two)]).toEqual([{ splitId: 'pty-9', direction: 'stacked', ratio: 0.35, height: 320 }, { splitId: null, direction: 'side-by-side', ratio: 0.5, height: 260 }]);
     localStorage.setItem(Object.keys(localStorage).find(key => key.includes('ss-one')), '{broken');
-    expect(readDrawerLayout(one)).toEqual({ splitId: null, ratio: 0.5, height: 260 });
+    expect(readDrawerLayout(one)).toEqual({ splitId: null, direction: 'side-by-side', ratio: 0.5, height: 260 });
+  });
+
+  it('restores a pre-direction layout as side-by-side', () => {
+    expect(normalizeDrawerLayout({ splitId: 'pty-9', ratio: 0.4, height: 300 }))
+      .toEqual({ splitId: 'pty-9', direction: 'side-by-side', ratio: 0.4, height: 300 });
   });
 
   it('only treats a split partner as valid while that terminal still exists and is not the primary', () => {

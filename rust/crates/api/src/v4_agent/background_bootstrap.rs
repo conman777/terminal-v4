@@ -897,6 +897,7 @@ mod tests {
         let remote = OwnerGate::open(Connection::open(&path).unwrap()).unwrap();
         remote.hold("owner", "logout").unwrap();
         let request = BackgroundRequest {
+            interactive: false,
             scope: BackgroundScope {
                 owner: "owner".into(),
                 session: "session".into(),

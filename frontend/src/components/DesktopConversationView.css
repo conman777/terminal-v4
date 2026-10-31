@@ -241,6 +241,9 @@
 .desktop-conversation-view :is(.desktop-agent-action, .desktop-interactive-action, .desktop-conversation-scroll-btn):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 .desktop-conversation-view [data-conversation-scroll-region]:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
 .desktop-conversation-view .desktop-interactive-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.desktop-conversation-view .private-output-streams { display: grid; gap: 12px; min-width: 0; margin: 12px 0; }
+.desktop-conversation-view .private-output-streams > div { min-width: 0; }
+.desktop-conversation-view .private-output-streams pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-overflow-scrolling: touch; }
 .desktop-conversation-view .desktop-pending-requests .desktop-interactive-prompt-actions { position: sticky; bottom: 0; z-index: 1; padding: 8px 0; margin-bottom: -8px; background: var(--bg-surface); }
 .desktop-conversation-view .desktop-pending-requests .agent-question-actions { position: sticky; bottom: 0; z-index: 1; padding: 8px 0; margin-bottom: -8px; background: var(--bg-surface); }
 .desktop-conversation-view .desktop-conversation-scroll-btn { width: 32px; height: 32px; border-radius: 6px; box-shadow: none; }

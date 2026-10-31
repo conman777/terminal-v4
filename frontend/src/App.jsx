@@ -20,6 +20,7 @@ import { ScreenshotGallery } from './components/ScreenshotGallery';
 import { formatBinding, loadBindings } from './utils/keybindings';
 import { isCompanionSession } from './utils/sidebarSessionScope';
 import { projectNameFromPath } from './utils/projectBadge';
+import { projectFileReference } from './utils/projectFileReference';
 import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense, useSyncExternalStore } from 'react';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
@@ -42,6 +43,7 @@ import { openWorkspaceImageConversation, startWorkspacePrompt } from './utils/wo
 import { environmentAllows } from './utils/runtimePermissions';
 import { MobileKeyboardDebugOverlay } from './components/MobileKeyboardDebugOverlay';
 import LoginPage from './components/LoginPage';
+import { AuthRecoveryNotice } from './components/AuthRecoveryNotice';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TerminalSessionProvider, useTerminalSession } from './contexts/TerminalSessionContext';
 import { FolderProvider, useFolders } from './contexts/FolderContext';
@@ -208,7 +210,9 @@ function AppContent({ serverControl }) {
   }, []);
   const storage = useMemo(() => getEnvironmentStorage(), []);
   const remotePreferences = useMemo(() => Boolean(getActiveEnvironment()), []);
-  const { logout, user } = useAuth();
+  const auth = useAuth();
+  const { logout, user, authLifecycle, strictReady } = auth;
+  const strictAuthProps = Object.hasOwn(auth, 'authLifecycle') ? { authLifecycle, strictReady } : {};
   const { setTheme, toggleTheme } = useTheme();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [findInThreadOpen, setFindInThreadOpen] = useState(false);
@@ -294,12 +298,12 @@ function AppContent({ serverControl }) {
 
   const {
     bookmarks, addBookmark, updateBookmark, deleteBookmark, executeBookmark,
-    bookmarksLoadStatus, bookmarksLoadError, reloadBookmarks, bookmarksScopeKey,
+    bookmarksLoadStatus, bookmarksLoadError, reloadBookmarks, bookmarksScopeKey, bookmarksScopeHeld, bookmarksScopeHoldMessage, bookmarksScopeHoldCanRetry, bookmarksExecutionUnavailable, bookmarksSaveUnavailable,
   } = useBookmarks();
 
   const {
     notes, addNote, updateNote, deleteNote,
-    notesLoadStatus, notesLoadError, reloadNotes, notesScopeKey,
+    notesLoadStatus, notesLoadError, reloadNotes, notesScopeKey, notesScopeHeld, notesScopeHoldMessage, notesScopeHoldCanRetry,
   } = useNotes();
 
   const {
@@ -1770,9 +1774,12 @@ function AppContent({ serverControl }) {
     : isStructuredSessionId(navigationSession.id)
       ? navigationSession.thread?.projectPath || navigationSession.cwd || currentWorkspacePath
       : currentWorkspacePath || navigationSession.cwd;
-  const fileTargetIsCurrent = Boolean(filePaneTarget && !isMobile && !showWorkspaceStart
-    && filePaneTarget.desktopId === activeDesktopId && filePaneTarget.paneId === activeFilePaneId
-    && filePaneTarget.sessionId === activeSessionId && filePaneTarget.sessionId === filePaneScope.current.pane?.sessionId);
+  const fileTargetIsCurrent = Boolean(filePaneTarget && !showWorkspaceStart && filePaneTarget.sessionId === activeSessionId
+    && (!filePaneTarget.root || filePaneTarget.root === navigationWorkspacePath)
+    && (!filePaneTarget.auth || isAuthScopeCurrent(filePaneTarget.auth))
+    && (!filePaneTarget.environment || filePaneTarget.environment === getEnvironmentSignal() && !filePaneTarget.environment.aborted)
+    && (filePaneTarget.mobile ? isMobile : !isMobile && filePaneTarget.desktopId === activeDesktopId
+      && filePaneTarget.paneId === activeFilePaneId && filePaneTarget.sessionId === filePaneScope.current.pane?.sessionId));
   const filesInitialPath = fileTargetIsCurrent ? filePaneTarget.path : navigationWorkspacePath || (navigationSession ? null : '~');
   const filesWorkspaceKey = fileTargetIsCurrent ? `pane-files:${filePaneTarget.request}` : navigationWorkspacePath || (navigationSession ? `pending:${navigationSession.id}` : 'home');
   useEffect(() => {
@@ -1784,19 +1791,41 @@ function AppContent({ serverControl }) {
     setFilePaneTarget({ desktopId, paneId: pane.id, sessionId: pane.sessionId, path, request: ++filePaneRequest.current });
     setShowFileManager(true);
   };
-  const [fileLineTarget, setFileLineTarget] = useState(null);
-  const fileLineRequest = useRef(0);
-  useEffect(() => { if (!showFileManager) setFileLineTarget(null); }, [showFileManager]);
-  const filesKey = fileLineTarget ? `${filesWorkspaceKey}:line:${fileLineTarget.request}` : filesWorkspaceKey;
   const conversationLinks = useMemo(() => navigationSession && navigationWorkspacePath ? {
     root: navigationWorkspacePath,
     openFile: (path, line) => {
-      setFileLineTarget({ root: navigationWorkspacePath, path, line: line || 1, request: ++fileLineRequest.current });
+      const { desktopId, pane } = filePaneScope.current;
+      setFilePaneTarget({ desktopId, paneId: pane?.id, mobile: isMobile, sessionId: navigationSession.id, root: navigationWorkspacePath, path: navigationWorkspacePath,
+        lineTarget: { root: navigationWorkspacePath, path, line: line || 1 }, auth: captureAuthScope(), environment: getEnvironmentSignal(), request: ++filePaneRequest.current });
+      setShowFileManager(true);
+    },
+    openPaneFile: ({ desktopId, paneId, sessionId, root, path, line }) => {
+      const pane = historyPaneScope.current.panes.find(item => item.id === paneId);
+      const session = activeSessions.find(item => item.id === sessionId);
+      const sessionRoot = isStructuredSessionId(sessionId) ? session?.thread?.projectPath || session?.cwd : session?.cwd;
+      if (showWorkspaceStart || isMobile || historyPaneScope.current.desktopId !== desktopId || pane?.sessionId !== sessionId || sessionRoot !== root) return;
+      setFilePaneTarget({ desktopId, paneId, sessionId, root, path: root, lineTarget: { root, path, line: line || 1 },
+        auth: captureAuthScope(), environment: getEnvironmentSignal(), request: ++filePaneRequest.current });
       setShowFileManager(true);
     },
     openThread: id => handleSelectHistorySession(id),
     hasThread: id => [...activeSessions, ...archivedSessions].some(session => session.id === id),
-  } : null, [navigationSession?.id, navigationWorkspacePath, activeSessions, archivedSessions, handleSelectHistorySession]);
+  } : null, [navigationSession?.id, navigationWorkspacePath, activeSessions, archivedSessions, handleSelectHistorySession, isMobile, showWorkspaceStart]);
+  const handleRevealProjectFile = ({ sessionId, root, file, paneId, desktopId, mobile = false }) => {
+    if (showWorkspaceStart || mobile !== isMobile || navigationSession?.id !== sessionId || navigationSession.cwd !== root
+      || !environmentAllows(getActiveEnvironment(), 'transfer')) return false;
+    if (!mobile && (filePaneScope.current.desktopId !== desktopId || filePaneScope.current.pane?.id !== paneId
+      || filePaneScope.current.pane?.sessionId !== sessionId)) return false;
+    const checked = projectFileReference(`${file?.path}:${file?.line}`, root);
+    if (!checked || checked.path !== file.path || checked.line !== file.line) return false;
+    const parts = file.path.split('/'); parts.pop();
+    const base = root === '/' ? '' : root.replace(/\/+$/, '');
+    const path = parts.length ? `${base}/${parts.join('/')}` : base || '/';
+    setFilePaneTarget({ desktopId, paneId, mobile, sessionId, root, path, projectTarget: { root, path: file.path },
+      auth: captureAuthScope(), environment: getEnvironmentSignal(), request: ++filePaneRequest.current });
+    setShowFileManager(true);
+    return true;
+  };
   const navigationDraftId = navigationSession?.id || 'workspace-start';
   const readNavigationResponse = () => workspaceResponses.get(navigationSession?.id) || '';
   const navigationCanInsert = environmentAllows(getActiveEnvironment(), isStructuredSessionId(navigationSession?.id) || !navigationSession ? 'agentExecute' : 'terminalInput');
@@ -1882,6 +1911,11 @@ function AppContent({ serverControl }) {
               loadError={bookmarksLoadError}
               onRetryLoad={reloadBookmarks}
               scopeKey={bookmarksScopeKey}
+              scopeHeld={bookmarksScopeHeld}
+              scopeHoldMessage={bookmarksScopeHoldMessage}
+              scopeHoldCanRetry={bookmarksScopeHoldCanRetry}
+              executionUnavailable={bookmarksExecutionUnavailable}
+              saveUnavailable={bookmarksSaveUnavailable}
               onAdd={addBookmark}
               onUpdate={updateBookmark}
               onDelete={deleteBookmark}
@@ -1897,6 +1931,9 @@ function AppContent({ serverControl }) {
               loadError={notesLoadError}
               onRetryLoad={reloadNotes}
               scopeKey={notesScopeKey}
+              scopeHeld={notesScopeHeld}
+              scopeHoldMessage={notesScopeHoldMessage}
+              scopeHoldCanRetry={notesScopeHoldCanRetry}
               onAdd={addNote}
               onUpdate={updateNote}
               onDelete={deleteNote}
@@ -2026,6 +2063,8 @@ function AppContent({ serverControl }) {
                       onSelectSession={handleSelectSession}
                       currentPath={workspaceDraftPath || startupWorkspacePath}
                       projects={sidebarProjects}
+                      sessions={activeSessions}
+                      customAiProviders={customAiProviders}
                       recentFolders={recentFolders}
                       onSelectWorkspace={setWorkspaceDraftPath}
                       onCreateSession={path => typeof path === 'string' && path ? handleRequestNewSession(path) : openNewTerminal()}
@@ -2038,7 +2077,9 @@ function AppContent({ serverControl }) {
                   ) : (
                     <ErrorBoundary name="terminal" resetKey={activeSessionId}>
                       <SplitPaneContainer
+                        {...strictAuthProps}
                         onOpenFiles={handleOpenPaneFiles}
+                        onRevealProjectFile={handleRevealProjectFile}
                         onFindInThread={handlePaneFind}
                         onStartThreadWithPrompt={handleStartThreadWithPrompt}
                         onWorkspaceResponseChange={handleWorkspaceResponseChange}
@@ -2159,10 +2200,11 @@ function AppContent({ serverControl }) {
           {showFileManager && (
             <Suspense fallback={null}>
               <FileManager
-                key={filesKey}
-                initialLineTarget={fileLineTarget}
+                key={filesWorkspaceKey}
+                initialLineTarget={fileTargetIsCurrent ? filePaneTarget.lineTarget : null}
                 initialPath={filesInitialPath}
                 sessionId={navigationSession?.id || null}
+                projectTarget={fileTargetIsCurrent ? filePaneTarget.projectTarget : null}
                 isOpen={showFileManager}
                 onClose={() => setShowFileManager(false)}
                 onNavigateTerminal={handleNavigateToPath}
@@ -2283,13 +2325,16 @@ function AppContent({ serverControl }) {
               </MountOnFirstOpen>
               <div className="mobile-workspace-surface" inert={mobileView === 'preview' ? '' : undefined} aria-hidden={mobileView === 'preview' || undefined}>
                 <MobileShell
+                  {...strictAuthProps}
                   visible={mobileView !== 'preview' && !showSystemResources}
+                  onRevealProjectFile={handleRevealProjectFile}
                   onWorkspaceResponseChange={handleWorkspaceResponseChange}
                   showWorkspaceStart={showWorkspaceStart}
                   onSelectHistorySession={handleSelectHistorySession}
                   sessions={activeSessions}
                   terminalSessions={sessions}
                   threadTerminalOpen={mobileThreadTerminal?.sessionId === activeSessionId && mobileThreadTerminal.open}
+                  onThreadTerminalOpenChange={(threadId, open) => setMobileThreadTerminal(current => current?.sessionId === threadId ? { ...current, open } : current)}
                   activeSessionId={showWorkspaceStart ? null : activeSessionId}
                   onSelectSession={selectSession}
                   onCreateSession={path => typeof path === 'string' && path ? handleRequestNewSession(path) : openNewTerminal()}
@@ -2347,10 +2392,11 @@ function AppContent({ serverControl }) {
           />
           <Suspense fallback={null}>
             <FileManager
-              key={filesKey}
-              initialLineTarget={fileLineTarget}
+              key={filesWorkspaceKey}
+              initialLineTarget={fileTargetIsCurrent ? filePaneTarget.lineTarget : null}
               initialPath={filesInitialPath}
               sessionId={navigationSession?.id || null}
+              projectTarget={fileTargetIsCurrent ? filePaneTarget.projectTarget : null}
               isOpen={showFileManager}
               onClose={() => setShowFileManager(false)}
               onNavigateTerminal={handleNavigateToPath}
@@ -2374,7 +2420,9 @@ export default function App() {
 }
 
 function AuthenticatedApp() {
-  const { user, isAuthenticated, loading } = useAuth();
+  const auth = useAuth();
+  const { user, isAuthenticated, loading, authNotice, dismissAuthNotice, authLifecycle, strictReady } = auth;
+  const strictAuthProps = Object.hasOwn(auth, 'authLifecycle') ? { authLifecycle, strictReady } : {};
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
   const [directoryRevision,setDirectoryRevision]=useState(0);
   const isMobile = useMobileDetect();
@@ -2396,12 +2444,13 @@ function AuthenticatedApp() {
   return (
     <EnvironmentIdentityGate userId={user.id}>
     <div className={`environment-shell${isMobile ? ' mobile-chrome' : ''}`}>
+    <AuthRecoveryNotice message={authNotice} onDismiss={dismissAuthNotice} />
     <div className="environment-workspace" key={environment?.id || "home"}>
     <ThemeProvider>
       <AutocorrectProvider>
       <NotesProvider>
         <FolderProvider>
-          <TerminalSessionProvider>
+          <TerminalSessionProvider {...strictAuthProps}>
             <BookmarkProvider>
               <PaneLayoutProvider>
                 <PreviewProvider>

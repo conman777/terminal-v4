@@ -4,7 +4,7 @@ import './BookmarkModal.css';
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { BookmarkForm } from './BookmarkForm';
 
-function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onDelete, onExecute, loadStatus = 'ready', loadError = '', onRetryLoad }) {
+function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onDelete, onExecute, loadStatus = 'ready', loadError = '', onRetryLoad, scopeHeld = false, scopeHoldMessage, scopeHoldCanRetry = true, executionUnavailable = '', saveUnavailable = '' }) {
   const confirmedList = loadStatus === 'ready' && !loadError;
   const dialogRef = useToolDialogFocus(isOpen, onClose);
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -17,6 +17,14 @@ function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
   const activeEditorRef = useRef(editor);
   activeEditorRef.current = editor;
   const draftsRef = useRef(new Map());
+  const uncertainDraftsRef = useRef(new Set());
+  const pendingDraftsRef = useRef(new Set());
+  const [, refreshDraftState] = useState(0);
+  const markUncertain = (key, value) => {
+    if (value) uncertainDraftsRef.current.add(key);
+    else uncertainDraftsRef.current.delete(key);
+    refreshDraftState(version => version + 1);
+  };
   const editingBookmark = editor?.bookmark;
   const showAddForm = editor !== null && !editingBookmark;
   const [deleteError, setDeleteError] = useState('');
@@ -33,8 +41,12 @@ function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
   }, [isOpen]);
 
   useEffect(() => {
-    if (isOpen && editor) dialogRef.current?.querySelector('#bookmark-name')?.focus({ preventScroll: true });
-  }, [isOpen, editor?.generation]);
+    if (isOpen && editor && !scopeHeld) dialogRef.current?.querySelector('#bookmark-name')?.focus({ preventScroll: true });
+  }, [isOpen, editor?.generation, scopeHeld, dialogRef]);
+
+  useEffect(() => {
+    if (isOpen && scopeHeld) dialogRef.current?.focus({ preventScroll: true });
+  }, [isOpen, scopeHeld, dialogRef]);
 
   useEffect(() => {
     if (!isOpen) { retryTriggerRef.current = null; return; }
@@ -71,16 +83,26 @@ function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
   const handleSaveBookmark = async (data) => {
     const key = editingBookmark?.id || 'new';
     const submittedDraft = draftsRef.current.get(key);
-    if (editingBookmark) {
-      await onUpdate(editingBookmark.id, data);
-    } else {
-      await onAdd(data.name, data.command, data.category);
+    if (pendingDraftsRef.current.has(key)) throw new Error('This bookmark save is already in progress.');
+    pendingDraftsRef.current.add(key);
+    refreshDraftState(version => version + 1);
+    try {
+      if (editingBookmark) {
+        await onUpdate(editingBookmark.id, data);
+      } else {
+        await onAdd(data.name, data.command, data.category);
+      }
+      if (draftsRef.current.get(key) === submittedDraft) draftsRef.current.delete(key);
+      uncertainDraftsRef.current.delete(key);
+    } finally {
+      pendingDraftsRef.current.delete(key);
+      refreshDraftState(version => version + 1);
     }
-    if (draftsRef.current.get(key) === submittedDraft) draftsRef.current.delete(key);
   };
 
   const handleCancelEdit = () => {
     draftsRef.current.delete(editingBookmark?.id || 'new');
+    uncertainDraftsRef.current.delete(editingBookmark?.id || 'new');
     setEditor(null);
     (editorTriggerRef.current?.isConnected ? editorTriggerRef.current : addButtonRef.current)?.focus({ preventScroll: true });
   };
@@ -122,6 +144,15 @@ function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
 
   if (!isOpen) return null;
 
+  if (scopeHeld) return (
+    <div className="modal-overlay">
+      <div className="bookmark-modal bookmark-scope-held ui-utility-dialog" ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Bookmarks">
+        <div className="bookmark-modal-header"><h2>Bookmarks</h2><button className="modal-close" onClick={onClose} aria-label="Close">×</button></div>
+        <div className="bookmark-load-health"><div role="alert"><p>{scopeHoldMessage || 'Bookmark storage ownership is ambiguous. Administrator review is required.'}</p>{scopeHoldCanRetry && <button type="button" onClick={onRetryLoad} disabled={loadStatus === 'loading' || !onRetryLoad}>Retry loading bookmarks</button>}</div></div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="bookmark-modal ui-utility-dialog" ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="bookmarks-title" onClick={(e) => e.stopPropagation()}>
@@ -144,6 +175,7 @@ function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
           {loadStatus === 'loading' && <p role="status">Loading bookmarks…{bookmarks.length > 0 ? ' Showing the last loaded bookmarks while refreshing.' : ''}</p>}
           {(loadStatus === 'error' || loadError) && <div role="alert"><p>Could not load bookmarks. {loadError}{bookmarks.length > 0 ? ' Showing the last loaded bookmarks.' : ''}</p><button type="button" disabled={loadStatus === 'loading' || !onRetryLoad} onClick={event => { retryTriggerRef.current = event.currentTarget; onRetryLoad?.(); }}>Retry loading bookmarks</button></div>}
           {loadStatus === 'unavailable' && <p role="status">Bookmarks are available on This server. Switch back to load them.</p>}
+          {executionUnavailable && loadStatus === 'ready' && <p role="status">{executionUnavailable}</p>}
         </div>
         <div className="bookmark-modal-search">
           <input
@@ -210,13 +242,13 @@ function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
 
             {showAddForm && (
               <div className="bookmark-form-container" onChange={() => { editorGenerationRef.current += 1; }}>
-                <BookmarkForm key={editor.generation} draft={editor.draft} onDraftChange={draft => draftsRef.current.set('new', draft)} onSave={handleSaveBookmark} onSaved={handleSavedBookmark} onCancel={handleCancelEdit} />
+                <BookmarkForm key={editor.generation} draft={draftsRef.current.get('new') || editor.draft} pending={pendingDraftsRef.current.has('new')} uncertain={uncertainDraftsRef.current.has('new')} saveUnavailable={saveUnavailable} onUncertainChange={value => markUncertain('new', value)} onDraftChange={draft => draftsRef.current.set('new', draft)} onSave={handleSaveBookmark} onSaved={handleSavedBookmark} onCancel={handleCancelEdit} />
               </div>
             )}
 
             {editingBookmark && (
               <div className="bookmark-form-container" onChange={() => { editorGenerationRef.current += 1; }}>
-                <BookmarkForm key={editor.generation} bookmark={editingBookmark} draft={editor.draft} onDraftChange={draft => draftsRef.current.set(editingBookmark.id, draft)} onSave={handleSaveBookmark} onSaved={handleSavedBookmark} onCancel={handleCancelEdit} />
+                <BookmarkForm key={editor.generation} bookmark={editingBookmark} draft={draftsRef.current.get(editingBookmark.id) || editor.draft} pending={pendingDraftsRef.current.has(editingBookmark.id)} uncertain={uncertainDraftsRef.current.has(editingBookmark.id)} saveUnavailable={saveUnavailable} onUncertainChange={value => markUncertain(editingBookmark.id, value)} onDraftChange={draft => draftsRef.current.set(editingBookmark.id, draft)} onSave={handleSaveBookmark} onSaved={handleSavedBookmark} onCancel={handleCancelEdit} />
               </div>
             )}
 
@@ -236,8 +268,8 @@ function BookmarkModalContent({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                   <button
                     className="bookmark-execute-btn"
                     onClick={() => handleExecute(bookmark.command)}
-                    disabled={isExecuting}
-                    title={`Execute: ${bookmark.command}`}
+                    disabled={isExecuting || Boolean(executionUnavailable)}
+                    title={executionUnavailable || `Execute: ${bookmark.command}`}
                     aria-label={`Execute bookmark: ${bookmark.name}`}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">

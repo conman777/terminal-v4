@@ -43,7 +43,7 @@ pub(super) fn notice_event(completion: &BackgroundCompletion) -> StructuredSessi
         seq: 0,
         role: "system".into(),
         content: format!(
-            "Background command {action} {}. Its output is not included; use the reviewed-output action to read it.",
+            "Background command {action} {}. Its output is not included; output release is currently unavailable.",
             outcome_phrase(&completion.state)
         ),
     }

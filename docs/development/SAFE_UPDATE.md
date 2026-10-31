@@ -1,7 +1,8 @@
 # Safe update procedure (backend + frontend together)
 
-Observations below were taken read-only on the Mac mini on 2026-10-29. Re-run the
-checks in "Verify current state" before trusting them.
+The observations below are a historical, read-only snapshot from the Mac mini on
+2026-10-29. Its PIDs, paths, ports and served assets are not current-state claims;
+re-run the checks in "Verify current state" before using them.
 
 ## Three different things called "the build"
 
@@ -14,7 +15,7 @@ checks in "Verify current state" before trusting them.
 Never assume one equals another. Check HEAD, uncommitted changes (`git status`), and the
 served asset hashes separately and record all three before and after an update.
 
-## Observed state on this Mac mini (2026-10-29)
+## Historical observed state on this Mac mini (2026-10-29)
 
 - Port 3020 is held by PID 13050, `node --enable-source-maps dist/index.js` (parent
   `npm start`, PID 13034), cwd `/Users/conordart/terminal-v4/backend`, started 13:27.
@@ -62,8 +63,10 @@ served asset hashes separately and record all three before and after an update.
    The Rust task worker records `workspace-tasks/worker-protocol.json`
    (`{"protocol":N}`; `WORKER_PROTOCOL` in `rust/crates/api/src/workspace_tasks.rs`,
    currently 2, reported live as `workerProtocol` by `/api/build-info`).
-   A newer marker makes an older binary refuse to start; an unreadable marker makes
-   startup refuse. Marker rules (identical in WORKER_UPGRADE.md and
+   A newer or unreadable marker makes an incompatible task worker refuse to start;
+   the HTTP server may still start. Schedule capabilities report `workerAvailable`
+   and affected schedule operations return 503 when the worker is refused.
+   Marker rules (identical in WORKER_UPGRADE.md and
    BACKGROUND_PROCESS_LIFECYCLE.md): never delete, rewrite or edit a marker to get
    around a refusal; a downgrade means restoring the data directory backup taken
    before the newer build first started, and nothing else.
@@ -94,13 +97,27 @@ served asset hashes separately and record all three before and after an update.
   prefers the checkout dist; it does not compare against the backend commit (the dist
   carries no commit). Always run verify-deployment against the app's port (3030).
 
+The current Unix backend can automatically dispatch a locally authorized
+delegation result and may create `queue-authority.key` and
+`queue-authority.installation`. Preserve both with the data. The prior default
+backend held proof-bearing items rather than dispatching or editing them, so a
+rollback can leave those items awaiting review. Do not delete or recreate the
+key to make a rollback work; follow the queue recovery guidance and review any
+pending work before changing versions.
+
+An approved interactive background input upgrades the background ledger guard
+to v3. Older binaries reject that guard and cannot reopen the background manager;
+do not rewrite the guard or remove its receipt table to enable a rollback. Keep
+the ledger and guard together, and resolve or review outstanding commands before
+switching versions. The guard remains v2 until the first input claim.
+
 ## Procedure
 
 Run from the checkout. Replace `$DATA` with the data dir the target server really uses
-(Rust/app: `~/Library/Application Support/terminal-v4` or `$TERMINAL_DATA_DIR`; the
-legacy Node process uses `/Users/conordart/terminal-v4/data`). Choose the target
-commit once and use it everywhere: `COMMIT=$(git rev-parse --short=12 HEAD)`, with a
-clean `git status --short`.
+(Rust/app: `~/Library/Application Support/terminal-v4` or `$TERMINAL_DATA_DIR`;
+the historical Node snapshot used `/Users/conordart/terminal-v4/data`).
+Choose the target commit once and use it everywhere: `COMMIT=$(git rev-parse --short=12 HEAD)`,
+with a clean `git status --short`.
 
 ### 0. Record the current state
 

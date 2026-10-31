@@ -290,6 +290,7 @@ async fn deletion_fails_closed_while_another_process_holds_the_provisioning_boun
 
 fn request(root: &Path, owner: &str, session: &str, action: &str) -> BackgroundRequest {
     BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: owner.into(),
             session: session.into(),

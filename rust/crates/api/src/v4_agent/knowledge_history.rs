@@ -964,4 +964,53 @@ mod tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn case_insensitive_alias_blocks_legacy_terminal_and_structured_recall() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let canonical_workspace = workspace.path().canonicalize().unwrap();
+        let db = rusqlite::Connection::open(data.path().join("terminal.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE users(id TEXT PRIMARY KEY); INSERT INTO users VALUES('owner');",
+        )
+        .unwrap();
+        for kind in ["sessions", "structured"] {
+            std::fs::create_dir_all(data.path().join("users/owner").join(kind)).unwrap();
+        }
+        let path = data.path().join("users/owner/structured/ss-fixture.json");
+        std::fs::write(&path, serde_json::json!({"id":"ss-fixture","cwd":canonical_workspace,"provider":"claude","events":[{"type":"message_completed","role":"user","content":"private fixture"}]}).to_string()).unwrap();
+        assert!(owned_directory(
+            data.path(),
+            "owner",
+            canonical_workspace.to_str().unwrap(),
+            Source::Terminal
+        )
+        .is_ok());
+        assert!(load(
+            data.path(),
+            "owner",
+            canonical_workspace.to_str().unwrap(),
+            Source::Structured,
+            "ss-fixture"
+        )
+        .is_ok());
+        db.execute("INSERT INTO users VALUES ('OWNER')", [])
+            .unwrap();
+        assert!(owned_directory(
+            data.path(),
+            "owner",
+            canonical_workspace.to_str().unwrap(),
+            Source::Terminal
+        )
+        .is_err());
+        assert!(load(
+            data.path(),
+            "owner",
+            canonical_workspace.to_str().unwrap(),
+            Source::Structured,
+            "ss-fixture"
+        )
+        .is_err());
+    }
 }

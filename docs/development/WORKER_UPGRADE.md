@@ -41,9 +41,10 @@ directory at the same time.
   marker's (the normal fix, check `workerProtocol` in `/api/build-info`), or
   restore the whole data directory from a backup taken before the upgrade. The
   status is re-evaluated at each start; it is not cleared at runtime.
-- Builds that predate the marker still honour the lock but do not read the
-  marker. They can run again after a downgrade and rewrite stores without the
-  newer fields, so never downgrade over a newer data directory.
+- Builds that predate the marker do not read it; some older builds also lack
+  the cross-process worker lock. They can run concurrently or rewrite stores
+  without newer fields. Stop all old servers before upgrading, and never
+  downgrade over a newer data directory without restoring a compatible backup.
 
 ## Upgrade
 
@@ -148,10 +149,15 @@ The task record carries the durable marker (`deliverTo`, `deliveryStatus`,
   If a worker dies after that, the next worker cannot know whether Telegram
   received the message, so it records `failed` ("may or may not have been sent,
   so it was not sent again") instead of sending a duplicate. Delivery is
-  therefore at-most-once per run.
+  therefore attempted at most once by the worker per run. The Telegram sender
+  makes one application-level request per message part and disables HTTP
+  redirects and the client retry policy. On an unreadable response or transport
+  failure, it reports an unconfirmed outcome as possibly sent rather than
+  retrying. Telegram delivery itself cannot be confirmed in that case.
 - `delivered`; `skipped` with a reason (not connected, gateway off, no chat
-  paired); `failed` with a reason (Telegram rejected the message after three
-  attempts, or the saved token could not be read). Neither is retried later.
+  paired); `failed` with a reason (Telegram rejected the message, delivery
+  could not be confirmed, or the saved token could not be read). Neither is
+  retried later. Normal gateway conversation replies use a separate retry path.
 
 Delivery runs beside task execution, never blocks a task's completion and holds
 the same worker lease, so two workers cannot both deliver. A stale completion

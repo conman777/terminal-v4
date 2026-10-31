@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, type Page, type TestInfo, type WebSocketRoute } from '@playwright/test';
 
@@ -22,6 +22,7 @@ export const settingsSections = ['Workspace', 'Terminal', 'Interface', 'Provider
 /** Every real write is allowlisted here. Structured sessions never reach a server. */
 export async function installFixture(page: Page, testInfo: TestInfo) {
   const account = `ui-unification-${randomUUID().replaceAll('-', '')}`;
+  const fixturePaths = new Set([fixtureWorkspace, await realpath(fixtureWorkspace)]);
   const caseName = testInfo.titlePath.slice(1).join('-').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
   const structuredId = `ss-${randomUUID().replaceAll('-', '')}`;
   const terminalIds = new Set<string>();
@@ -98,6 +99,7 @@ export async function installFixture(page: Page, testInfo: TestInfo) {
     if (['/api/auth/config', '/api/auth/mode'].includes(endpoint) && read) return real();
     if (endpoint === '/api/auth/local-testing' && method === 'POST' && body.username === account) return real();
     if (endpoint === '/api/auth/me' && read) return real();
+    if (['/api/structured/owner-cleanup', '/api/structured/input-capabilities'].includes(endpoint) && method === 'GET') return real();
     if (endpoint === '/api/preview/session' && method === 'POST') return json({ ok: true });
     if (endpoint === '/api/terminal' && method === 'POST' && body.cwd === fixtureWorkspace && body.title === account) return real();
     if (endpoint === '/api/terminal' && read) return real();
@@ -121,6 +123,10 @@ export async function installFixture(page: Page, testInfo: TestInfo) {
       if (method === 'POST' && body.cwd === fixtureWorkspace) { structured = true; return json(syntheticSnapshot); }
     }
     if (endpoint === `/api/structured/sessions/${structuredId}` && read) return json(syntheticSnapshot);
+    if (endpoint === `/api/structured/sessions/${structuredId}/queue` && method === 'GET') return json({ revision: 0, mode: 'held', holdReason: 'new', items: [], order: [] });
+    if (endpoint === `/api/structured/sessions/${structuredId}/turn-changes` && method === 'GET') return json({ turns: {} });
+    if (endpoint === `/api/structured/sessions/${structuredId}/approval-capability` && method === 'GET') return json({ protocol: 1, mode: 'legacy', outstanding: false });
+    if (endpoint === `/api/structured/sessions/${structuredId}/shares` && method === 'GET') return json({ shares: [], audit: [] });
     if (endpoint === `/api/structured/sessions/${structuredId}/attachments` && method === 'POST' && request.headers()['content-type']?.startsWith('multipart/form-data') && (request.postDataBuffer()?.length || Infinity) <= 2048 && request.postDataBuffer()?.includes(Buffer.from('ui-pixel.png'))) return json({ error: 'Synthetic image upload denied; no file was written.' }, 403);
     if (endpoint.startsWith(`/api/structured/sessions/${structuredId}/attachments/`) && method === 'DELETE') return route.fulfill({ status: 204 });
     if (endpoint === `/api/structured/sessions/${structuredId}/input` && method === 'POST') {
@@ -133,19 +139,24 @@ export async function installFixture(page: Page, testInfo: TestInfo) {
       emit({ type: 'turn_completed', turnId: 'ui-turn', status: 'completed' });
       return json({ requestId, turnId: 'ui-turn', messageId: 'ui-user', acceptedSeq: 1, status: 'completed' });
     }
-    if (endpoint === `/api/structured/sessions/${structuredId}/approve` && method === 'POST') {
+    if (endpoint === `/api/structured/sessions/${structuredId}/approve` && method === 'POST' && body.approvalId === 'ui-approval' && typeof body.approved === 'boolean') {
       emit({ type: 'approval_resolved', approvalId: 'ui-approval' });
       emit({ type: 'turn_completed', turnId: 'ui-approval-turn', status: 'completed' });
       return json({ status: 'accepted', approvalId: 'ui-approval', approved: body.approved });
     }
     if (endpoint === `/api/structured/sessions/${structuredId}/selection` && method === 'PATCH') { syntheticSnapshot = { ...syntheticSnapshot, ...body }; return json(syntheticSnapshot); }
     if (endpoint === '/api/workspace-browser/approvals' && read) return json([]);
+    if (endpoint === '/api/workspace/git/branches' && method === 'POST' && Array.isArray(body.paths) && body.paths.length > 0 && body.paths.every((entry: unknown) => typeof entry === 'string' && fixturePaths.has(entry))) return json({ branches: {} });
+    if (endpoint === '/api/workspace/git/worktrees/progress' && method === 'GET' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(url.searchParams.get('operationId') || '')) return json({ error: 'No worktree progress for this request' }, 404);
     if (endpoint === '/api/workspace-browser/sessions' && method === 'POST') return real();
     if (endpoint.startsWith('/api/workspace-browser/sessions/') && browserIds.has(endpoint.split('/')[4])) {
       if (read || method === 'DELETE' || (endpoint.endsWith('/command') && ['resize', 'state', 'control'].includes(body.type))) return real();
     }
     if (read) {
       if (endpoint === '/api/agent/catalog') return json(catalog);
+      if (endpoint === '/api/thread-order') return json({ revision: 0, projects: {} });
+      if (endpoint === '/api/system/doctor') return json({ ready: true, agentReady: true, checks: [] });
+      if (endpoint === '/api/workspace/schedules/capabilities') return real();
       if (endpoint === '/api/agent/auth') return json({ providers: [{ id: 'codex', label: 'Codex', status: 'auth-required', configured: false, methods: ['cli'], command: 'codex login' }] });
       if (endpoint === '/api/settings') return json({ terminalFontSize: 14, terminalWebglEnabled: false, recentFolders: [fixtureWorkspace], theme: 'dark', previewUrl: 'http://localhost:49999' });
       if (endpoint === '/api/fs/list') return json({ path: fixtureWorkspace, parent: '/', folders: ['src', 'docs'] });
@@ -161,6 +172,8 @@ export async function installFixture(page: Page, testInfo: TestInfo) {
       if (endpoint === '/api/projects/scan') return json({ projects: [], scanPaths: [] });
       if (endpoint === '/api/system/preview-config') return json({});
       if (endpoint === '/api/workspace/git/status') return json({ branch: 'main', files: [{ path: 'src/layout.css', status: 'M', staged: false }], isGitRepo: true });
+      if (endpoint === '/api/workspace/git/pull-request' && url.searchParams.get('path') === fixtureWorkspace) return json({ pullRequest: null });
+      if (endpoint === '/api/workspace/git/branches' && url.searchParams.get('path') === fixtureWorkspace) return json({ branches: ['main'], truncated: false });
       if (endpoint === '/api/workspace/git/diff') return json({ patch: 'diff --git a/src/layout.css b/src/layout.css\n@@ -1 +1 @@\n-.workspace { width: 100vw; }\n+.workspace { min-width: 0; }' });
       if (['/api/workspace/git/worktrees', '/api/workspace/git/checkpoints', '/api/workspace/history', '/api/workspace/native-history/imports'].includes(endpoint)) return json([]);
       if (endpoint === '/api/workspace/native-history/sources') return json({ sources: [{ sourceId: 'ui-native-source', provider: 'codex', title: 'Synthetic responsive layout review', messageCount: 4, truncated: false }], warnings: [] });
@@ -340,6 +353,18 @@ export async function openUtility(page: Page, name: string) {
   }
   const direct = page.getByRole('button', { name, exact: true }).filter({ visible: true });
   if (await direct.count()) { await direct.first().click(); return; }
+  if (name === 'Files' || name === 'Browser') {
+    const paneControl = page.getByRole('button', { name: name === 'Files' ? 'Open project in Files' : 'Toggle browser pane', exact: true }).filter({ visible: true });
+    if (await paneControl.count()) { await paneControl.first().click(); return; }
+  }
+  if (['Browser', 'Files', 'Preview', 'Notes', 'Bookmarks'].includes(name)) {
+    const apps = page.getByRole('button', { name: 'Workspace apps', exact: true }).filter({ visible: true });
+    if (await apps.count()) {
+      await apps.click();
+      await page.getByRole('menu', { name: 'Workspace apps', exact: true }).getByRole('menuitem', { name, exact: true }).click();
+      return;
+    }
+  }
   if (name === 'Files') {
     await page.getByRole('button', { name: 'More actions', exact: true }).click();
     await page.getByRole('button', { name: 'File Manager', exact: true }).filter({ visible: true }).click();

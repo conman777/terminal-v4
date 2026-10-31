@@ -1,7 +1,8 @@
+import '../test/authIndexedDB';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
-import { clearTokens, getAccessToken, getRefreshToken, getUser, setAuthInitializing } from '../utils/auth';
+import { clearTokens, getAccessToken, getRefreshToken, getUser, setAuthInitializing, setTokens } from '../utils/auth';
 import { authenticateWithPasskey } from '../utils/passkey';
 import LoginPage from './LoginPage';
 
@@ -31,6 +32,18 @@ beforeEach(() => {
 });
 
 describe('real LoginPage and AuthProvider passkey completion authority', () => {
+  it('shows the damaged sign-in history notice when session validation cannot refresh', async () => {
+    setTokens('old-passkey-access', 'old-passkey-refresh');
+    const request = indexedDB.open('terminal-v4-auth-coordination', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('refresh');
+    const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    await new Promise((resolve, reject) => { const tx = db.transaction('refresh', 'readwrite'); tx.objectStore('refresh').put('damaged', 'consumed'); tx.oncomplete = resolve; tx.onerror = tx.onabort = () => reject(tx.error); });
+    db.close();
+    global.fetch = vi.fn(async () => response(401));
+    render(<AuthProvider><AuthScreen /></AuthProvider>);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/sign.in history is damaged/i);
+    expect(screen.getByLabelText('Username')).toBeVisible();
+  });
   it('healthy current passkey completion signs in through the real callback', async () => {
     const pending = deferred(); authenticateWithPasskey.mockReturnValueOnce(pending.promise); await start();
     await act(async () => { pending.resolve(oldResult); await pending.promise; });

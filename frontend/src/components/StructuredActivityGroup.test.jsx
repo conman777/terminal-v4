@@ -1,9 +1,20 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { StructuredActivityGroup, summarizeActivity } from './StructuredActivityGroup';
 import userEvent from '@testing-library/user-event';
 
 describe('StructuredActivityGroup', () => {
+  it('passes workspace file navigation to grouped tool results', async () => {
+    const open = vi.fn();
+    render(<StructuredActivityGroup workspacePath="/work/project" onProjectFileClick={open} messages={[
+      { toolCallId: 'one', toolName: 'Bash', toolInput: { command: 'check' }, result: 'src/app.js:2:3' },
+    ]} />);
+    fireEvent.click(screen.getByText('Ran 1 command').closest('summary'));
+    fireEvent.click(await screen.findByRole('button', { name: /Run command.*check/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open src/app.js:2:3 at line 2' }));
+    expect(open).toHaveBeenCalledWith({ path: 'src/app.js', line: 2 });
+  });
+
   it('does not leave an empty disclosure when there is no activity', () => {
     const { container } = render(<StructuredActivityGroup messages={[]} />);
     expect(container).toBeEmptyDOMElement();

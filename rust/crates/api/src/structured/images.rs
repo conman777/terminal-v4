@@ -142,6 +142,8 @@ impl StructuredSessionManager {
             None,
             #[cfg(unix)]
             false,
+            #[cfg(unix)]
+            false,
         )
         .await
     }
@@ -167,6 +169,8 @@ impl StructuredSessionManager {
             None,
             None,
             Some(app_state),
+            #[cfg(unix)]
+            false,
             #[cfg(unix)]
             false,
         )

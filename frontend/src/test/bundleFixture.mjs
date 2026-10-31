@@ -12,5 +12,5 @@ const plugin = {
 };
 const result = await build({ stdin: { contents: entry, resolveDir: root, loader: 'jsx' }, bundle: true, write: false, outdir: 'out', format: 'iife', jsx: 'automatic', plugins: [plugin],
   loader: { '.css': 'css', '.svg': 'dataurl', '.png': 'dataurl', '.woff2': 'dataurl', '.woff': 'dataurl', '.ttf': 'dataurl' },
-  define: { 'import.meta.env.VITE_API_URL': '""', 'import.meta.env.DEV': 'false', 'import.meta.env.MODE': '"test"', 'import.meta.env.BASE_URL': '"/"', 'import.meta.env.PROD': 'true' }, logLevel: 'error' });
+  define: { 'import.meta.env.VITE_API_URL': '""', 'import.meta.env.VITE_TEST_LOGIN_USERNAME': 'undefined', 'import.meta.env.VITE_TEST_LOGIN_PASSWORD': 'undefined', 'import.meta.env.DEV': 'false', 'import.meta.env.MODE': '"test"', 'import.meta.env.BASE_URL': '"/"', 'import.meta.env.PROD': 'true' }, logLevel: 'error' });
 process.stdout.write(JSON.stringify(result.outputFiles.map(file => ({ path: file.path, text: file.text }))));

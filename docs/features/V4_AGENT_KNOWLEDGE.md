@@ -58,7 +58,15 @@ revisions include the filters and observed update timestamps. This is not
 Hermes's session-start-time filter or a globally indexed search.
 
 The legacy `users/<id>` PTY/structured stores use lossy ID sanitization. Agent
-recall reads those stores only for exact ASCII alphanumeric/hyphen account IDs with a unique matching account ID in the local app database. Missing or ambiguous ownership fails closed. Other owner IDs retain hashed canonical structured, V4 and imported recall. No account ID is inferred from private provider state.
+recall reads those stores only for exact ASCII alphanumeric/hyphen account IDs
+with a unique matching account ID in the local app database. That comparison
+is case-insensitive even on case-sensitive filesystems, so a database that could
+collide when moved to another filesystem fails closed. Missing or ambiguous
+ownership also fails closed. Current-account uniqueness does not prove that a
+deleted or unrecorded account never owned the legacy directory; durable ownership
+binding and reviewed migration remain necessary. Other owner IDs retain hashed
+canonical structured, V4 and imported recall. No account ID is inferred from
+private provider state.
 
 ## Owned skill package format
 

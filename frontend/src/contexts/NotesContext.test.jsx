@@ -19,6 +19,12 @@ beforeEach(() => { scope.environment = null; scope.authEpoch = 0; scope.environm
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('NotesProvider mutation errors', () => {
+  it('treats a server error after a note write as an unconfirmed outcome', async () => {
+    apiFetch.mockReset().mockResolvedValueOnce({ ok: true, json: async () => ({ notes: [] }) }).mockResolvedValueOnce({ ok: false, status: 500 });
+    const { result } = renderHook(useNotes, { wrapper: NotesProvider });
+    await waitFor(() => expect(result.current.notesLoadStatus).toBe('ready'));
+    await act(async () => expect(result.current.addNote('title', 'draft', 'General')).rejects.toMatchObject({ outcomeUncertain: true }));
+  });
   it.each([
     ['addNote', ['Draft title', 'Draft content', 'General']],
     ['updateNote', ['alpha', { content: 'Draft content' }]],
@@ -75,6 +81,13 @@ describe('NotesProvider editor integration', () => {
 describe('NotesProvider load health and scope', () => {
   const row = { id: 'synthetic-row', title: 'Synthetic note', content: 'Synthetic text', category: 'Fixture' };
   const response = rows => ({ ok: true, json: async () => ({ notes: rows }) });
+  it('explains when stored note ownership needs administrator review', async () => {
+    apiFetch.mockReset().mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({ error: 'Note storage ownership is ambiguous. Administrator review is required.' }) });
+    const { result } = renderHook(useNotes, { wrapper: NotesProvider });
+    await waitFor(() => expect(result.current.notesLoadStatus).toBe('error'));
+    expect(result.current.notesLoadError).toMatch(/ownership.*administrator/i);
+    expect(result.current.notes).toEqual([]);
+  });
   it('distinguishes initial failure from confirmed empty and retries with reads only', async () => {
     apiFetch.mockReset().mockRejectedValueOnce(new Error('Synthetic read offline')).mockResolvedValue(response([]));
     const { result } = renderHook(useNotes, { wrapper: NotesProvider });

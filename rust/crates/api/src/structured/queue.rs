@@ -451,19 +451,16 @@ pub(super) fn verify_queue_authority_for_admission(
 }
 
 #[cfg(all(unix, any(test, not(feature = "queued-authority-preview"))))]
-fn check_legacy_dispatch(
+fn requires_authorized_dispatch(
     queue: &QueueStore,
     scope: &QueueScope,
     incarnation: Option<Uuid>,
     reservation: &crate::followup_queue::DispatchReservation,
-) -> Result<(), StructuredControlError> {
-    match queue.verify_reservation_authority_for_session(scope, incarnation, reservation) {
-        Ok(None) => Ok(()),
-        Ok(Some(_)) => Err(StructuredControlError::conflict(
-            "This queued message requires authorized dispatch; review it before continuing",
-        )),
-        Err(error) => Err(control_error(error)),
-    }
+) -> Result<bool, StructuredControlError> {
+    queue
+        .verify_reservation_authority_for_session(scope, incarnation, reservation)
+        .map(|authority| authority.is_some())
+        .map_err(control_error)
 }
 
 /// Erased future breaks the submit -> worker -> next-queue-turn Send type cycle.
@@ -555,31 +552,54 @@ fn drain_at_revision(
             }
         };
         #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
-        if let Err(error) = check_legacy_dispatch(
+        let authorized_dispatch = match requires_authorized_dispatch(
             &store(&manager),
             &scope,
             state.session_incarnation.map(|value| value.0),
             &reservation,
         ) {
-            let _ = store(&manager).reconcile_dispatch(
-                &scope,
-                reservation.item_id,
-                reservation.input_request_id,
-                DispatchOutcome::Unknown,
-            );
-            return Err(error.message);
-        }
+            Ok(authorized) => authorized,
+            Err(error) => {
+                let _ = store(&manager).reconcile_dispatch(
+                    &scope,
+                    reservation.item_id,
+                    reservation.input_request_id,
+                    DispatchOutcome::Unknown,
+                );
+                return Err(error.message);
+            }
+        };
         drop(state);
         #[cfg(all(unix, any(test, feature = "queued-authority-preview")))]
-        let submission = manager
-            .submit_queued(
+        let submission = submit_queued_with_paired_retry(
+            &manager,
+            &owner,
+            &session_id,
+            &reservation.text,
+            &reservation.input_request_id.to_string(),
+        )
+        .await;
+        #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
+        let submission = if authorized_dispatch {
+            submit_queued_with_paired_retry(
+                &manager,
                 &owner,
                 &session_id,
                 &reservation.text,
                 &reservation.input_request_id.to_string(),
             )
-            .await;
-        #[cfg(not(all(unix, any(test, feature = "queued-authority-preview"))))]
+            .await
+        } else {
+            manager
+                .submit_legacy_queued(
+                    &owner,
+                    &session_id,
+                    &reservation.text,
+                    &reservation.input_request_id.to_string(),
+                )
+                .await
+        };
+        #[cfg(not(unix))]
         let submission = manager
             .submit(
                 &owner,
@@ -596,6 +616,29 @@ fn drain_at_revision(
         reconciled?;
         submission.map(|_| ()).map_err(|error| error.message)
     })
+}
+
+#[cfg(unix)]
+async fn submit_queued_with_paired_retry(
+    manager: &StructuredSessionManager,
+    owner: &str,
+    session: &str,
+    text: &str,
+    request: &str,
+) -> Result<super::StructuredReceipt, StructuredControlError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let result = manager.submit_queued(owner, session, text, request).await;
+        if result
+            .as_ref()
+            .is_err_and(|error| error.code == "paired_owner_busy")
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            continue;
+        }
+        return result;
+    }
 }
 /// Terminal callbacks may hold only the generation that they completed.
 pub(super) async fn hold_generation(
@@ -729,6 +772,69 @@ impl StructuredSessionManager {
         let (result, confirmed) = admission.accept(owner, authority, action)?;
         if !confirmed {
             return Err(uncertain_message.into());
+        }
+        result
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_delegation_paired_authority<T>(
+        &self,
+        owner: &str,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        action: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.validate_live_owner(owner)?;
+        let admission = self
+            .inner
+            .local_admission
+            .get()
+            .ok_or("Paired credential admission unavailable")?;
+        let (result, confirmed) = admission.accept_paired(owner, grant, action)?;
+        if !confirmed {
+            return Err(
+                "Paired delegation authority outcome is uncertain; no child was started".into(),
+            );
+        }
+        result
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn launch_with_delegation_local_authority<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        action: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.validate_live_owner(owner)?;
+        let admission = self
+            .inner
+            .local_admission
+            .get()
+            .ok_or("Queued credential admission unavailable")?;
+        let (result, confirmed) = admission.try_accept_local(owner, authority, action)?;
+        if !confirmed && result.is_ok() {
+            tracing::warn!("Local child launch succeeded but credential confirmation is uncertain");
+        }
+        result
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn launch_with_delegation_paired_authority<T>(
+        &self,
+        owner: &str,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        action: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.validate_live_owner(owner)?;
+        let admission = self
+            .inner
+            .local_admission
+            .get()
+            .ok_or("Paired credential admission unavailable")?;
+        let (result, confirmed) = admission.accept_paired(owner, grant, action)?;
+        if !confirmed && result.is_ok() {
+            // The child may already be running; keep its handle for supervision.
+            tracing::warn!("Paired child launch succeeded but grant confirmation is uncertain");
         }
         result
     }
@@ -1446,6 +1552,12 @@ impl StructuredSessionManager {
             store(self)
         };
         let wake_requested = matches!(&mutation.operation, QueueOperation::Wake);
+        #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
+        let paired_legacy_write = paired.is_some()
+            && matches!(
+                &mutation.operation,
+                QueueOperation::Enqueue { .. } | QueueOperation::Edit { .. }
+            );
         #[cfg(test)]
         let operation_id = mutation.operation_id;
         let apply = |check: &dyn Fn() -> Result<(), String>| {
@@ -1481,8 +1593,25 @@ impl StructuredSessionManager {
                 reconcile_with_store_checked(&store, &state, check)?;
                 #[cfg(all(unix, any(test, feature = "queued-authority-preview")))]
                 let capture_authority = self.inner.local_admission.get().is_some();
-                #[cfg(not(all(unix, any(test, feature = "queued-authority-preview"))))]
+                #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
+                let capture_authority = self.inner.local_admission.get().is_some()
+                    && (authority.is_some_and(|authority| authority.auth_protocol() == 1)
+                        || (state.session_incarnation.is_some()
+                            && matches!(&mutation.operation, QueueOperation::Edit { .. })));
+                #[cfg(not(unix))]
                 let capture_authority = false;
+                #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
+                if authority.is_some_and(|authority| authority.auth_protocol() == 1)
+                    && !capture_authority
+                    && matches!(
+                        &mutation.operation,
+                        QueueOperation::Enqueue { .. } | QueueOperation::Edit { .. }
+                    )
+                {
+                    return Err(StructuredControlError::internal(
+                        "Queued credential admission unavailable",
+                    ));
+                }
                 #[cfg(all(unix, not(test), feature = "queued-authority-preview"))]
                 if authority.is_some() && !capture_authority {
                     return Err(StructuredControlError::internal(
@@ -1510,15 +1639,33 @@ impl StructuredSessionManager {
                         QueueOperation::Enqueue { .. } | QueueOperation::Edit { .. }
                     ),
                 ) {
-                    store
-                        .mutate_authorized_checked(
+                    #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
+                    let result = if authority.auth_protocol() == 1 {
+                        store.mutate_authorized_checked(
                             &scope,
                             incarnation.0,
                             mutation,
                             authority,
                             check,
                         )
-                        .map_err(control_error)?
+                    } else {
+                        store.mutate_protected_edit_checked(
+                            &scope,
+                            incarnation.0,
+                            mutation,
+                            authority,
+                            check,
+                        )
+                    };
+                    #[cfg(not(all(unix, not(any(test, feature = "queued-authority-preview")))))]
+                    let result = store.mutate_authorized_checked(
+                        &scope,
+                        incarnation.0,
+                        mutation,
+                        authority,
+                        check,
+                    );
+                    result.map_err(control_error)?
                 } else {
                     store
                         .mutate_checked(&scope, mutation, check)
@@ -1632,6 +1779,31 @@ impl StructuredSessionManager {
                     Err("Paired grant expired".into())
                 }
             };
+            #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
+            if paired_legacy_write {
+                let admission = self.inner.local_admission.get().ok_or_else(|| {
+                    StructuredControlError::internal("Paired queue admission unavailable")
+                })?;
+                let (result, confirmed) = admission
+                    .accept_legacy_queue(owner, |legacy_check| {
+                        apply(&|| {
+                            legacy_check()?;
+                            check()
+                        })
+                    })
+                    .map_err(StructuredControlError::conflict)?;
+                let result = result?;
+                if !confirmed {
+                    return Err(StructuredControlError {
+                        code: "unavailable",
+                        message: "Queue operation may have been saved; retry the same operation ID to recover its receipt".into(),
+                    });
+                }
+                result
+            } else {
+                apply(&check)?
+            }
+            #[cfg(any(test, feature = "queued-authority-preview"))]
             apply(&check)?
         } else {
             apply(&|| Ok(()))?
@@ -1644,6 +1816,8 @@ impl StructuredSessionManager {
         let generation = state.generation;
         drop(state);
         drop(gate_guard);
+        #[cfg(unix)]
+        drop(paired_guard);
         if should_drain {
             #[cfg(unix)]
             let drain_permit = match {
@@ -2190,8 +2364,220 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[derive(Clone, Copy)]
+    enum DelegationCase {
+        Plain,
+        Paired,
+        PairedRevoked,
+        PairedRevokedAtLaunch,
+        LocalGenerationRevoked,
+        LocalLogout,
+        LocalExpired,
+        PairedExpired,
+        LocalSessionRevokedAfterLaunch,
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn approved_background_investigation_delivers_verified_read_only_result() {
+        approved_background_investigation_fixture(DelegationCase::Plain).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn paired_background_investigation_publishes_verified_result_for_idle_parent() {
+        approved_background_investigation_fixture(DelegationCase::Paired).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn revoked_paired_grant_cannot_start_background_investigation() {
+        approved_background_investigation_fixture(DelegationCase::PairedRevoked).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn paired_revocation_after_attestation_prevents_child_launch() {
+        approved_background_investigation_fixture(DelegationCase::PairedRevokedAtLaunch).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_generation_revocation_after_approval_prevents_delegated_child_launch() {
+        approved_background_investigation_fixture(DelegationCase::LocalGenerationRevoked).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_logout_after_approval_prevents_delegated_child_launch() {
+        approved_background_investigation_fixture(DelegationCase::LocalLogout).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_logout_during_delegated_child_retains_result_across_restart() {
+        approved_background_investigation_fixture(DelegationCase::LocalSessionRevokedAfterLaunch)
+            .await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn expired_local_origin_cannot_start_delegated_child() {
+        approved_background_investigation_fixture(DelegationCase::LocalExpired).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn expired_paired_origin_cannot_start_delegated_child() {
+        approved_background_investigation_fixture(DelegationCase::PairedExpired).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn paired_launch_retains_process_when_confirmation_expires_after_spawn() {
+        struct OwnedChild(std::process::Child);
+        impl Drop for OwnedChild {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        };
+        let manager = StructuredSessionManager::new(config.clone());
+        manager.bind_live_ownership().unwrap();
+        let app = crate::state::AppState::new_with_services(config, None, manager.clone()).unwrap();
+        manager
+            .bind_local_admission(app.local_admission().unwrap())
+            .unwrap();
+        manager
+            .create_session(
+                "owner",
+                workspace.path().to_str().unwrap(),
+                Some("deepseek"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let (id, token) = crate::paired_environments::synthetic_input_grant(&app, "owner");
+        let expiry = time::OffsetDateTime::now_utc().unix_timestamp() + 2;
+        app.lock_db()
+            .unwrap()
+            .execute(
+                "UPDATE paired_grants SET expires=?1 WHERE id=?2",
+                rusqlite::params![expiry, id],
+            )
+            .unwrap();
+        let paired = crate::auth::PairedInputAuthority {
+            token,
+            method: "POST".into(),
+            path: format!(
+                "/api/structured/sessions/ss-{}/message",
+                Uuid::new_v4().simple()
+            ),
+        };
+        let grant =
+            crate::paired_environments::capture_paired_grant(&app, &paired, "owner").unwrap();
+        let mut process = manager
+            .launch_with_delegation_paired_authority("owner", &grant, |check| {
+                check()?;
+                let process = OwnedChild(
+                    std::process::Command::new("/bin/sleep")
+                        .arg("30")
+                        .spawn()
+                        .map_err(|e| e.to_string())?,
+                );
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                Ok(process)
+            })
+            .unwrap();
+        assert!(!grant.valid_for("owner", crate::v4_agent::interaction::now_ms()));
+        assert!(process.0.try_wait().unwrap().is_none());
+        drop(process);
+        manager.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_delegation_launch_fails_fast_when_authentication_fence_is_busy() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        };
+        let manager = StructuredSessionManager::new(config.clone());
+        manager.bind_live_ownership().unwrap();
+        let app = crate::state::AppState::new_with_services(config, None, manager.clone()).unwrap();
+        manager
+            .bind_local_admission(app.local_admission().unwrap())
+            .unwrap();
+        manager
+            .create_session(
+                "owner",
+                workspace.path().to_str().unwrap(),
+                Some("deepseek"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let authority = crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX);
+        let busy = app.hold_auth_admission_for_test().unwrap();
+        let called = std::sync::atomic::AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        assert!(manager
+            .launch_with_delegation_local_authority("owner", &authority, |_| {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .is_err());
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        drop(busy);
+        let writer = rusqlite::Connection::open(data.path().join("terminal.db")).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let start = std::time::Instant::now();
+        assert!(manager
+            .launch_with_delegation_local_authority("owner", &authority, |_| {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .is_err());
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        writer.execute_batch("ROLLBACK").unwrap();
+        assert!(manager
+            .launch_with_delegation_local_authority("owner", &authority, |check| check())
+            .is_ok());
+        manager.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    async fn approved_background_investigation_fixture(case: DelegationCase) {
+        let paired = matches!(
+            case,
+            DelegationCase::Paired
+                | DelegationCase::PairedRevoked
+                | DelegationCase::PairedRevokedAtLaunch
+                | DelegationCase::PairedExpired
+        );
+        let revoke = matches!(case, DelegationCase::PairedRevoked);
+        let revoke_before_launch = matches!(case, DelegationCase::PairedRevokedAtLaunch);
+        let local_logout_before_launch = matches!(
+            case,
+            DelegationCase::LocalGenerationRevoked | DelegationCase::LocalLogout
+        );
+        let real_logout = matches!(case, DelegationCase::LocalLogout);
+        let local_expired = matches!(case, DelegationCase::LocalExpired);
+        let session_logout_after_launch =
+            matches!(case, DelegationCase::LocalSessionRevokedAfterLaunch);
+        let paired_expired = matches!(case, DelegationCase::PairedExpired);
         use crate::v4_agent::interaction::{ActionScope, ApprovalRequest, Interaction};
         use axum::{routing::post, Json, Router};
         struct Allow;
@@ -2206,12 +2592,25 @@ mod tests {
         }
         let requests = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
         let captured = requests.clone();
+        let child_arrived = Arc::new(tokio::sync::Notify::new());
+        let release_child = Arc::new(tokio::sync::Notify::new());
+        let arrival = child_arrived.clone();
+        let release = release_child.clone();
         let router = Router::new().fallback(post(move |Json(body): Json<Value>| {
             let captured = captured.clone();
+            let arrival = arrival.clone();
+            let release = release.clone();
             async move {
-                let mut requests = captured.lock().unwrap();
-                requests.push(body);
-                Json(if requests.len() == 1 {
+                let first = {
+                    let mut requests = captured.lock().unwrap();
+                    requests.push(body);
+                    requests.len() == 1
+                };
+                if first && session_logout_after_launch {
+                    arrival.notify_one();
+                    release.notified().await;
+                }
+                Json(if first {
                     json!({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[
                         {"id":"write","type":"function","function":{"name":"write_file","arguments":"{\"path\":\"notes\",\"content\":\"changed\"}"}},
                         {"id":"read","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"notes\"}"}}
@@ -2255,11 +2654,54 @@ mod tests {
         )
         .unwrap();
         drop(db);
-        let manager = StructuredSessionManager::new(AppConfig {
+        let config = AppConfig {
             data_dir: data.path().into(),
             ..Default::default()
-        });
+        };
+        let manager = StructuredSessionManager::new(config.clone());
         manager.bind_live_ownership().unwrap();
+        let local_fixture = if local_logout_before_launch
+            || local_expired
+            || session_logout_after_launch
+        {
+            let app =
+                crate::state::AppState::new_with_services(config.clone(), None, manager.clone())
+                    .unwrap();
+            manager
+                .bind_local_admission(app.local_admission().unwrap())
+                .unwrap();
+            Some(app)
+        } else {
+            None
+        };
+        let old_session = Uuid::new_v4().to_string();
+        let newer_session = Uuid::new_v4().to_string();
+        if session_logout_after_launch {
+            let app = local_fixture.as_ref().unwrap();
+            let db = app.lock_db().unwrap();
+            db.execute("INSERT INTO users(id,username,password_hash,created_at,updated_at,auth_protocol_min) VALUES('owner','fixture','x','now','now',1)", []).unwrap();
+            db.execute(
+                "INSERT INTO auth_generations(user_id,generation) VALUES('owner',1)",
+                [],
+            )
+            .unwrap();
+            for session in [&old_session, &newer_session] {
+                db.execute("INSERT INTO auth_sessions(id,user_id,generation,logout_capability_hash,created_at) VALUES(?1,'owner',1,'x','now')", [session]).unwrap();
+            }
+        }
+        let paired_fixture = if paired {
+            let app =
+                crate::state::AppState::new_with_services(config.clone(), None, manager.clone())
+                    .unwrap();
+            manager
+                .bind_local_admission(app.local_admission().unwrap())
+                .unwrap();
+            let (grant_id, token) =
+                crate::paired_environments::synthetic_input_grant(&app, "owner");
+            Some((app, token, grant_id))
+        } else {
+            None
+        };
         let supervisor =
             crate::v4_agent::delegation_outbox::provision_supervisor(data.path()).unwrap();
         manager
@@ -2292,6 +2734,35 @@ mod tests {
             session_id: snapshot.id.clone(),
             turn_id: Uuid::new_v4().to_string(),
         };
+        let paired_authority = paired_fixture.as_ref().map(|(app, token, _)| {
+            let grant = crate::paired_environments::capture_paired_grant(
+                app,
+                &crate::auth::PairedInputAuthority {
+                    token: token.clone(),
+                    method: "POST".into(),
+                    path: format!("/api/structured/sessions/{}/message", snapshot.id),
+                },
+                "owner",
+            )
+            .unwrap();
+            if paired_expired {
+                let mut value = serde_json::to_value(&grant).unwrap();
+                let now = time::OffsetDateTime::now_utc().unix_timestamp();
+                value["created"] = json!(now - 10);
+                value["expires_at_ms"] = json!((now - 1) * 1000);
+                serde_json::from_value(value).unwrap()
+            } else {
+                grant
+            }
+        });
+        let expected_paired_authority = paired_authority.clone();
+        if revoke {
+            let (app, _, grant_id) = paired_fixture.as_ref().unwrap();
+            app.lock_db()
+                .unwrap()
+                .execute("DELETE FROM paired_grants WHERE id=?1", [grant_id])
+                .unwrap();
+        }
         let turn = Arc::new(
             crate::v4_agent::delegation_outbox::DelegationTurn::new(
                 manager.clone(),
@@ -2299,12 +2770,36 @@ mod tests {
                 scope.clone(),
                 7,
             )
-            .unwrap(),
+            .unwrap()
+            .with_paired_authority(paired_authority),
         );
         resources.bind_delegation(&turn).unwrap();
         let fixture_data = data.path().to_path_buf();
         let fixture_workspace = root.clone();
+        let revoke_fixture = if revoke_before_launch {
+            let (app, _, grant_id) = paired_fixture.as_ref().unwrap();
+            Some((app.clone(), grant_id.clone()))
+        } else {
+            None
+        };
+        let local_revoke = if local_logout_before_launch {
+            local_fixture.clone()
+        } else {
+            None
+        };
         turn.set_test_command(move |command| {
+            if let Some((app, grant_id)) = revoke_fixture {
+                app.lock_db().unwrap().execute("DELETE FROM paired_grants WHERE id=?1", [&grant_id]).unwrap();
+            }
+            if let Some(app) = local_revoke {
+                if real_logout {
+                    app.logout_user("owner").unwrap();
+                } else {
+                    app.lock_db().unwrap().execute(
+                        "INSERT INTO auth_generations(user_id,generation) VALUES ('owner',1) ON CONFLICT(user_id) DO UPDATE SET generation=generation+1", []
+                    ).unwrap();
+                }
+            }
             let args: Vec<String> = command.as_std().get_args().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
             let output = fixture_data.join("fixture-output.jsonl");
             let mut fixture = tokio::process::Command::new("/bin/sh");
@@ -2329,7 +2824,22 @@ mod tests {
             scope.clone(),
             resources.clone(),
             &Allow,
-            None,
+            local_fixture.as_ref().map(|_| {
+                if session_logout_after_launch {
+                    crate::auth::LocalAuthority::for_test_session(
+                        "owner",
+                        1,
+                        i64::MAX,
+                        &old_session,
+                    )
+                } else {
+                    crate::auth::LocalAuthority::for_test(
+                        "owner",
+                        0,
+                        if local_expired { 1 } else { i64::MAX },
+                    )
+                }
+            }),
         )
         .await
         .unwrap();
@@ -2339,11 +2849,154 @@ mod tests {
         assert!(parent_seen[0]["tools"]
             .to_string()
             .contains("delegate_task_background"));
+        if revoke
+            || revoke_before_launch
+            || local_logout_before_launch
+            || local_expired
+            || paired_expired
+        {
+            let tool_result = parent_seen[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .rev()
+                .find(|message| message["role"] == "tool")
+                .unwrap()["content"]
+                .as_str()
+                .unwrap();
+            assert!(
+                tool_result.contains(if local_expired || paired_expired {
+                    "expired"
+                } else {
+                    "revoked"
+                }),
+                "fixture tool result: {tool_result}"
+            );
+            assert!(!tool_result.contains("\"status\":\"running\""));
+            drop(parent_seen);
+            assert!(requests.lock().unwrap().is_empty());
+            assert_eq!(
+                std::fs::read_to_string(root.join("notes")).unwrap(),
+                "original"
+            );
+            live.state.lock().await.process = None;
+            drop(live);
+            manager.shutdown().await.unwrap();
+            server.abort();
+            parent_server.abort();
+            return;
+        }
         assert!(parent_seen[1]
             .to_string()
             .contains("\\\"status\\\":\\\"running\\\""));
         drop(parent_seen);
         let queue_scope = QueueScope::new("owner", &root, &snapshot.id).unwrap();
+        if session_logout_after_launch {
+            tokio::time::timeout(std::time::Duration::from_secs(30), child_arrived.notified())
+                .await
+                .unwrap();
+            let app = local_fixture.as_ref().unwrap();
+            let old =
+                crate::auth::LocalAuthority::for_test_session("owner", 1, i64::MAX, &old_session);
+            assert!(app.logout_user_authorized("owner", &old).unwrap());
+            let newer =
+                crate::auth::LocalAuthority::for_test_session("owner", 1, i64::MAX, &newer_session);
+            let admission = app.local_admission().unwrap();
+            assert!(admission
+                .accept("owner", &newer, |check| check())
+                .unwrap()
+                .0
+                .is_ok());
+            release_child.notify_one();
+            let outbox_path = data.path().join("delegation-outbox/outbox.sqlite3");
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                loop {
+                    let db = rusqlite::Connection::open(&outbox_path).unwrap();
+                    let ready: bool = db
+                        .query_row("SELECT terminal IS NOT NULL FROM records", [], |row| {
+                            row.get(0)
+                        })
+                        .unwrap();
+                    if ready {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let before = store(&manager).load(&queue_scope).unwrap();
+            assert!(before.items.is_empty());
+            let db = rusqlite::Connection::open(&outbox_path).unwrap();
+            let (binding, terminal, receipt, attempted): (String, String, Option<String>, i64) = db
+                .query_row(
+                    "SELECT binding, terminal, receipt, delivery_attempted FROM records",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap();
+            let binding: Value = serde_json::from_str(&binding).unwrap();
+            assert_eq!(binding["authorization"]["auth_session_id"], old_session);
+            assert!(binding["authorization"]["local_attestation"].is_object());
+            assert!(terminal.contains("Verified investigation result"));
+            assert!(receipt.is_none());
+            assert_eq!(attempted, 0);
+            drop(db);
+            assert_eq!(
+                std::fs::read_to_string(root.join("notes")).unwrap(),
+                "original"
+            );
+            assert_eq!(requests.lock().unwrap().len(), 2);
+            live.state.lock().await.process = None;
+            drop(live);
+            manager.shutdown().await.unwrap();
+            drop(resources);
+            drop(turn);
+            drop(admission);
+            drop(local_fixture);
+            drop(manager);
+            let manager = StructuredSessionManager::new(config.clone());
+            manager.bind_live_ownership().unwrap();
+            let app =
+                crate::state::AppState::new_with_services(config, None, manager.clone()).unwrap();
+            manager
+                .bind_local_admission(app.local_admission().unwrap())
+                .unwrap();
+            let supervisor =
+                crate::v4_agent::delegation_outbox::open_existing_supervisor(data.path()).unwrap();
+            manager
+                .bind_delegation_supervisor(supervisor.clone())
+                .unwrap();
+            assert!(manager
+                .get_session("owner", &snapshot.id)
+                .await
+                .unwrap()
+                .is_some());
+            supervisor.recover_ready(&manager, "owner").await.unwrap();
+            let after = store(&manager).load(&queue_scope).unwrap();
+            assert!(after.items.is_empty());
+            let db = rusqlite::Connection::open(&outbox_path).unwrap();
+            let (terminal_after, receipt_after, attempted_after): (String, Option<String>, i64) =
+                db.query_row(
+                    "SELECT terminal, receipt, delivery_attempted FROM records",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(terminal_after, terminal);
+            assert!(receipt_after.is_none());
+            assert_eq!(attempted_after, 0);
+            assert_eq!(
+                requests.lock().unwrap().len(),
+                2,
+                "recovery must not replay the child"
+            );
+            drop(db);
+            manager.shutdown().await.unwrap();
+            server.abort();
+            parent_server.abort();
+            return;
+        }
         let item = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             loop {
                 if let Some(item) = store(&manager).load(&queue_scope).unwrap().items.first() {
@@ -2354,11 +3007,46 @@ mod tests {
         })
         .await
         .unwrap();
+        let snapshot = store(&manager).load(&queue_scope).unwrap();
         assert_eq!(
-            store(&manager).load(&queue_scope).unwrap().mode,
-            QueueMode::Held
+            snapshot.mode,
+            if paired {
+                QueueMode::Running
+            } else {
+                QueueMode::Held
+            }
         );
+        if let Some(grant) = expected_paired_authority {
+            let queue = store(&manager);
+            let incarnation = live.state.lock().await.session_incarnation.unwrap().0;
+            let reservation = queue
+                .reserve_next(
+                    &queue_scope,
+                    snapshot.revision,
+                    IdleBoundary { turn_epoch: 7 },
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                queue
+                    .verify_reservation_authority(&queue_scope, incarnation, &reservation)
+                    .unwrap(),
+                Some(crate::followup_queue::VerifiedQueueAuthority::Paired(grant))
+            );
+        }
         assert!(item.contains("Verified investigation result"));
+        if let Some((_, token, _)) = &paired_fixture {
+            let db =
+                rusqlite::Connection::open(data.path().join("delegation-outbox/outbox.sqlite3"))
+                    .unwrap();
+            let binding: String = db
+                .query_row("SELECT binding FROM records", [], |row| row.get(0))
+                .unwrap();
+            let binding: Value = serde_json::from_str(&binding).unwrap();
+            assert!(binding["paired_authorization"].is_object());
+            assert!(binding["paired_attestation"].is_object());
+            assert!(!binding.to_string().contains(token));
+        }
         assert_eq!(
             std::fs::read_to_string(root.join("notes")).unwrap(),
             "original"
@@ -4612,7 +5300,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        let restored = crate::auth::LocalAuthority::from_verified_queue(verified);
+        let restored = crate::auth::LocalAuthority::from_verified_queue(verified).unwrap();
         assert_eq!(restored.generation_for("owner"), Some(8));
         assert!(verify_queue_authority_for_admission(
             &manager,
@@ -4642,7 +5330,204 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn legacy_dispatch_refuses_proof_bearing_or_unverifiable_reservations() {
+    async fn paired_dispatch_waits_for_a_busy_owner_without_holding_the_result() {
+        let (data, workspace, manager, id) = setup_with_ownership(false, true).await;
+        let app = AppState::new_with_services(
+            AppConfig {
+                data_dir: data.path().into(),
+                ..Default::default()
+            },
+            None,
+            manager.clone(),
+        )
+        .unwrap();
+        manager
+            .bind_local_admission(app.local_admission().unwrap())
+            .unwrap();
+        let (_, token) = crate::paired_environments::synthetic_input_grant(&app, "owner");
+        let grant = crate::paired_environments::capture_paired_grant(
+            &app,
+            &crate::auth::PairedInputAuthority {
+                token,
+                method: "POST".into(),
+                path: format!("/api/structured/sessions/{id}/message"),
+            },
+            "owner",
+        )
+        .unwrap();
+        let session = manager.owned_session("owner", &id).await.unwrap().unwrap();
+        let state = session.state.lock().await;
+        let incarnation = state.session_incarnation.unwrap().0;
+        let generation = state.generation;
+        drop(state);
+        let scope = scope(workspace.path(), &id);
+        let queue = store(&manager);
+        let identity = queue.ensure_delegation_identity(&scope).unwrap();
+        let (saved, confirmed) = app
+            .local_admission()
+            .unwrap()
+            .accept_paired("owner", &grant, |check| {
+                queue.mutate_existing_paired_with_identity(
+                    &scope,
+                    identity,
+                    incarnation,
+                    Mutation {
+                        operation_id: Uuid::new_v4(),
+                        expected_queue_revision: 0,
+                        operation: QueueOperation::Enqueue {
+                            item_id: Uuid::new_v4(),
+                            text: "paired result".into(),
+                            run_when_idle: true,
+                        },
+                    },
+                    &grant,
+                    check,
+                )
+            })
+            .unwrap();
+        assert!(confirmed);
+        saved.unwrap();
+        let guard = app.acquire_input_guard("owner").unwrap();
+        let task = tokio::spawn(drain(
+            manager.clone(),
+            "owner".into(),
+            id.clone(),
+            generation,
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let remained_pending = !task.is_finished();
+        drop(guard);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            remained_pending,
+            "the result was held while the owner lock was temporarily busy"
+        );
+        result.unwrap();
+        let state = session.state.lock().await;
+        assert!(state.events.iter().any(|event| matches!(event, StructuredSessionEvent::UserMessageAccepted { content, .. } if content == "paired result")));
+        drop(state);
+        drop(session);
+        manager.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn paired_queue_dispatch_accepts_live_grant_and_rejects_revocation() {
+        for revoked in [false, true] {
+            let (data, workspace, manager, id) = setup_with_ownership(false, true).await;
+            let app = AppState::new_with_services(
+                AppConfig {
+                    data_dir: data.path().into(),
+                    ..Default::default()
+                },
+                None,
+                manager.clone(),
+            )
+            .unwrap();
+            manager
+                .bind_local_admission(app.local_admission().unwrap())
+                .unwrap();
+            let (grant_id, token) =
+                crate::paired_environments::synthetic_input_grant(&app, "owner");
+            let grant = crate::paired_environments::capture_paired_grant(
+                &app,
+                &crate::auth::PairedInputAuthority {
+                    token,
+                    method: "POST".into(),
+                    path: format!("/api/structured/sessions/{id}/message"),
+                },
+                "owner",
+            )
+            .unwrap();
+            let session = manager.owned_session("owner", &id).await.unwrap().unwrap();
+            let state = session.state.lock().await;
+            let incarnation = state.session_incarnation.unwrap().0;
+            let generation = state.generation;
+            drop(state);
+            let scope = scope(workspace.path(), &id);
+            let queue = store(&manager);
+            let identity = queue.ensure_delegation_identity(&scope).unwrap();
+            let (saved, confirmed) = app
+                .local_admission()
+                .unwrap()
+                .accept_paired("owner", &grant, |check| {
+                    queue.mutate_existing_paired_with_identity(
+                        &scope,
+                        identity,
+                        incarnation,
+                        Mutation {
+                            operation_id: Uuid::new_v4(),
+                            expected_queue_revision: 0,
+                            operation: QueueOperation::Enqueue {
+                                item_id: Uuid::new_v4(),
+                                text: "paired follow-up".into(),
+                                run_when_idle: true,
+                            },
+                        },
+                        &grant,
+                        check,
+                    )
+                })
+                .unwrap();
+            assert!(confirmed);
+            saved.unwrap();
+            let reservation = queue
+                .reserve_next(
+                    &scope,
+                    1,
+                    IdleBoundary {
+                        turn_epoch: generation,
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            let permit = install_permit(
+                key(&manager, "owner", &id),
+                Permit {
+                    request_id: reservation.input_request_id,
+                    generation,
+                },
+            )
+            .unwrap();
+            if revoked {
+                app.lock_db()
+                    .unwrap()
+                    .execute("DELETE FROM paired_grants WHERE id=?1", [&grant_id])
+                    .unwrap();
+            }
+            let result = manager
+                .submit_queued(
+                    "owner",
+                    &id,
+                    &reservation.text,
+                    &reservation.input_request_id.to_string(),
+                )
+                .await;
+            assert_eq!(result.is_ok(), !revoked, "{result:?}");
+            let state = session.state.lock().await;
+            assert_eq!(state.events.iter().any(|event| matches!(event, StructuredSessionEvent::UserMessageAccepted { request_id, .. } if request_id == &reservation.input_request_id.to_string())), !revoked);
+            drop(state);
+            drop(permit);
+            if !revoked {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while session.state.lock().await.process.is_some() {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("queued fixture turn did not finish");
+            }
+            drop(session);
+            manager.shutdown().await.unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proof_bearing_dispatch_requires_authorized_admission_and_original_incarnation() {
         let (data, workspace, manager, id) = setup(true).await;
         crate::vault::VaultCipher::load(data.path()).unwrap();
         let session = manager.owned_session("owner", &id).await.unwrap().unwrap();
@@ -4681,10 +5566,61 @@ mod tests {
             )
             .unwrap()
             .unwrap();
+        assert!(requires_authorized_dispatch(
+            &queue,
+            &queue_scope,
+            Some(incarnation),
+            &reservation
+        )
+        .unwrap());
+        assert!(requires_authorized_dispatch(&queue, &queue_scope, None, &reservation).is_err());
+        let mut altered = reservation.clone();
+        altered.text.push_str(" altered");
         assert!(
-            check_legacy_dispatch(&queue, &queue_scope, Some(incarnation), &reservation).is_err()
+            requires_authorized_dispatch(&queue, &queue_scope, Some(incarnation), &altered)
+                .is_err()
         );
-        assert!(check_legacy_dispatch(&queue, &queue_scope, None, &reservation).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unproven_legacy_reservation_keeps_its_existing_dispatch_path() {
+        let (_data, workspace, manager, id) = setup(true).await;
+        let session = manager.owned_session("owner", &id).await.unwrap().unwrap();
+        let state = session.state.lock().await;
+        let queue_scope = scope(workspace.path(), &id);
+        let queue = store(&manager);
+        queue
+            .mutate(
+                &queue_scope,
+                Mutation {
+                    operation_id: Uuid::new_v4(),
+                    expected_queue_revision: 0,
+                    operation: QueueOperation::Enqueue {
+                        item_id: Uuid::new_v4(),
+                        text: "legacy".into(),
+                        run_when_idle: true,
+                    },
+                },
+            )
+            .unwrap();
+        let reservation = queue
+            .reserve_next(
+                &queue_scope,
+                1,
+                IdleBoundary {
+                    turn_epoch: state.generation,
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert!(!requires_authorized_dispatch(
+            &queue,
+            &queue_scope,
+            state.session_incarnation.map(|value| value.0),
+            &reservation
+        )
+        .unwrap());
     }
 
     #[cfg(unix)]
@@ -6831,6 +7767,8 @@ mod tests {
                 attachments: Vec::new(),
                 recovery_events: Vec::new(),
                 local_authority: None,
+                #[cfg(unix)]
+                paired_authority: None,
             }),
         }
         .spawn(());

@@ -66,6 +66,7 @@ impl Fixture {
         command: &str,
     ) -> BackgroundScope {
         let request = BackgroundRequest {
+            interactive: false,
             scope: BackgroundScope {
                 owner: owner.into(),
                 session: session.into(),
@@ -143,7 +144,7 @@ async fn a_completion_becomes_one_metadata_only_notice_for_the_owning_session() 
     );
     assert_eq!(
         fixture.notices("owner", &session).await,
-        vec!["Background command act-1 exited with code 3. Its output is not included; use the reviewed-output action to read it.".to_string()]
+        vec!["Background command act-1 exited with code 3. Its output is not included; output release is currently unavailable.".to_string()]
     );
     assert_eq!(
         fixture.manager.deliver_background_completions().await,

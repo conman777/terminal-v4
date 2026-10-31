@@ -1,5 +1,6 @@
 .terminal-pane-ui .thread-terminal-drawer { flex-grow: 0; flex-shrink: 0; }
 .thread-terminal-panes { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.thread-terminal-panes-stacked { flex-direction: column; }
 .thread-terminal-pane { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .thread-terminal-pane > :last-child { flex: 1; min-height: 0; }
 .thread-terminal-pane-header { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 0 4px 0 8px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font: 12px var(--font-ui); }

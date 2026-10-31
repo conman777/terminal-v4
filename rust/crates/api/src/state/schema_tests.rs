@@ -7,6 +7,45 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 #[tokio::test]
+async fn legacy_auth_schema_migrates_without_invalidating_existing_credentials() {
+    let data = tempfile::tempdir().unwrap();
+    let db = Connection::open(data.path().join("terminal.db")).unwrap();
+    db.execute_batch("CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE refresh_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL);
+        INSERT INTO users VALUES ('fixture-owner', 'fixture', 'synthetic-hash', '2020-01-01', '2020-01-01');").unwrap();
+    db.execute(
+        "INSERT INTO refresh_tokens VALUES (?, ?, ?, ?, ?)",
+        params![
+            "fixture-refresh",
+            "fixture-owner",
+            hash_token("legacy-refresh"),
+            "2099-01-01T00:00:00Z",
+            "2020-01-01"
+        ],
+    )
+    .unwrap();
+    drop(db);
+    let config = AppConfig {
+        data_dir: data.path().into(),
+        jwt_secret: "legacy-schema-fixture".into(),
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        let state = AppState::new(config.clone()).unwrap();
+        let versions: (i64, i64) = state.lock_db().unwrap().query_row("SELECT u.auth_protocol_min, r.auth_protocol FROM users u JOIN refresh_tokens r ON r.user_id=u.id WHERE u.id='fixture-owner'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+        assert_eq!(versions, (0, 0));
+        let token = issue_access_token(&state.config().jwt_secret, "fixture-owner", "fixture");
+        assert!(crate::auth::authenticate_local_token(&state, &token).is_ok());
+    }
+    let state = AppState::new(config).unwrap();
+    assert!(state
+        .refresh_auth("legacy-refresh")
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
 async fn legacy_settings_gain_missing_columns_idempotently_preserving_all_rows() {
     for partial in [false, true] {
         let data = tempfile::tempdir().unwrap();

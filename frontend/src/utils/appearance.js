@@ -1,7 +1,7 @@
 const KEY = 'tv4Appearance';
 export const ACCENTS = ['indigo', 'violet', 'teal', 'amber', 'rose'];
 export const CHAT_WIDTHS = { comfortable: '46rem', wide: '60rem', full: '100%' };
-const DEFAULTS = { accent: 'indigo', width: 'comfortable' };
+export const DEFAULTS = Object.freeze({ accent: 'indigo', width: 'comfortable' });
 
 export function loadAppearance() {
   let saved = {};

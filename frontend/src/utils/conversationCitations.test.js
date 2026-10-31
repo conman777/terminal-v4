@@ -50,4 +50,8 @@ describe('collectCitationDefinitions', () => {
     const map = collectCitationDefinitions([{ type: 'list', items: [[{ type: 'definition', label: '1' }]] }, { type: 'definition', label: '2' }]);
     expect([...map.keys()]).toEqual(['1', '2']);
   });
+  it('finds definitions in structured list items and nested alerts', () => {
+    const map = collectCitationDefinitions([{ type: 'list', items: [{ blocks: [{ type: 'alert', blocks: [{ type: 'definition', label: '1' }] }] }] }]);
+    expect([...map.keys()]).toEqual(['1']);
+  });
 });

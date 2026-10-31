@@ -4,8 +4,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-// Set E2E_QUEUED_AUTHORITY_PREVIEW=1 only against a server built with the experimental `queued-authority-preview` feature.
-const queuedAuthorityPreview = process.env.E2E_QUEUED_AUTHORITY_PREVIEW === '1';
 test.skip(process.env.E2E_BACKGROUND_DELEGATION !== '1', 'Requires an isolated local API configured with the synthetic delegation provider.');
 test.use({ launchOptions: { executablePath: process.env.E2E_LOCAL_BROWSER } });
 
@@ -55,6 +53,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 393, height: 852 }
         const approval = page.getByRole('group', { name: 'Approval required' });
         await expect(approval.getByText('Run a read-only background investigation?')).toBeVisible();
         await expect(approval.getByText('Inspect notes in the fixture project.', { exact: true })).toBeVisible();
+        await expect(approval.getByText(/can run the result automatically while your authorization remains valid/)).toBeVisible();
         await expect(approval.getByLabel('Approval details')).toBeHidden();
         const approve = approval.getByRole('button', { name: 'Approve', exact: true });
         const reachable = await approve.evaluate(button => {
@@ -66,18 +65,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 393, height: 852 }
         expect(reachable).toBe(true);
         await approve.click();
         await expect(page.getByText('Background investigation started.', { exact: true })).toBeVisible();
-        if (queuedAuthorityPreview) {
-          await expect(page.getByText('Parent received the verified background answer.', { exact: true })).toBeVisible({ timeout: 30_000 });
-        } else {
-          // The default build holds the result for review and never wakes the parent by itself.
-          if (viewport.width <= 768) await page.locator('summary[aria-label="More composer actions"]').click();
-          await page.getByRole('button', { name: 'Open follow-up queue', exact: true }).click();
-          const queue = page.getByRole('dialog', { name: 'Follow-up queue' });
-          await expect(queue.getByText(/Delegated task .*Verified fixture child answer\./s)).toBeVisible({ timeout: 30_000 });
-          await expect(queue.getByRole('button', { name: 'Resume queue', exact: true })).toBeVisible();
-          await page.keyboard.press('Escape');
-          await expect(page.getByText('Parent received the verified background answer.', { exact: true })).toHaveCount(0);
-        }
+        await expect(page.getByText('Parent received the verified background answer.', { exact: true })).toBeVisible({ timeout: 30_000 });
         expect(readFileSync(path.join(workspace, 'notes'), 'utf8')).toBe('original');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         expect(errors).toEqual([]);

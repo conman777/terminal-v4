@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, setAuthInitializing, refreshTokens, beginAuthChange, captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { resolveHomeApiUrl } from '../utils/apiBase';
+import { isStrictAuthSelected, selectStrictAuth } from '../utils/strictAuthBoundary';
 
 const AuthContext = createContext(null);
 
@@ -26,11 +27,12 @@ async function syncPreviewSession(accessToken) {
   });
 }
 
-export function AuthProvider({ children }) {
+function LegacyAuthProvider({ children }) {
   const [user, setUserState] = useState(() => getUser());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [cleanupNotice, setCleanupNotice] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
 
   const liveRef = useRef(true);
 
@@ -44,7 +46,18 @@ export function AuthProvider({ children }) {
       if (!mounted) return;
       const authenticatedUser = getAccessToken() || getRefreshToken() ? getUser() : null;
       setUserState(authenticatedUser);
-      if (authenticatedUser) setCleanupNotice('');
+      if (reason === 'damaged-history') {
+        const message = 'Local sign-in history is damaged. Save any unsaved drafts and contact your administrator; signing in will not repair it.';
+        setAuthNotice(message);
+        if (!authenticatedUser) setError(message);
+      } else if (reason === 'refresh-uncertain') {
+        const message = 'Sign-in refresh could not be confirmed. Save unsaved drafts before signing out and signing in again. If the problem continues, contact your administrator.';
+        setAuthNotice(message);
+        if (!authenticatedUser) setError(message);
+      } else if (authenticatedUser) {
+        setCleanupNotice('');
+        if (reason !== 'rotation') { setError(null); setAuthNotice(''); }
+      }
       if (reason !== 'rotation') { setLoading(false); setAuthInitializing(false); }
     });
     setAuthInitializing(true);
@@ -214,6 +227,8 @@ export function AuthProvider({ children }) {
     loading,
     error,
     cleanupNotice,
+    authNotice,
+    dismissAuthNotice: () => setAuthNotice(''),
     isAuthenticated: !!user,
     login,
     loginWithPasskeyResult,
@@ -228,10 +243,146 @@ export function AuthProvider({ children }) {
   );
 }
 
+function StrictAuthProvider({ children, strictAuth, strictBoundaryReady }) {
+  const [user, setUserState] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [strictReady, setStrictReady] = useState(false);
+  const [strictStatus, setStrictStatus] = useState('initializing');
+  const [error, setError] = useState(null);
+  const [authNotice, setAuthNotice] = useState('');
+  const mounted = useRef(false), sequence = useRef(0), readyScope = useRef(null), verifiedUser = useRef(null), subscribed = useRef(false);
+  const { lifecycle, home, validateSession } = strictAuth || {};
+  const subscribe = strictAuth?.subscribe || lifecycle?.subscribe;
+  const configuredHome = new URL(resolveHomeApiUrl('/'), window.location.origin).href;
+  const configured = Boolean(strictBoundaryReady && lifecycle && typeof lifecycle.read === 'function' && typeof lifecycle.login === 'function'
+    && typeof lifecycle.refresh === 'function' && typeof lifecycle.logout === 'function'
+    && typeof lifecycle.recoverLogin === 'function' && typeof lifecycle.resumeLogout === 'function'
+    && typeof lifecycle.recoverRetirements === 'function' && typeof lifecycle.pendingLogins === 'function' && typeof validateSession === 'function'
+    && typeof subscribe === 'function' && (lifecycle.notifications?.subscribe === subscribe || lifecycle.subscribe === subscribe)
+    && typeof lifecycle.notifications?.publish === 'function' && home === configuredHome);
+
+  const sync = useCallback(async ({ allowSignout = false, allowIdentityChange = false, expectedIncarnation, allowRefresh = true } = {}) => {
+    const request = ++sequence.current;
+    const current = () => mounted.current && request === sequence.current;
+    const hold = (status, message) => {
+      if (current()) { readyScope.current = null; setStrictReady(false); setStrictStatus(status); setAuthNotice(message); setLoading(false); }
+      return null;
+    };
+    if (!configured || !subscribed.current) return hold('unavailable', 'Sign-in authority is unavailable. Save any unsaved drafts before recovery.');
+    let snapshot;
+    try { snapshot = await lifecycle.read(); }
+    catch { return hold('unavailable', 'Sign-in authority is unavailable. Save any unsaved drafts before recovery.'); }
+    if (!current()) return null;
+    if (snapshot?.status === 'tombstone') {
+      if (verifiedUser.current && !allowSignout) return hold('signed-out', 'This session signed out. Save any unsaved drafts before leaving this workspace.');
+      readyScope.current = null; verifiedUser.current = null; setUserState(null); setStrictReady(false); setStrictStatus('signed-out'); setAuthNotice(''); setLoading(false);
+      return snapshot;
+    }
+    if (snapshot?.status !== 'active' || snapshot.refreshReserved) return hold(snapshot?.status === 'active' ? 'refresh-pending' : snapshot?.status || 'unavailable', snapshot?.status === 'unavailable' ? 'Sign-in authority is unavailable. Save any unsaved drafts before recovery.' : 'Sign-in could not be confirmed. Save any unsaved drafts before recovery.');
+    const pair = snapshot.pair;
+    if (!pair || pair.home !== home || !pair.owner || snapshot.user?.id !== pair.owner || !pair.session || !pair.accessToken || !snapshot.incarnation) return hold('unavailable', 'Sign-in authority is unavailable. Save any unsaved drafts before recovery.');
+    let validation;
+    try { validation = await validateSession({ home, owner: pair.owner, session: pair.session, incarnation: snapshot.incarnation, accessToken: pair.accessToken }); }
+    catch { return hold('unavailable', 'Sign-in could not be confirmed. Save any unsaved drafts before recovery.'); }
+    if (!current()) return null;
+    if (validation?.status === 'expired' && allowRefresh) {
+      let refreshed;
+      try { refreshed = await lifecycle.refresh({ home, owner: pair.owner, session: pair.session, incarnation: snapshot.incarnation }); }
+      catch { return hold('unavailable', 'Sign-in could not be confirmed. Save any unsaved drafts before recovery.'); }
+      if (!current()) return null;
+      if (refreshed?.status === 'active') return sync({ allowSignout, allowIdentityChange, expectedIncarnation: snapshot.incarnation, allowRefresh: false });
+      return hold(refreshed?.status || 'unavailable', 'Sign-in could not be confirmed. Save any unsaved drafts before recovery.');
+    }
+    if (validation?.status !== 'valid') return hold('unavailable', 'Sign-in could not be confirmed. Save any unsaved drafts before recovery.');
+    let latest;
+    try { latest = await lifecycle.read(); }
+    catch { return hold('unavailable', 'Sign-in authority is unavailable. Save any unsaved drafts before recovery.'); }
+    if (!current()) return null;
+    if (latest?.status !== 'active' || latest.refreshReserved || latest.revision !== snapshot.revision || latest.controlRevision !== snapshot.controlRevision
+      || latest.incarnation !== snapshot.incarnation || latest.pair?.owner !== pair.owner || latest.pair?.session !== pair.session
+      || latest.pair?.home !== home || latest.pair?.accessToken !== pair.accessToken || latest.user?.id !== pair.owner) return sync({ allowSignout, allowIdentityChange, expectedIncarnation, allowRefresh });
+    if (expectedIncarnation && latest.incarnation !== expectedIncarnation) return hold('account-changed', 'The account changed in another tab. Save any unsaved drafts before leaving this workspace.');
+    if (verifiedUser.current && verifiedUser.current.id !== latest.user.id && !allowIdentityChange) return hold('account-changed', 'The account changed in another tab. Save any unsaved drafts before leaving this workspace.');
+    readyScope.current = { incarnation: latest.incarnation, owner: pair.owner, session: pair.session, home };
+    verifiedUser.current = latest.user;
+    setUserState(latest.user); setStrictReady(true); setStrictStatus('active'); setAuthNotice(''); setError(null); setLoading(false);
+    return latest;
+  }, [configured, home, lifecycle, validateSession]);
+
+  useEffect(() => {
+    mounted.current = true;
+    let unsubscribe;
+    try {
+      if (configured) {
+        unsubscribe = subscribe(hint => { if (mounted.current) { if (hint?.status === 'unavailable') subscribed.current = false; readyScope.current = null; setStrictReady(false); void sync(); } });
+        if (typeof unsubscribe !== 'function') throw new Error('Subscription unavailable');
+        subscribed.current = true;
+      }
+    } catch { subscribed.current = false; }
+    void sync();
+    return () => { mounted.current = false; subscribed.current = false; sequence.current += 1; readyScope.current = null; if (typeof unsubscribe === 'function') unsubscribe(); };
+  }, [configured, subscribe, sync]);
+
+  const login = useCallback(async (username, password, mode = 'password') => {
+    if (!configured || !subscribed.current || !['password', 'local-testing'].includes(mode)) throw new Error('Sign-in authority is unavailable.');
+    setError(null);
+    const result = await lifecycle.login(home, { kind: mode, username, ...(mode === 'password' ? { password } : {}) });
+    const latest = await sync({ allowIdentityChange: result.status === 'active', ...(result.status === 'active' ? { expectedIncarnation: result.incarnation } : {}) });
+    if (result.status === 'active' && latest?.status === 'active' && latest.incarnation === result.incarnation) return latest.user;
+    const message = 'Sign-in could not be confirmed. Review its status before trying again.';
+    if (mounted.current) setError(message);
+    throw new Error(message);
+  }, [configured, home, lifecycle, sync]);
+
+  const register = useCallback(async (username, password) => {
+    if (!configured || !subscribed.current) throw new Error('Sign-in authority is unavailable.');
+    const result = await lifecycle.login(home, { kind: 'register', username, password });
+    const latest = await sync({ allowIdentityChange: result.status === 'active', ...(result.status === 'active' ? { expectedIncarnation: result.incarnation } : {}) });
+    if (result.status === 'active' && latest?.status === 'active' && latest.incarnation === result.incarnation) return latest.user;
+    throw new Error('Registration could not be confirmed. Review its status before trying again.');
+  }, [configured, home, lifecycle, sync]);
+
+  const action = useCallback(async (name, ...args) => {
+    if (!configured || !subscribed.current) return { status: 'unavailable' };
+    const result = await lifecycle[name](...args);
+    await sync({ allowSignout: ['logout', 'resumeLogout'].includes(name) && result.status === 'tombstone' });
+    return result;
+  }, [configured, lifecycle, sync]);
+  const refreshAuth = useCallback(async () => {
+    const scope = readyScope.current;
+    if (!scope) return { status: 'unavailable' };
+    return action('refresh', scope);
+  }, [action]);
+
+  const value = {
+    user, loading, error, authNotice, cleanupNotice: '', isAuthenticated: !!user,
+    authLifecycle: configured ? lifecycle : null, strictReady, strictStatus, refreshAuth,
+    dismissAuthNotice: () => setAuthNotice(''), login, register,
+    loginWithPasskeyResult: () => false,
+    logout: () => action('logout'), recoverLogin: intent => action('recoverLogin', intent),
+    resumeLogout: incarnation => action('resumeLogout', incarnation), recoverRetirements: () => action('recoverRetirements'),
+    pendingLogins: () => action('pendingLogins'),
+  };
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function AuthProvider(props) {
+  if (Object.hasOwn(props, 'strictAuth')) {
+    const strictBoundaryReady = selectStrictAuth();
+    return <StrictAuthProvider {...props} strictBoundaryReady={strictBoundaryReady} />;
+  }
+  if (isStrictAuthSelected()) return <StrictAuthProvider strictAuth={null} strictBoundaryReady={false}>{props.children}</StrictAuthProvider>;
+  return <LegacyAuthProvider {...props} />;
+}
+
 export function useAuth() {
   const context = useContext(AuthContext);
   if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
+}
+
+export function useOptionalAuth() {
+  return useContext(AuthContext);
 }

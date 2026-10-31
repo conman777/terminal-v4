@@ -1,3 +1,4 @@
+import '../test/authIndexedDB';
 // SCRATCH ADJACENT REGRESSION PREVIEW. These may already pass: they are not RED
 // evidence for attachment upload/draft implementation. Real apiFetch/auth; fake HTTP.
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';

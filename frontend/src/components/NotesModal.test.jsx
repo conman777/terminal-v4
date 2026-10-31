@@ -70,6 +70,22 @@ describe('NotesModal persistence', () => {
     expect(screen.queryByText('Saved')).not.toBeInTheDocument();
   });
 
+  it('does not automatically resend an unconfirmed save and explains the outcome', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const uncertain = Object.assign(new Error('The note save may have completed. Check its status before trying again.'), { outcomeUncertain: true });
+    const onUpdate = vi.fn().mockRejectedValueOnce(uncertain).mockResolvedValue();
+    await setup({ onUpdate });
+    fireEvent.change(contentInput(), { target: { value: 'First draft' } });
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByRole('alert')).toHaveTextContent(/may have completed/i);
+    fireEvent.change(contentInput(), { target: { value: 'More draft' } });
+    await act(async () => vi.advanceTimersByTimeAsync(2000));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(contentInput()).toHaveValue('More draft');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry' })));
+    expect(onUpdate).toHaveBeenCalledTimes(2);
+  });
+
   it('saves the latest edit in order when navigation happens during an autosave', async () => {
     let finishFirst;
     const onUpdate = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; })).mockResolvedValue();

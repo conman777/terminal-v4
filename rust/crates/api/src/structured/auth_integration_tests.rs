@@ -3260,6 +3260,367 @@ async fn paired_codex_and_v4_messages_reject_after_revocation_while_session_lock
     }
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paired_v4_message_expires_between_validation_and_capture_without_publication() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let config = AppConfig {
+        data_dir: data.path().into(),
+        jwt_secret: JWT.into(),
+        ..Default::default()
+    };
+    let manager = StructuredSessionManager::new(config.clone());
+    let state = crate::state::AppState::new_with_services(config, None, manager.clone()).unwrap();
+    let user = state
+        .create_local_user_for_test("fixture", "fixture-password")
+        .unwrap();
+    let session = manager
+        .create_session(
+            &user.id,
+            workspace.path().to_str().unwrap(),
+            Some("deepseek"),
+            Some("deepseek-chat"),
+            None,
+        )
+        .await
+        .unwrap();
+    let before = manager
+        .get_session(&user.id, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let (grant, paired_token) = crate::paired_environments::synthetic_input_grant(&state, &user.id);
+    let expires = time::OffsetDateTime::now_utc().unix_timestamp() + 3;
+    state
+        .lock_db()
+        .unwrap()
+        .execute(
+            "UPDATE paired_grants SET expires=?1 WHERE id=?2",
+            rusqlite::params![expires, grant],
+        )
+        .unwrap();
+    let (entered, wait_entered) = std::sync::mpsc::channel();
+    let (release, wait_release) = std::sync::mpsc::channel();
+    *manager.inner.v4_before_paired_capture.lock().unwrap() = Some((entered, wait_release));
+    struct Release(Option<std::sync::mpsc::Sender<()>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+    let mut release = Release(Some(release));
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/structured/sessions/{}/message", session.id))
+        .header("authorization", format!("Bearer {paired_token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"text":"must not be accepted", "requestId":Uuid::new_v4().to_string()})
+                .to_string(),
+        ))
+        .unwrap();
+    let request = tokio::spawn(crate::app(state.clone()).oneshot(request));
+    tokio::task::spawn_blocking(move || wait_entered.recv_timeout(Duration::from_secs(8)))
+        .await
+        .unwrap()
+        .unwrap();
+    let remaining = (expires * 1000 - crate::v4_agent::interaction::now_ms()).max(0) as u64;
+    tokio::time::sleep(Duration::from_millis(remaining + 50)).await;
+    release.0.take().unwrap().send(()).unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(8), request)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_ne!(response.status(), StatusCode::ACCEPTED);
+    let after = manager
+        .get_session(&user.id, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(after.events).unwrap(),
+        serde_json::to_value(&before.events).unwrap()
+    );
+    manager.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paired_v4_valid_grant_publishes_message() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let config = AppConfig {
+        data_dir: data.path().into(),
+        jwt_secret: JWT.into(),
+        ..Default::default()
+    };
+    let manager = StructuredSessionManager::new(config.clone());
+    let state = crate::state::AppState::new_with_services(config, None, manager.clone()).unwrap();
+    let user = state
+        .create_local_user_for_test("fixture", "fixture-password")
+        .unwrap();
+    let session = manager
+        .create_session(
+            &user.id,
+            workspace.path().to_str().unwrap(),
+            Some("deepseek"),
+            Some("deepseek-chat"),
+            None,
+        )
+        .await
+        .unwrap();
+    let (_, paired_token) = crate::paired_environments::synthetic_input_grant(&state, &user.id);
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/structured/sessions/{}/message", session.id))
+        .header("authorization", format!("Bearer {paired_token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"text":"valid paired message", "requestId":Uuid::new_v4().to_string()})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(8), crate::app(state).oneshot(request))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let after = manager
+        .get_session(&user.id, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(after.events.iter().any(|event| matches!(event, StructuredSessionEvent::UserMessageAccepted { content, .. } if content == "valid paired message")));
+    manager.close_owner(&user.id).await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paired_v4_grant_expiring_at_checkpoint_prevents_publication() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let config = AppConfig {
+        data_dir: data.path().into(),
+        jwt_secret: JWT.into(),
+        ..Default::default()
+    };
+    let manager = StructuredSessionManager::new(config.clone());
+    let state = crate::state::AppState::new_with_services(config, None, manager.clone()).unwrap();
+    let user = state
+        .create_local_user_for_test("fixture", "fixture-password")
+        .unwrap();
+    let session = manager
+        .create_session(
+            &user.id,
+            workspace.path().to_str().unwrap(),
+            Some("deepseek"),
+            Some("deepseek-chat"),
+            None,
+        )
+        .await
+        .unwrap();
+    let before = manager
+        .get_session(&user.id, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let config = state.config().clone();
+    let checkpoint_path = structured_session_path(&config, &user.id, &session.id);
+    let checkpoint_before = std::fs::read(&checkpoint_path).unwrap();
+    let (grant, paired_token) = crate::paired_environments::synthetic_input_grant(&state, &user.id);
+    let expires = time::OffsetDateTime::now_utc().unix_timestamp() + 3;
+    state
+        .lock_db()
+        .unwrap()
+        .execute(
+            "UPDATE paired_grants SET expires=?1 WHERE id=?2",
+            rusqlite::params![expires, grant],
+        )
+        .unwrap();
+    let (entered, wait_entered) = std::sync::mpsc::channel();
+    let (release, wait_release) = std::sync::mpsc::channel();
+    *manager.inner.checkpoint_before_publication.lock().unwrap() = Some((entered, wait_release));
+    struct Release(Option<std::sync::mpsc::Sender<()>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+    let mut release = Release(Some(release));
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/structured/sessions/{}/message", session.id))
+        .header("authorization", format!("Bearer {paired_token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"text":"must not be accepted", "requestId":Uuid::new_v4().to_string()})
+                .to_string(),
+        ))
+        .unwrap();
+    let request = tokio::spawn(crate::app(state.clone()).oneshot(request));
+    tokio::task::spawn_blocking(move || wait_entered.recv_timeout(Duration::from_secs(8)))
+        .await
+        .unwrap()
+        .unwrap();
+    let remaining = (expires * 1000 - crate::v4_agent::interaction::now_ms()).max(0) as u64;
+    tokio::time::sleep(Duration::from_millis(remaining + 50)).await;
+    release.0.take().unwrap().send(()).unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(8), request)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_ne!(response.status(), StatusCode::ACCEPTED);
+    let after = manager
+        .get_session(&user.id, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(after.events).unwrap(),
+        serde_json::to_value(&before.events).unwrap()
+    );
+    assert_eq!(std::fs::read(checkpoint_path).unwrap(), checkpoint_before);
+    manager.shutdown().await.unwrap();
+    drop(state);
+    drop(manager);
+    let reopened = StructuredSessionManager::new(config);
+    let restored = reopened
+        .get_session(&user.id, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(restored.events).unwrap(),
+        serde_json::to_value(before.events).unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paired_revocation_waits_for_checkpoint_and_blocks_later_messages() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let config = AppConfig {
+        data_dir: data.path().into(),
+        jwt_secret: JWT.into(),
+        ..Default::default()
+    };
+    let manager = StructuredSessionManager::new(config.clone());
+    let state = crate::state::AppState::new_with_services(config, None, manager.clone()).unwrap();
+    let user = state
+        .create_local_user_for_test("fixture", "fixture-password")
+        .unwrap();
+    let local = state
+        .login("fixture", "fixture-password")
+        .await
+        .unwrap()
+        .unwrap();
+    let session = manager
+        .create_session(
+            &user.id,
+            workspace.path().to_str().unwrap(),
+            Some("deepseek"),
+            Some("deepseek-chat"),
+            None,
+        )
+        .await
+        .unwrap();
+    let (grant, token) = crate::paired_environments::synthetic_input_grant(&state, &user.id);
+    let (entered, wait_entered) = std::sync::mpsc::channel();
+    let (release, wait_release) = std::sync::mpsc::channel();
+    *manager.inner.checkpoint_before_publication.lock().unwrap() = Some((entered, wait_release));
+    struct Release(Option<std::sync::mpsc::Sender<()>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+    let mut release = Release(Some(release));
+    let make_message = |text: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/structured/sessions/{}/message", session.id))
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"text":text,"requestId":Uuid::new_v4().to_string()}).to_string(),
+            ))
+            .unwrap()
+    };
+    let first = tokio::spawn(crate::app(state.clone()).oneshot(make_message("before revocation")));
+    tokio::task::spawn_blocking(move || wait_entered.recv_timeout(Duration::from_secs(8)))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        state.try_acquire_input_guard(&user.id).is_err(),
+        "publication retains the owner guard"
+    );
+    let revoke_request = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/environments/grants/{grant}"))
+        .header(
+            "authorization",
+            format!("Bearer {}", local.tokens.access_token),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let (started, wait_started) = tokio::sync::oneshot::channel();
+    let revoke_state = state.clone();
+    let revoke = tokio::spawn(async move {
+        let _ = started.send(());
+        crate::app(revoke_state).oneshot(revoke_request).await
+    });
+    wait_started.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !revoke.is_finished(),
+        "revocation must wait until publication releases the owner guard"
+    );
+    release.0.take().unwrap().send(()).unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(8), first)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let revoke = tokio::time::timeout(Duration::from_secs(8), revoke)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+    let after_revoke = crate::app(state)
+        .oneshot(make_message("after revocation"))
+        .await
+        .unwrap();
+    assert_ne!(after_revoke.status(), StatusCode::ACCEPTED);
+    let snapshot = manager
+        .get_session(&user.id, &session.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let accepted: Vec<&str> = snapshot
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            StructuredSessionEvent::UserMessageAccepted { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(accepted, vec!["before revocation"]);
+    manager.close_owner(&user.id).await.unwrap();
+}
+
 #[tokio::test]
 async fn paired_websocket_message_rejects_after_revocation_while_session_locked() {
     use futures_util::{SinkExt, StreamExt};
@@ -4976,6 +5337,140 @@ async fn revoked_local_authority_cannot_admit_a_waiting_v4_turn() {
         result.is_err(),
         "a turn was accepted after its credential was revoked: {result:?}"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn v4_post_publication_expiry_keeps_origin_and_cannot_delegate_unproven() {
+    use crate::v4_agent::interaction::{
+        ActionScope, ApprovalRequest, Cancellation, Interaction, TurnResources,
+    };
+    struct NoApproval(AtomicUsize);
+    #[async_trait::async_trait]
+    impl Interaction for NoApproval {
+        async fn emit(&self, _: StructuredSessionEvent) -> Result<(), String> {
+            Ok(())
+        }
+        async fn approve(&self, _: ApprovalRequest) -> Result<bool, String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+    }
+    struct Release(Option<std::sync::mpsc::Sender<()>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let state = crate::state::AppState::new(AppConfig {
+        data_dir: data.path().into(),
+        jwt_secret: JWT.into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let manager = state.structured_session_manager();
+    manager.bind_live_ownership().unwrap();
+    let supervisor = crate::v4_agent::delegation_outbox::provision_supervisor(data.path()).unwrap();
+    manager
+        .bind_delegation_supervisor(supervisor.clone())
+        .unwrap();
+    let session = manager
+        .create_session(
+            "owner",
+            workspace.path().to_str().unwrap(),
+            Some("deepseek"),
+            Some("deepseek-chat"),
+            None,
+        )
+        .await
+        .unwrap();
+    let expiry = crate::v4_agent::interaction::now_ms() + 3_000;
+    let authority = crate::auth::LocalAuthority::for_test("owner", 0, expiry);
+    let (entered, wait_entered) = std::sync::mpsc::channel();
+    let (release, wait_release) = std::sync::mpsc::channel();
+    let (observed, wait_observed) = std::sync::mpsc::channel();
+    *manager.inner.v4_after_publication.lock().unwrap() = Some((entered, wait_release, observed));
+    let mut release = Release(Some(release));
+    let request = tokio::spawn({
+        let manager = manager.clone();
+        let state = state.clone();
+        let id = session.id.clone();
+        async move {
+            manager
+                .submit_authorized(
+                    "owner",
+                    &id,
+                    "fixture request",
+                    Some(&Uuid::new_v4().to_string()),
+                    Some(&authority),
+                    &state,
+                )
+                .await
+        }
+    });
+    tokio::task::spawn_blocking(move || wait_entered.recv_timeout(Duration::from_secs(8)))
+        .await
+        .unwrap()
+        .unwrap();
+    let remaining = (expiry - crate::v4_agent::interaction::now_ms()).max(0) as u64;
+    tokio::time::sleep(Duration::from_millis(remaining + 50)).await;
+    release.0.take().unwrap().send(()).unwrap();
+    let receipt = tokio::time::timeout(Duration::from_secs(8), request)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.status, "accepted");
+    let retained =
+        tokio::task::spawn_blocking(move || wait_observed.recv_timeout(Duration::from_secs(8)))
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(retained.as_ref().is_some_and(|authority| authority
+        .valid_for("owner", crate::v4_agent::interaction::now_ms())
+        .is_none()));
+    let scope = ActionScope {
+        owner: "owner".into(),
+        session_id: session.id.clone(),
+        turn_id: Uuid::new_v4().to_string(),
+    };
+    let turn = Arc::new(
+        crate::v4_agent::delegation_outbox::DelegationTurn::new(
+            manager.clone(),
+            supervisor,
+            scope.clone(),
+            1,
+        )
+        .unwrap(),
+    );
+    let engine: crate::v4_agent::Session = serde_json::from_value(json!({
+        "id": engine_session_id(&session.id).unwrap(), "provider":"deepseek", "model":"deepseek-chat", "workspace":workspace.path().canonicalize().unwrap(), "messages":[], "history":[], "updated_at":""
+    })).unwrap();
+    let interaction = NoApproval(AtomicUsize::new(0));
+    let cancellation = Cancellation::default();
+    let resources = Arc::new(TurnResources::default());
+    let result = turn
+        .execute(
+            data.path(),
+            &engine,
+            "post-publication",
+            &json!({"prompt":"inspect"}),
+            crate::v4_agent::delegation_outbox::DelegationInvocation {
+                scope: &scope,
+                interaction: &interaction,
+                cancellation: &cancellation,
+                resources: &resources,
+                authority: retained.as_ref(),
+            },
+        )
+        .await;
+    assert!(result.unwrap_err().contains("expired"));
+    assert_eq!(interaction.0.load(Ordering::SeqCst), 0);
+    manager.close_owner("owner").await.unwrap();
 }
 
 #[tokio::test]

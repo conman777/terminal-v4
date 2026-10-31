@@ -303,6 +303,47 @@ fn gone(pid: i32) -> bool {
     result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
+#[tokio::test]
+async fn upgraded_session_cannot_create_background_actor_without_session_fence() {
+    let fixture = fixture().await;
+    let (background, _, _) = actor_fixture(&fixture).await;
+    let workspace = fixture._workspace.path().canonicalize().unwrap();
+    let scope = ActionScope {
+        owner: "owner".into(),
+        session_id: fixture.id.clone(),
+        turn_id: "turn-7".into(),
+    };
+    let legacy = crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX);
+    let upgraded = crate::auth::LocalAuthority::for_test_session(
+        "owner",
+        0,
+        i64::MAX,
+        &Uuid::new_v4().to_string(),
+    );
+    assert!(BackgroundTurn::new(
+        fixture.manager.clone(),
+        background.clone(),
+        scope.clone(),
+        7,
+        workspace.clone(),
+        fixture.controller.clone(),
+        legacy
+    )
+    .is_ok());
+    assert!(BackgroundTurn::new(
+        fixture.manager.clone(),
+        background,
+        scope,
+        7,
+        workspace,
+        fixture.controller.clone(),
+        upgraded
+    )
+    .is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
 async fn wait_gone(pid: i32) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while !gone(pid) {
@@ -372,7 +413,7 @@ async fn a_completed_command_is_announced_to_its_session_exactly_once_without_it
         vec![(
             action.clone(),
             format!(
-                "Background command {action} exited with code 0. Its output is not included; use the reviewed-output action to read it."
+                "Background command {action} exited with code 0. Its output is not included; output release is currently unavailable."
             )
         )]
     );
@@ -431,7 +472,10 @@ async fn a_read_only_child_turn_is_not_offered_and_cannot_call_background_tools(
     assert_eq!(background.pending_completions().unwrap(), vec![]);
 
     let standard = scripted_turn(&bench, &background, |_, _| stop(), allow_all, false).await;
-    assert_eq!(standard.background_tools_offered(0), 5);
+    assert_eq!(
+        standard.background_tools_offered(0),
+        crate::v4_agent::background_process::tool::definitions().len()
+    );
     fixture.manager.shutdown().await.unwrap();
 }
 
@@ -524,7 +568,10 @@ async fn denied_approvals_neither_start_a_process_nor_release_output() {
     let results = turn.results();
     assert_eq!(results[1]["state"], "exited");
     assert!(
-        results[2].as_str().unwrap().contains("denied"),
+        results[2]
+            .as_str()
+            .unwrap()
+            .contains("User denied releasing background output"),
         "{:?}",
         results[2]
     );
@@ -1349,7 +1396,10 @@ mod production {
         let run = run_isolated(Some("1"), "approve", "printf enabled > marker").await;
         assert!(run.status.success(), "{}", run.output);
         assert_eq!(run.requests.len(), 2, "{}", run.output);
-        assert_eq!(offered(&run.requests[0]), 5);
+        assert_eq!(
+            offered(&run.requests[0]),
+            crate::v4_agent::background_process::tool::definitions().len()
+        );
         assert_eq!(
             std::fs::read_to_string(run.workspace.path().join("marker")).unwrap(),
             "enabled"

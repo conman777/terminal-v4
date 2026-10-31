@@ -4,6 +4,7 @@ import { WorkspaceToolsButton } from './WorkspaceToolsButton';
 import { useState } from 'react';
 import { MobileDrawerContext } from '../contexts/MobileDrawerContext';
 
+vi.mock('./WorkspaceBoardPanel', () => ({ WorkspaceBoardPanel: ({ workspacePath }) => <p>Board workspace: {workspacePath}</p> }));
 vi.mock('./WorkspaceGitPanel', () => ({ WorkspaceGitPanel: ({ onStartTask }) => <button onClick={() => onStartTask('/worktree')}>Open managed task</button> }));
 vi.mock('./SessionHistorySearch', () => ({ SessionHistorySearch: ({ onSelectSession }) => <button onClick={() => onSelectSession('saved-session')}>Open saved conversation</button> }));
 vi.mock('./WorkspaceTasksPanel', () => ({ WorkspaceTasksPanel: ({ currentSessionId }) => {
@@ -18,6 +19,11 @@ vi.mock('./CollaborationPanel',()=>({CollaborationPanel:({sessionId})=><p>Share 
 vi.mock('./SessionReplayPanel',()=>({SessionReplayPanel:({sessionId})=><p>Replay session: {sessionId}</p>}));
 vi.mock('./WorkspaceRewindPanel', () => ({ WorkspaceRewindPanel: () => <p>Rewind workspace</p> }));
 describe('WorkspaceToolsButton', () => {
+  it('does not offer the task board while its backend is unavailable', () => {
+    render(<WorkspaceToolsButton workspacePath="/project" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }));
+    expect(screen.queryByRole('tab', { name: 'Task board' })).not.toBeInTheDocument();
+  });
   it('reads the latest completed response when navigation opens the tools', () => {
     let response = 'Earlier answer';
     const readLatestAssistantText = vi.fn(() => response);

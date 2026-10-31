@@ -14,6 +14,59 @@ fn fixture(path: &Path) -> (AppState, AuthenticatedUser) {
 }
 
 #[test]
+fn notes_do_not_wait_for_a_busy_file_lock() {
+    let data = tempfile::tempdir().unwrap();
+    let (state, user) = fixture(data.path());
+    let _held = state.lock_files().unwrap();
+    assert_eq!(
+        state.list_notes(&user).unwrap_err(),
+        "Notes storage is busy or unavailable"
+    );
+}
+
+#[test]
+fn note_lock_covers_equivalent_sanitized_and_case_insensitive_paths() {
+    let data = tempfile::tempdir().unwrap();
+    let (state, user) = fixture(data.path());
+    let alias = AuthenticatedUser {
+        user_id: "UTILITY_fixture".into(),
+        username: "synthetic".into(),
+    };
+    let canonical = AuthenticatedUser {
+        user_id: "utilityfixture".into(),
+        username: user.username,
+    };
+    assert_eq!(
+        state.note_storage_id(&alias).unwrap(),
+        state.note_storage_id(&canonical).unwrap()
+    );
+}
+
+#[test]
+fn note_owner_check_rejects_case_and_sanitization_aliases() {
+    let db = Connection::open_in_memory().unwrap();
+    db.execute_batch(
+        "CREATE TABLE users(id TEXT PRIMARY KEY); INSERT INTO users(id) VALUES('owner-a');",
+    )
+    .unwrap();
+    assert!(AppState::verify_note_owner(&db, "owner-a").is_ok());
+    assert_eq!(
+        AppState::verify_note_owner(&db, "unknown").unwrap_err(),
+        NOTE_OWNER_AMBIGUOUS
+    );
+    db.execute("INSERT INTO users(id) VALUES('OWNER-_A')", [])
+        .unwrap();
+    assert_eq!(
+        AppState::verify_note_owner(&db, "owner-a").unwrap_err(),
+        NOTE_OWNER_AMBIGUOUS
+    );
+    assert_eq!(
+        AppState::verify_note_owner(&db, "OWNER-_A").unwrap_err(),
+        NOTE_OWNER_AMBIGUOUS
+    );
+}
+
+#[test]
 fn deleted_seed_stays_deleted_after_reload_and_restart() {
     let data = tempfile::tempdir().unwrap();
     let (state, user) = fixture(data.path());

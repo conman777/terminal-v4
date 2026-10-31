@@ -22,6 +22,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   attachCustomKeyEventHandler(fn) { this.keyHandler = fn; }
   attachCustomWheelEventHandler(fn) { this.wheel = fn; }
   loadAddon() {} focus() {} blur() {} refresh() {} resize() {} dispose() {}
+  registerLinkProvider(provider) { this.linkProvider = provider; return { dispose() {} }; }
   hasSelection() { return false; }
   getSelection() { return ''; }
   scrollLines() {} scrollToBottom() {} scrollToTop() {}
@@ -36,7 +37,7 @@ vi.mock('../contexts/TerminalSessionContext', () => ({ useTerminalSession: () =>
 vi.mock('../hooks/useMobileDetect', () => ({ useMobileDetect: () => false }));
 vi.mock('../hooks/useIdleDetection', () => ({ useIdleDetection: () => ({ hasUserInputRef: { current: false }, markUserInput() {}, resetUserInput() {}, resetIdleTimer() {}, cleanup() {} }) }));
 vi.mock('../hooks/useFaviconFlash', () => ({ useFaviconFlash: () => ({ startFaviconFlash() {}, stopFaviconFlash() {} }) }));
-vi.mock('../utils/auth', () => ({ getAccessToken: () => 'synthetic', isAccessTokenExpired: () => false, refreshTokens: async () => ({ accessToken: 'synthetic' }) }));
+vi.mock('../utils/auth', async original => ({ ...(await original()), getAccessToken: () => 'synthetic', isAccessTokenExpired: () => false, refreshTokens: async () => ({ accessToken: 'synthetic' }) }));
 vi.mock('../utils/clipboardImage', async original => ({ ...(await original()), getImageFileFromDataTransfer: (...args) => fx.inspect(...args) }));
 vi.mock('../utils/api', () => ({ uploadScreenshot: (...args) => fx.upload(...args), apiFetch: async url => {
   fx.requests.push(url); const u = new URL(url, 'http://localhost');
@@ -92,6 +93,8 @@ describe('TerminalChat paste and retained history', () => {
     const key = (init) => ({ type: 'keydown', defaultPrevented: false, ctrlKey: false, metaKey: false, shiftKey: false, ...init });
     expect(term.keyHandler(key({ key: 'Tab' }))).toBe(true);
     expect(term.textarea.getAttribute('aria-description')).toMatch(/Control\+M/);
+    expect(term.keyHandler(key({ key: 'm', ctrlKey: true, altKey: true }))).toBe(true);
+    expect(term.keyHandler(key({ key: 'Tab' }))).toBe(true);
     expect(term.keyHandler(key({ key: 'm', ctrlKey: true }))).toBe(false);
     expect([term.keyHandler(key({ key: 'Tab' })), term.keyHandler(key({ key: 'Tab', shiftKey: true }))]).toEqual([false, false]);
     expect(term.textarea.getAttribute('aria-description')).toMatch(/Tab moves focus/);

@@ -5,7 +5,7 @@ import { KeyboardShortcutsSetting } from './KeyboardShortcutsSetting';
 import { UsageSummary } from './UsageSummary';
 import { TelegramSetting } from './TelegramSetting';
 import { getActiveEnvironment } from '../utils/remoteEnvironments';
-import { useState, useRef, useEffect, useLayoutEffect, useId, useMemo } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useId, useMemo, useSyncExternalStore } from 'react';
 import './SettingsModal.css';
 import './UtilityDialogs.css';
 import { FolderBrowserModal } from './FolderBrowserModal';
@@ -17,6 +17,7 @@ import { MountOnFirstOpen } from './MountOnFirstOpen';
 import { apiFetch } from '../utils/api';
 import { isStructuredSessionId } from '../utils/structuredSessions';
 import { getTerminalRendererGuardReason, resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
+import { getComposerScrollPreference, setComposerScrollPreference, subscribeComposerScrollPreference } from '../utils/composerScrollPreference';
 
 const dialogSelector = 'dialog, [role="dialog"], [role="alertdialog"]';
 
@@ -59,6 +60,8 @@ export function SettingsModal({
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const [activeSection, setActiveSection] = useState('workspace');
+  const collapseOnScroll = useSyncExternalStore(subscribeComposerScrollPreference, getComposerScrollPreference, () => true);
+  const [composerPreferenceWarning, setComposerPreferenceWarning] = useState(false);
   const [dirtySections, setDirtySections] = useState({});
   const dirtyHandlers = useMemo(() => Object.fromEntries(['mcp', 'browser', 'knowledge', 'connections'].map(section => [section, dirty => {
     setDirtySections(previous => previous[section] === dirty ? previous : { ...previous, [section]: dirty });
@@ -470,6 +473,22 @@ export function SettingsModal({
               </div>
               <div className="session-settings-panel session-settings-panel-compact">
                 <AppearanceSetting />
+              </div>
+
+              <div className="session-settings-panel session-settings-panel-compact">
+                <div className="form-group session-settings-field">
+                  <label>Composer while reading</label>
+                  <div className="mode-toggle" role="group" aria-label="Compact composer on scroll">
+                    <button type="button" className={`mode-btn ${collapseOnScroll ? 'active' : ''}`}
+                      aria-label="Compact composer while scrolling" aria-pressed={collapseOnScroll}
+                      onClick={() => setComposerPreferenceWarning(!setComposerScrollPreference(true))}>Compact</button>
+                    <button type="button" className={`mode-btn ${!collapseOnScroll ? 'active' : ''}`}
+                      aria-label="Keep composer expanded" aria-pressed={!collapseOnScroll}
+                      onClick={() => setComposerPreferenceWarning(!setComposerScrollPreference(false))}>Expanded</button>
+                  </div>
+                  <small>Choose whether the desktop composer shrinks while you scroll a conversation. This preference is saved in this browser.</small>
+                  {composerPreferenceWarning && <small role="alert">Could not save this preference. It will apply only in this tab until it closes.</small>}
+                </div>
               </div>
 
               <div className="session-settings-panel session-settings-panel-compact">

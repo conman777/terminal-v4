@@ -260,14 +260,16 @@ an explicit, separately identified action for an already-running queue; it does
 not repeat the recovered message or release manual, restart or error holds. A
 held queue must be reviewed and resumed separately. A successful wake requests
 processing; it does not prove that a message was delivered, and it remains
-available while a running queue has pending items. In the default build, or when
-any pending item lacks a durable authorization proof, Wake instead holds the
-queue for review. Check the conversation before manually sending unsent work.
-The experimental `queued-authority-preview` build can process proof-bearing
-work after checking its authorization at dispatch. The existing Resume action
-still has legacy dispatch behavior in default builds; it does not provide this
-proof check. If wake confirmation is uncertain, its operation identity is
-retained for a safe retry. Older servers that do not support Wake reject it.
+available while a running queue has pending items. Wake holds the queue for
+review when a pending item lacks a durable authorization proof. On Unix,
+proof-bearing work is checked at dispatch in both the default build and the
+experimental `queued-authority-preview` build. In the default build, Resume
+can still process proofless legacy work for accounts on authentication protocol
+0; after protocol 1 is activated, that work is held rather than published.
+The protocol-1 path remains experimental and is not enabled for normal login.
+Check the conversation before manually sending unsent work. If wake confirmation
+is uncertain, its operation identity is retained for a safe retry. Older servers
+that do not support Wake reject it.
 
 The queue store supports a durable identity for a future background-delegation
 binding. Existing queues without an identity remain readable; requesting one

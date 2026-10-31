@@ -1,0 +1,10 @@
+.workspace-board { display: grid; gap: 1rem; min-width: 0; }
+.workspace-board h3, .workspace-board h4, .workspace-board p { margin: 0 0 .5rem; overflow-wrap: anywhere; }
+.workspace-board form, .workspace-board-item, .workspace-board-notice { border: 1px solid var(--border-color, #555); border-radius: 8px; padding: .75rem; min-width: 0; }
+.workspace-board label { display: grid; gap: .25rem; margin-bottom: .75rem; }
+.workspace-board input, .workspace-board textarea, .workspace-board select { box-sizing: border-box; width: 100%; min-width: 0; color: inherit; background: var(--bg-secondary, #222); border: 1px solid var(--border-color, #777); border-radius: 4px; padding: .5rem; font: inherit; }
+.workspace-board textarea { min-height: 4rem; resize: vertical; }
+.workspace-board-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: start; }
+.workspace-board-actions button, .workspace-board-actions summary, .workspace-board-notice button { cursor: pointer; }
+.workspace-board-text { white-space: pre-wrap; }
+.workspace-board fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }

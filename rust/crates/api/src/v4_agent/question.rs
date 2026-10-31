@@ -16,6 +16,8 @@ struct Question {
     question: String,
     header: Option<String>,
     options: Option<Vec<OptionItem>>,
+    #[serde(default, rename = "multiSelect")]
+    multi_select: bool,
 }
 
 #[derive(Deserialize)]
@@ -36,8 +38,8 @@ fn text_valid(text: &str, max: usize) -> bool {
 fn parse(input: &Value) -> Result<Arguments, String> {
     let args: Arguments =
         serde_json::from_value(input.clone()).map_err(|_| "Invalid question arguments")?;
-    if args.questions.is_empty() || args.questions.len() > 4 {
-        return Err("Ask one to four questions".into());
+    if args.questions.is_empty() || args.questions.len() > 5 {
+        return Err("Ask one to five questions".into());
     }
     let mut ids = HashSet::new();
     for question in &args.questions {
@@ -54,6 +56,9 @@ fn parse(input: &Value) -> Result<Arguments, String> {
                 .is_some_and(|s| !text_valid(s, 80))
         {
             return Err("Invalid question text or duplicate ID".into());
+        }
+        if question.multi_select && question.options.is_none() {
+            return Err("Multi-select questions need choices".into());
         }
         if let Some(options) = &question.options {
             if options.len() < 2 || options.len() > 6 {
@@ -91,15 +96,42 @@ pub(super) fn validate_answers(input: &Value, answers: &Value) -> Result<(), Str
             .get(&question.id)
             .and_then(Value::as_array)
             .ok_or("Answer every question exactly once")?;
-        if values.len() != 1 || !values[0].as_str().is_some_and(|s| text_valid(s, 4000)) {
-            return Err("Each answer must be one non-empty text value".into());
+        if !question.multi_select {
+            if values.len() != 1 || !values[0].as_str().is_some_and(|s| text_valid(s, 4000)) {
+                return Err("Each answer must be one non-empty text value".into());
+            }
+            continue;
+        }
+        let options = question
+            .options
+            .as_ref()
+            .ok_or("Multi-select questions need choices")?;
+        if values.is_empty() || values.len() > options.len() + 1 {
+            return Err("Select at least one choice and at most one custom answer".into());
+        }
+        let mut unique = HashSet::new();
+        let mut custom = 0;
+        for value in values {
+            let text = value
+                .as_str()
+                .filter(|text| text_valid(text, 4000))
+                .ok_or("Invalid answer text")?;
+            if !unique.insert(text) {
+                return Err("Duplicate answers are not allowed".into());
+            }
+            if !options.iter().any(|option| option.label == text) {
+                custom += 1;
+            }
+        }
+        if custom > 1 {
+            return Err("At most one custom answer is allowed".into());
         }
     }
     Ok(())
 }
 
 pub(super) fn definition() -> Value {
-    json!({"name":"ask_user","description":"Ask one to four clarifying questions in an interactive conversation. The user can choose an option or enter free text; do not request passwords or secrets. Unattended runs cannot answer.","parameters":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9_.-]{1,64}$"},"question":{"type":"string"},"header":{"type":"string"},"options":{"type":"array","minItems":2,"maxItems":6,"items":{"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label"],"additionalProperties":false}}},"required":["id","question"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}})
+    json!({"name":"ask_user","description":"Ask one to five clarifying questions in an interactive conversation. Set multiSelect to true when the user may choose several options; options are required for multi-select. The user may also provide one custom answer. Do not request passwords or secrets. Unattended runs cannot answer.","parameters":{"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":5,"items":{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9_.-]{1,64}$"},"question":{"type":"string"},"header":{"type":"string"},"multiSelect":{"type":"boolean"},"options":{"type":"array","minItems":2,"maxItems":6,"items":{"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label"],"additionalProperties":false}}},"required":["id","question"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}})
 }
 
 pub(super) async fn execute(
@@ -143,6 +175,9 @@ mod tests {
     fn questions() -> Value {
         json!({"questions":[{"id":"target","header":"Target","question":"Which device?","options":[{"label":"Phone"},{"label":"Desktop"}]}]})
     }
+    fn multi_questions() -> Value {
+        json!({"questions":[{"id":"target","header":"Target","question":"Which devices?","multiSelect":true,"options":[{"label":"Phone"},{"label":"Desktop"}]}]})
+    }
     struct Respond {
         requests: Mutex<Vec<ApprovalRequest>>,
     }
@@ -180,6 +215,28 @@ mod tests {
         assert!(validate_answers(&questions(), &json!({"target":["Phone","Desktop"]})).is_err());
         assert!(validate_answers(&questions(), &json!({"target":["Other choice"]})).is_ok());
         assert!(validate_answers(&questions(), &json!({"target":["é".repeat(4000)]})).is_ok());
+    }
+    #[test]
+    fn multi_select_is_explicit_bounded_and_retains_legacy_single_answers() {
+        let multi = json!({"questions":[{"id":"devices","question":"Which devices?","multiSelect":true,"options":[{"label":"Phone"},{"label":"Desktop"}]}]});
+        assert!(validate_questions(&multi).is_ok());
+        assert!(validate_answers(&multi, &json!({"devices":["Phone","Desktop","Tablet"]})).is_ok());
+        assert!(validate_answers(&multi, &json!({"devices":["Phone","Phone"]})).is_err());
+        assert!(validate_answers(&multi, &json!({"devices":["Tablet","Laptop"]})).is_err());
+        assert!(validate_answers(&multi, &json!({"devices":[]})).is_err());
+        assert!(validate_answers(&questions(), &json!({"target":["Phone","Desktop"]})).is_err());
+        assert!(validate_questions(
+            &json!({"questions":[{"id":"x","question":"Which?","multiSelect":true}]})
+        )
+        .is_err());
+        let five: Vec<Value> = (0..5)
+            .map(|i| json!({"id":format!("q{i}"),"question":"Which?"}))
+            .collect();
+        assert!(validate_questions(&json!({"questions":five})).is_ok());
+        let six: Vec<Value> = (0..6)
+            .map(|i| json!({"id":format!("q{i}"),"question":"Which?"}))
+            .collect();
+        assert!(validate_questions(&json!({"questions":six})).is_err());
     }
     #[tokio::test]
     async fn unanswered_unattended_question_fails_without_waiting() {
@@ -296,7 +353,7 @@ mod tests {
                 let mut requests = captured.lock().unwrap();
                 requests.push(body);
                 Json(if requests.len() == 1 {
-                    json!({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"provider-question","type":"function","function":{"name":"ask_user","arguments":questions().to_string()}}]}}]})
+                    json!({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"provider-question","type":"function","function":{"name":"ask_user","arguments":multi_questions().to_string()}}]}}]})
                 } else { json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Phone selected"}}]}) })
             }
         }));
@@ -379,7 +436,7 @@ mod tests {
                 } = event
                 {
                     assert_eq!(tool_name, "ask_user");
-                    assert_eq!(tool_input, questions());
+                    assert_eq!(tool_input, multi_questions());
                     break id;
                 }
             };
@@ -387,7 +444,7 @@ mod tests {
             let response = app.oneshot(Request::builder().method("POST").uri(format!("/api/structured/sessions/{id}/approve"))
                 .header("Authorization", format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
-                .body(Body::from(json!({"approvalId":approval_id,"approved":true,"answers":{"target":["Phone"]}}).to_string())).unwrap()).await.unwrap();
+                .body(Body::from(json!({"approvalId":approval_id,"approved":true,"answers":{"target":["Phone","Desktop","Tablet"]}}).to_string())).unwrap()).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
         };
         let (result, ()) = tokio::join!(run, answer);
@@ -397,7 +454,7 @@ mod tests {
         assert_eq!(tool["tool_call_id"], "provider-question");
         assert_eq!(
             serde_json::from_str::<Value>(tool["content"].as_str().unwrap()).unwrap(),
-            json!({"answers":{"target":["Phone"]}})
+            json!({"answers":{"target":["Phone","Desktop","Tablet"]}})
         );
         server.abort();
     }

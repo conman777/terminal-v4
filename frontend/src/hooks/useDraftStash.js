@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { loadStash, stashDraft, takeStashed } from '../utils/draftStash';
+import { loadStash, stashDraft, stashFailureMessage, takeStashed } from '../utils/draftStash';
 import { getEnvironmentCacheScope, subscribeEnvironment } from '../utils/remoteEnvironments';
 
-const STASH_FAILED = 'This draft could not be stashed on this device, so it was kept in the composer. Free local storage and try again.';
 const scopeKey = () => { const scope = getEnvironmentCacheScope(); return `${scope.identity}|${scope.environment}`; };
 
 export function useDraftStash() {
@@ -13,7 +12,7 @@ export function useDraftStash() {
 
   const stash = useCallback(text => {
     const result = stashDraft(text);
-    if (!result.ok) { setError(STASH_FAILED); return false; }
+    if (!result.ok) { setError(stashFailureMessage(result)); return false; }
     setError('');
     setItems(result.items);
     return true;

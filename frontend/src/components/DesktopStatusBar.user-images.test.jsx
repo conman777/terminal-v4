@@ -32,7 +32,7 @@ function props(overrides = {}) {
 const send = () => screen.getByRole('button', { name: 'Send to terminal' });
 const textbox = () => screen.getByRole('textbox', { name: 'Command composer' });
 const transfer = files => ({ types: ['Files'], files, items: files.map(file => ({ kind: 'file', type: file.type, getAsFile: () => file })), getData: () => '' });
-beforeEach(() => { vi.clearAllMocks(); getImageFileFromDataTransfer.mockResolvedValue(null); });
+beforeEach(() => { Object.keys(localStorage).filter(key => key.startsWith('tv4:file-transfer-review:v1:')).forEach(key => localStorage.removeItem(key)); vi.clearAllMocks(); getImageFileFromDataTransfer.mockResolvedValue(null); });
 afterEach(() => vi.restoreAllMocks());
 
 describe('owned image controller presentation in the real shared StatusBar', () => {
@@ -99,6 +99,104 @@ describe('owned image controller presentation in the real shared StatusBar', () 
     expect(uploadScreenshot).not.toHaveBeenCalled(); expect(apiFetch).not.toHaveBeenCalled();
   });
 
+  it('does not submit folder entries to the image controller', async () => {
+    const userImages = controller({ items: [] });
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft' })} />);
+    const file = new File(['a'], 'one.png', { type: 'image/png' });
+    await act(async () => { fireEvent.drop(textbox().closest('form'), { dataTransfer: { types: ['Files'], files: [file], items: [{ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }] } }); });
+    expect(userImages.addFiles).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/folders.*cannot.*attached/i);
+    expect(textbox()).toHaveValue('Keep this draft');
+    expect(send()).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(send()).toBeEnabled();
+  });
+
+  it('rejects folder entries on paste without changing the draft', async () => {
+    const userImages = controller({ items: [] }), onComposerChange = vi.fn();
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft', onComposerChange })} />);
+    const file = new File(['a'], 'one.png', { type: 'image/png' });
+    await act(async () => { fireEvent.paste(textbox(), { clipboardData: { files: [file], items: [{ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }], getData: () => 'replace text' } }); });
+    expect(userImages.addFiles).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/folders.*cannot.*attached/i);
+    expect(onComposerChange).not.toHaveBeenCalled();
+  });
+
+  it('holds sending when an image batch is rejected until the user reviews it', async () => {
+    const userImages = controller({ items: [], addFiles: vi.fn(async () => { throw new Error('Unsupported image'); }) });
+    const onComposerSubmit = vi.fn();
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft', onComposerSubmit })} />);
+    const file = new File(['a'], 'bad.svg', { type: 'image/svg+xml' });
+    await act(async () => { fireEvent.drop(textbox().closest('form'), { dataTransfer: transfer([file]) }); });
+    expect(screen.getByRole('alert')).toHaveTextContent('Unsupported image');
+    expect(send()).toBeDisabled();
+    fireEvent.submit(textbox().closest('form'));
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(send()).toBeEnabled();
+  });
+
+  it('restores the review hold for a rejected image batch after remount', async () => {
+    const userImages = controller({ items: [], addFiles: vi.fn(async () => { throw new Error('Unsupported image'); }) });
+    const view = render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft' })} />);
+    await act(async () => { fireEvent.drop(textbox().closest('form'), { dataTransfer: transfer([new File(['a'], 'bad.svg', { type: 'image/svg+xml' })]) }); });
+    expect(send()).toBeDisabled();
+    view.unmount();
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft' })} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/previous file selection.*check/i);
+    expect(send()).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(send()).toBeEnabled();
+  });
+
+  it('blocks same-tick submission while an image batch is still being admitted', async () => {
+    let finish;
+    const userImages = controller({ items: [], addFiles: vi.fn(() => new Promise(resolve => { finish = resolve; })) });
+    const onComposerSubmit = vi.fn();
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft', onComposerSubmit })} />);
+    const file = new File(['a'], 'one.png', { type: 'image/png' });
+    act(() => {
+      fireEvent.drop(textbox().closest('form'), { dataTransfer: transfer([file]) });
+      textbox().closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      fireEvent.keyDown(textbox(), { key: 'Enter' });
+    });
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    expect(send()).toBeDisabled();
+    await act(async () => finish());
+    expect(send()).toBeEnabled();
+  });
+
+  it('keeps a review record if an image selection is still pending when the composer unmounts', async () => {
+    let finish;
+    const userImages = controller({ items: [], addFiles: vi.fn(() => new Promise(resolve => { finish = resolve; })) });
+    const view = render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft' })} />);
+    fireEvent.drop(textbox().closest('form'), { dataTransfer: transfer([new File(['a'], 'one.png', { type: 'image/png' })]) });
+    expect(send()).toBeDisabled();
+    view.unmount();
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft' })} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/previous file selection.*check/i);
+    expect(send()).toBeDisabled();
+    await act(async () => finish());
+    expect(send()).toBeDisabled();
+  });
+
+  it('does not submit between a rejected image batch and its review state rendering', async () => {
+    let reject;
+    const userImages = controller({ items: [], addFiles: vi.fn(() => new Promise((_, fail) => { reject = fail; })) });
+    const onComposerSubmit = vi.fn();
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft', onComposerSubmit })} />);
+    const file = new File(['a'], 'one.png', { type: 'image/png' });
+    fireEvent.drop(textbox().closest('form'), { dataTransfer: transfer([file]) });
+    await act(async () => {
+      reject(new Error('Synthetic rejection'));
+      for (let index = 0; index < 10; index += 1) await Promise.resolve();
+      textbox().closest('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    expect(send()).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Continue with current files' })).toBeVisible();
+  });
+
   it('keeps false, unknown, and paired admission blocked without silently sending the text alone', async () => {
     for (const reason of ['This model does not accept images.', 'Image support is not confirmed for this model.', 'Images are available on your home server. Switch from the paired environment to attach images.']) {
       const userImages = controller({ admission: { state: 'blocked', reason }, canAdd: false, canSend: false });
@@ -154,6 +252,23 @@ describe('owned image controller presentation in the real shared StatusBar', () 
     render(<DesktopStatusBar {...props({ userImages, composerValue: raw, onComposerSubmit })} />);
     expect(screen.getByRole('button', { name: 'Add image' })).toBeDisabled(); expect(send()).toBeEnabled(); fireEvent.click(send());
     expect(onComposerSubmit).toHaveBeenCalledExactlyOnceWith(raw);
+  });
+
+  it.each(['paste', 'drop'])('requires review when an image %s cannot be admitted to a text-only draft', async source => {
+    const userImages = controller({ items: [], admission: { state: 'blocked', reason: 'Image support is not confirmed for this model.' }, canAdd: false, canSend: true });
+    const onComposerSubmit = vi.fn();
+    render(<DesktopStatusBar {...props({ userImages, composerValue: 'Keep this draft', onComposerSubmit })} />);
+    const files = [new File(['a'], 'blocked.png', { type: 'image/png' })];
+    await act(async () => {
+      if (source === 'paste') fireEvent.paste(textbox(), { clipboardData: transfer(files) });
+      else fireEvent.drop(textbox().closest('form'), { dataTransfer: transfer(files) });
+    });
+    expect(userImages.addFiles).not.toHaveBeenCalled();
+    expect(send()).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Continue with current files' })).toBeVisible();
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(send()).toBeEnabled();
   });
 
   it('preserves the legacy filesystem screenshot path when no owned controller is supplied', async () => {

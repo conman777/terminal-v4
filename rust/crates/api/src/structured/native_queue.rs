@@ -74,8 +74,18 @@ pub(super) fn drain_gate(state: &StructuredSessionState) -> DrainGate {
 }
 
 static FENCE_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
-static RETRYING: std::sync::Mutex<Vec<(PathBuf, String, String)>> =
+static RETRYING: std::sync::Mutex<Vec<(PathBuf, String, String, u64)>> =
     std::sync::Mutex::new(Vec::new());
+
+struct RetryRegistration((PathBuf, String, String, u64));
+
+impl Drop for RetryRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut retrying) = RETRYING.lock() {
+            retrying.retain(|entry| *entry != self.0);
+        }
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -92,7 +102,7 @@ pub(super) fn retrying_for_test(data_dir: &Path) -> usize {
         .lock()
         .unwrap()
         .iter()
-        .filter(|(dir, _, _)| dir == data_dir)
+        .filter(|(dir, _, _, _)| dir == data_dir)
         .count()
 }
 fn fallback_interval() -> std::time::Duration {
@@ -173,6 +183,7 @@ pub(super) fn schedule_retry(
         manager.inner.config.data_dir.clone(),
         owner.to_owned(),
         session_id.to_owned(),
+        generation,
     );
     {
         let mut retrying = RETRYING.lock().unwrap();
@@ -183,6 +194,7 @@ pub(super) fn schedule_retry(
     }
     let manager = manager.clone();
     let (owner, session_id) = (owner.to_owned(), session_id.to_owned());
+    let registration = RetryRegistration(key);
     tokio::spawn(async move {
         let clear = loop {
             let changed = FENCE_CHANGED.notified();
@@ -215,7 +227,7 @@ pub(super) fn schedule_retry(
                 }
             }
         };
-        RETRYING.lock().unwrap().retain(|entry| *entry != key);
+        drop(registration);
         if clear {
             let _ = queue::drain(manager, owner, session_id, generation).await;
         }
@@ -375,5 +387,8 @@ pub(super) fn dispatch_authority(
             "Queued message needs authorization. Sign in locally, edit and save the message, then resume the queue",
         ));
     }
-    Ok(proof.map(crate::auth::LocalAuthority::from_verified_queue))
+    proof
+        .map(crate::auth::LocalAuthority::from_verified_queue)
+        .transpose()
+        .map_err(StructuredControlError::conflict)
 }

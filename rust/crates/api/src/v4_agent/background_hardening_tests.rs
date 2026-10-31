@@ -27,6 +27,7 @@ fn pid_file_request(
     generation: Option<i64>,
 ) -> BackgroundRequest {
     BackgroundRequest {
+        interactive: false,
         scope: scope(root, owner, session),
         authorization_generation: generation,
         action_id: action.into(),

@@ -220,6 +220,84 @@ describe('TerminalSessionContext', () => {
     vi.clearAllMocks();
   });
 
+  it('selects an available session when a refresh wins the initial inventory race', async () => {
+    localStorage.setItem('lastActiveSession', 'missing-session');
+    let now = 1_000_000;
+    let releaseInitial;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const original = apiFetch.getMockImplementation();
+    apiFetch.mockImplementation((url, options) => {
+      if (url === '/api/terminal') {
+        return new Promise(resolve => { releaseInitial = () => resolve({ ok: true, json: async () => ({ sessions: [] }) }); });
+      }
+      return original(url, options);
+    });
+    const view = renderHook(() => useTerminalSession(), { wrapper: TerminalSessionProvider });
+    try {
+      await waitFor(() => expect(releaseInitial).toBeTypeOf('function'));
+      now += 31_000;
+      await act(async () => window.dispatchEvent(new Event('pointerdown')));
+      await waitFor(() => expect(view.result.current.loadingSessions).toBe(false));
+      expect(view.result.current.activeSessionId).toBe('session-1');
+      await act(async () => releaseInitial());
+      expect(view.result.current.activeSessionId).toBe('session-1');
+    } finally {
+      view.unmount();
+      clock.mockRestore();
+    }
+  });
+
+  it('preserves a manual selection when a refresh wins the initial inventory race', async () => {
+    localStorage.setItem('lastActiveSession', 'missing-session');
+    let now = 1_000_000;
+    let releaseInitial;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const original = apiFetch.getMockImplementation();
+    apiFetch.mockImplementation((url, options) => {
+      if (url === '/api/terminal') {
+        return new Promise(resolve => { releaseInitial = () => resolve({ ok: true, json: async () => ({ sessions: [] }) }); });
+      }
+      return original(url, options);
+    });
+    const view = renderHook(() => useTerminalSession(), { wrapper: TerminalSessionProvider });
+    try {
+      await waitFor(() => expect(releaseInitial).toBeTypeOf('function'));
+      await act(async () => view.result.current.selectSession('session-2'));
+      now += 31_000;
+      await act(async () => window.dispatchEvent(new Event('pointerdown')));
+      await waitFor(() => expect(view.result.current.loadingSessions).toBe(false));
+      expect(view.result.current.activeSessionId).toBe('session-2');
+      await act(async () => releaseInitial());
+      expect(view.result.current.activeSessionId).toBe('session-2');
+    } finally {
+      view.unmount();
+      clock.mockRestore();
+    }
+  });
+
+  it('does not restore an excluded companion after choosing a startup fallback', async () => {
+    localStorage.setItem('lastActiveSession', 'companion');
+    const original = apiFetch.getMockImplementation();
+    apiFetch.mockImplementation((url, options) => {
+      if (url === '/api/terminal') return Promise.resolve({ ok: true, json: async () => ({ sessions: [
+        { id: 'companion', isActive: false, thread: { companionOf: 'ss-parent' } },
+        { id: 'valid', isActive: true },
+      ] }) });
+      if (url === '/api/terminal/companion/restore') return Promise.resolve({ ok: false, status: 503, json: async () => ({}) });
+      return original(url, options);
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = renderHook(() => useTerminalSession(), { wrapper: TerminalSessionProvider });
+    try {
+      await waitFor(() => expect(view.result.current.loadingSessions).toBe(false));
+      expect(apiFetch.mock.calls.filter(([url]) => url === '/api/terminal/companion/restore')).toHaveLength(0);
+      expect(view.result.current.activeSessionId).toBe('valid');
+    } finally {
+      view.unmount();
+      log.mockRestore();
+    }
+  });
+
   it.each(['pointerdown', 'touchstart', 'wheel'])('refreshes inventory once when %s resumes activity after idle', async (eventName) => {
     let now = 1_000_000;
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
@@ -977,6 +1055,39 @@ describe('TerminalSessionContext', () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it('does not remove a terminal from a new environment when an old close response arrives', async () => {
+    const original = apiFetch.getMockImplementation();
+    let finishClose;
+    apiFetch.mockImplementation((url, options = {}) => url === '/api/terminal/session-1' && options.method === 'DELETE'
+      ? new Promise(resolve => { finishClose = resolve; }) : original(url, options));
+    const { result } = renderHook(() => useTerminalSession(), { wrapper: TerminalSessionProvider });
+    await waitFor(() => expect(result.current.sessions.some(session => session.id === 'session-1')).toBe(true));
+    let closing;
+    act(() => { closing = result.current.closeSession('session-1'); });
+    await waitFor(() => expect(finishClose).toBeTypeOf('function'));
+    act(() => setActiveEnvironment({ id: 'other-server', capabilities: { terminalInput: true, agentExecute: true } }));
+    await act(async () => { finishClose({ ok: true }); await closing; });
+    expect(result.current.sessions.some(session => session.id === 'session-1')).toBe(true);
+  });
+
+  it('does not remove a structured conversation when an old account close response arrives', async () => {
+    const original = apiFetch.getMockImplementation();
+    let finishClose;
+    apiFetch.mockImplementation((url, options = {}) => {
+      if (url === '/api/structured/sessions/ss-structured' && options.method === 'DELETE') return new Promise(resolve => { finishClose = resolve; });
+      if (url === '/api/structured/sessions?view=inventory') return Promise.resolve({ ok: true, json: async () => [structuredSnapshot()] });
+      return original(url, options);
+    });
+    const { result } = renderHook(() => useTerminalSession(), { wrapper: TerminalSessionProvider });
+    await waitFor(() => expect(result.current.sessions.some(session => session.id === 'ss-structured')).toBe(true));
+    let closing;
+    act(() => { closing = result.current.closeSession('ss-structured'); });
+    await waitFor(() => expect(finishClose).toBeTypeOf('function'));
+    act(() => setUser({ id: 'other-owner' }));
+    await act(async () => { finishClose({ ok: true }); await closing; });
+    expect(result.current.sessions.some(session => session.id === 'ss-structured')).toBe(true);
   });
 
   it.each([

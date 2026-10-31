@@ -27,7 +27,7 @@ function formatRelativeTime(dateString) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, loadStatus = 'ready', loadError = '', onRetryLoad }) {
+function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, loadStatus = 'ready', loadError = '', onRetryLoad, scopeHeld = false, scopeHoldMessage, scopeHoldCanRetry = false }) {
   const confirmedList = loadStatus === 'ready' && !loadError;
   const dialogRef = useToolDialogFocus(isOpen);
   const [selectedNoteId, setSelectedNoteId] = useState(null);
@@ -49,6 +49,7 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
   const draftRef = useRef(null);
   const newDraftRef = useRef(null);
   const saveInFlightRef = useRef(null);
+  const uncertainSaveRef = useRef(false);
   const transitionRef = useRef(false);
   const isCreatingRef = useRef(false);
   const onUpdateRef = useRef(onUpdate);
@@ -62,6 +63,10 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
     if (document.activeElement === document.body) (titleInputRef.current || searchInputRef.current)?.focus({ preventScroll: true });
   }, [isOpen, loadStatus, loadError]);
 
+  useEffect(() => {
+    if (isOpen && scopeHeld) dialogRef.current?.focus({ preventScroll: true });
+  }, [isOpen, scopeHeld, dialogRef]);
+
   const updateDraft = useCallback((field, value) => {
     if (isDeleting) return;
     draftRef.current = { ...draftRef.current, [field]: value };
@@ -69,12 +74,12 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
     if (field === 'title') setEditTitle(value);
     if (field === 'content') setEditContent(value);
     if (field === 'category') setEditCategory(value);
-    setSaveStatus('idle');
-    setSaveError('');
+    if (!uncertainSaveRef.current) { setSaveStatus('idle'); setSaveError(''); }
   }, [isDeleting]);
 
   const flushPendingNote = useCallback(async () => {
     clearTimeout(saveTimeoutRef.current);
+    if (uncertainSaveRef.current) return false;
     try {
       while (!isCreatingRef.current && draftRef.current?.id) {
         if (saveInFlightRef.current) {
@@ -104,8 +109,9 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
       return true;
     } catch (error) {
       console.error('Failed to save note:', error);
+      uncertainSaveRef.current = error?.outcomeUncertain === true;
       setSaveStatus('error');
-      setSaveError('Could not save note. Your changes are still here; try again.');
+      setSaveError(uncertainSaveRef.current ? 'Could not save note. The save may have completed; check its status before trying again. Your changes are still here.' : 'Could not save note. Your changes are still here; try again.');
       return false;
     }
   }, []);
@@ -164,6 +170,7 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
     isCreatingRef.current = false;
     setIsCreating(false);
     draftRef.current = null;
+    uncertainSaveRef.current = false;
     setEditTitle('');
     setEditContent('');
     setEditCategory('');
@@ -173,6 +180,7 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
 
   const saveNewNote = useCallback(async () => {
     if (!isCreatingRef.current || !editTitle.trim() || transitionRef.current) return;
+    uncertainSaveRef.current = false;
     transitionRef.current = true;
     setSaveStatus('saving');
     setSaveError('');
@@ -181,8 +189,9 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
       cancelCreating();
     } catch (error) {
       console.error('Failed to create note:', error);
+      uncertainSaveRef.current = error?.outcomeUncertain === true;
       setSaveStatus('error');
-      setSaveError('Could not save note. Your changes are still here; try again.');
+      setSaveError(uncertainSaveRef.current ? 'Could not save note. The save may have completed; check its status before trying again. Your changes are still here.' : 'Could not save note. Your changes are still here; try again.');
     } finally {
       transitionRef.current = false;
     }
@@ -287,6 +296,15 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
 
   if (!isOpen) return null;
 
+  if (scopeHeld) return (
+    <div className="modal-overlay">
+      <div className="notes-v2 ui-utility-dialog" ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Notes">
+        <div className="notes-v2-header"><h2>Notes</h2><button className="notes-v2-close" onClick={onClose} aria-label="Close">×</button></div>
+        <div className="notes-load-health"><div role="alert"><p>{scopeHoldMessage || 'Return to the original account to view its notes and retained draft.'}</p>{scopeHoldCanRetry && <button type="button" onClick={onRetryLoad} disabled={loadStatus === 'loading'}>Retry loading notes</button>}</div></div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="modal-overlay" onClick={handleClose}>
       <div className={`notes-v2 ui-utility-dialog${hasSelection ? ' has-selection' : ''}`} ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="notes-dialog-title" onClick={(e) => e.stopPropagation()}>
@@ -343,9 +361,9 @@ function NotesModalContent({ isOpen, onClose, notes, onAdd, onUpdate, onDelete, 
           {/* Main content */}
           <div className="notes-v2-main">
             {saveError && (
-              <div role="alert">
-                {saveError}
-                {!isCreating && <button onClick={flushPendingNote}>Retry</button>}
+              <div role="alert" className="notes-save-error">
+                <span>{saveError}</span>
+                {!isCreating && <button onClick={() => { uncertainSaveRef.current = false; void flushPendingNote(); }}>Retry</button>}
               </div>
             )}
             {/* Back button for mobile */}

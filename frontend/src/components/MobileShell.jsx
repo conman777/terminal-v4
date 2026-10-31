@@ -18,6 +18,7 @@ import { MobileDraftStash } from './MobileDraftStash';
 import { WorkspaceStartView } from './WorkspaceStartView';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
+import { contextMeter } from '../utils/contextUsage';
 import { useSessionBrowserApprovals } from '../hooks/useSessionBrowserApprovals';
 import { useComposerDraft } from '../hooks/useComposerDraft';
 import { useComposerFileAttachments } from '../hooks/useComposerFileAttachments';
@@ -72,15 +73,18 @@ function getPathLabel(path) {
   return path;
 }
 
-export function MobileShell({
+export function MobileShell(props) {
+  const {
   visible = true,
   sessions = [],
   terminalSessions = sessions,
   threadTerminalOpen = false,
+  onThreadTerminalOpenChange,
   activeSessionId = null,
   onSelectSession,
   onSelectHistorySession,
   onWorkspaceResponseChange,
+  onRevealProjectFile,
   onCreateSession,
   onOpenImageConversation,
   onReviewImageConversation,
@@ -106,7 +110,10 @@ export function MobileShell({
   onSetSessionAiType,
   onAddCustomAiProvider,
   showSessionStrip = true,
-}) {
+  authLifecycle,
+  strictReady,
+  } = props;
+  const strictProps = Object.hasOwn(props, 'authLifecycle') ? { authLifecycle, strictReady } : {};
   const [connectionState, setConnectionState] = useState('connecting');
   const [cwdSnapshot, setCwdSnapshot] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
@@ -125,14 +132,21 @@ export function MobileShell({
   const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
   const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
   const [transportNotice, setTransportNotice] = useState('');
+  const [confirmThreadTerminalClose, setConfirmThreadTerminalClose] = useState(null);
+  const [closingThreadTerminal, setClosingThreadTerminal] = useState(false);
+  const keepThreadTerminalButton = useRef(null);
+  const closeThreadTerminalButton = useRef(null);
+  const threadTerminalCloseRequest = useRef(null);
   const imageInputRef = useRef(null);
   const hasConnectedOnceRef = useRef(false);
   const mountedRef = useRef(true);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
-  const { listSessionGitBranches, checkoutSessionGitBranch, updateStructuredSessionSelection, createSession, updateThreadMetadata, restoreSession, sendRawToSession } = useTerminalSession();
+  const { listSessionGitBranches, checkoutSessionGitBranch, updateStructuredSessionSelection, createSession, closeSession, updateThreadMetadata, restoreSession, sendRawToSession } = useTerminalSession();
 
   const currentSession = useMemo(
     () => showWorkspaceStart ? null : activeSessionId ? sessions.find((session) => session.id === activeSessionId) || null : sessions[0] || null,
@@ -140,7 +154,7 @@ export function MobileShell({
   );
   const mentionThreads = useMemo(() => buildMentionThreads(sessions, currentSession?.id), [sessions, currentSession?.id]);
   const worktreeOrigin = useMemo(() => resolveWorktreeOrigin(sessions, activeSessionId), [sessions, activeSessionId]);
-  const [composerAttachments, setComposerAttachments, attachmentDraftError, retryAttachmentDraft, restoredAttachments, attachmentConflict, useSavedAttachments, validateAttachmentDraft, getAttachmentSelectionToken, isAttachmentSelectionTokenCurrent] = useComposerFileAttachments(currentSession?.id);
+  const [composerAttachments, setComposerAttachments, attachmentDraftError, retryAttachmentDraft, restoredAttachments, attachmentConflict, useSavedAttachments, validateAttachmentDraft, getAttachmentSelectionToken, isAttachmentSelectionTokenCurrent, attachmentDraftSaving, dispatchWithAttachmentDraft, waitForAttachmentPersistence] = useComposerFileAttachments(currentSession?.id);
   const { value: composerValue, setValue: setComposerValue, revision: composerDraftRevision, clearIfUnchanged: clearComposerDraft, error: composerDraftError, store: composerStore } = useComposerDraft(currentSession?.id);
   const isStructuredSession = isStructuredSessionId(currentSession?.id);
   const rawInputMode = useSupervisedInputCapability(isStructuredSession, currentSession?.id);
@@ -177,33 +191,88 @@ export function MobileShell({
     enabled: terminalPermissionAllowed,
     sessions: terminalSessions,
     createSession,
+    closeSession,
     updateThreadMetadata,
     restoreSession,
   });
+  const currentThreadRef = useRef(currentSession?.id);
+  currentThreadRef.current = currentSession?.id;
+  useEffect(() => { if (confirmThreadTerminalClose) keepThreadTerminalButton.current?.focus(); }, [confirmThreadTerminalClose]);
+  useEffect(() => {
+    setConfirmThreadTerminalClose(null);
+    setClosingThreadTerminal(false);
+    threadTerminalCloseRequest.current = null;
+  }, [currentSession?.id, environment?.id, visible]);
+  useEffect(() => { setConfirmThreadTerminalClose(null); }, [threadTerminal.terminalId, threadTerminalOpen]);
+  useEffect(() => {
+    if (confirmThreadTerminalClose && !threadTerminal.terminals.some(item => item.id === confirmThreadTerminalClose)) setConfirmThreadTerminalClose(null);
+  }, [confirmThreadTerminalClose, threadTerminal.terminals]);
+
+  function keepThreadTerminalOpen() {
+    setConfirmThreadTerminalClose(null);
+    closeThreadTerminalButton.current?.focus();
+  }
+
+  async function closeThreadTerminal(id) {
+    if (threadTerminalCloseRequest.current || !terminalInputAllowed) return;
+    const threadId = currentSession?.id;
+    const auth = captureAuthScope();
+    const environmentSignal = getEnvironmentSignal();
+    const last = threadTerminal.terminals.length === 1;
+    const request = {};
+    threadTerminalCloseRequest.current = request;
+    setConfirmThreadTerminalClose(null);
+    setClosingThreadTerminal(true);
+    if (last) onThreadTerminalOpenChange?.(threadId, false);
+    const closed = await threadTerminal.closeTerminal(id);
+    if (threadTerminalCloseRequest.current !== request) return;
+    threadTerminalCloseRequest.current = null;
+    setClosingThreadTerminal(false);
+    if (!closed && last && currentThreadRef.current === threadId && !environmentSignal.aborted && isAuthScopeCurrent(auth)) {
+      onThreadTerminalOpenChange?.(threadId, true);
+    }
+  }
   const mentionPullRequests = useCurrentPullRequest(sessionCwd, null, { enabled: isStructuredSession && visible });
   const mainTerminalOwner = useMemo(() => resolveTerminalOwner({ terminalId: currentSession?.id, sessions: terminalSessions }), [currentSession?.id, terminalSessions]);
   const mainAddToChat = useTerminalAddToChat({ terminalId: currentSession?.id, owner: mainTerminalOwner, label: 'Terminal' });
   const drawerOwnerTitle = currentSession ? resolveTerminalOwner({ terminalId: currentSession.id, sessions: [currentSession] })?.title : null;
   const drawerOwner = useMemo(() => (isStructuredSession && drawerOwnerTitle ? { threadId: currentSession.id, title: drawerOwnerTitle } : null), [currentSession?.id, drawerOwnerTitle, isStructuredSession]);
   const drawerAddToChat = useTerminalAddToChat({ terminalId: threadTerminal.terminalId, owner: drawerOwner, label: 'Thread terminal' });
+  const mainSelectionActions = useRef(null);
+  const drawerSelectionActions = useRef(null);
+  const registerMainSelection = useCallback(actions => { mainSelectionActions.current = actions; mainAddToChat.register(actions); }, [mainAddToChat.register]);
+  const registerDrawerSelection = useCallback(actions => { drawerSelectionActions.current = actions; drawerAddToChat.register(actions); }, [drawerAddToChat.register]);
   const [selectionMenu, setSelectionMenu] = useState(null);
   const closeSelectionMenu = useCallback(() => setSelectionMenu(null), []);
   const selectionTimer = useRef(null);
-  const openSelectionMenu = useCallback((addToChat, coords) => {
+  const selectionScope = JSON.stringify([currentSession?.id, threadTerminal.terminalId, environment?.id, visible]);
+  const selectionScopeRef = useRef(selectionScope);
+  selectionScopeRef.current = selectionScope;
+  const selectionAuthScope = captureAuthScope();
+  const selectionEnvironmentSignal = getEnvironmentSignal();
+  const openSelectionMenu = useCallback((addToChat, selectionActions, coords, expectedScope, expectedAuthScope, expectedEnvironmentSignal) => {
     clearTimeout(selectionTimer.current);
     selectionTimer.current = setTimeout(() => {
-      const items = addToChat.current.getMenuItems();
-      if (items.length) setSelectionMenu({ x: coords?.x || 12, y: coords?.y || 12, items });
+      if (selectionScopeRef.current !== expectedScope || !isAuthScopeCurrent(expectedAuthScope) || expectedEnvironmentSignal.aborted || !visible) return;
+      const items = addToChat.current.menuItemsAtPoint(coords);
+      const openFile = selectionActions.current?.getOpenFileAction?.();
+      if (items.length && openFile) items.push(openFile);
+      if (items.length) setSelectionMenu({ x: coords?.x || 12, y: coords?.y || 12, items: items.map(item => ({
+        ...item,
+        onClick: () => {
+          if (selectionScopeRef.current === expectedScope && isAuthScopeCurrent(expectedAuthScope) && !expectedEnvironmentSignal.aborted) item.onClick();
+        },
+      })) });
     }, SELECTION_SETTLE_MS);
-  }, []);
+  }, [visible]);
   const mainAddToChatRef = useRef(mainAddToChat);
   const drawerAddToChatRef = useRef(drawerAddToChat);
   mainAddToChatRef.current = mainAddToChat;
   drawerAddToChatRef.current = drawerAddToChat;
-  const mainSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(mainAddToChatRef, coords), [openSelectionMenu]));
-  const drawerSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(drawerAddToChatRef, coords), [openSelectionMenu]));
+  const mainSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(mainAddToChatRef, mainSelectionActions, coords, selectionScope, selectionAuthScope, selectionEnvironmentSignal), [openSelectionMenu, selectionScope, selectionAuthScope, selectionEnvironmentSignal]));
+  const drawerSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(drawerAddToChatRef, drawerSelectionActions, coords, selectionScope, selectionAuthScope, selectionEnvironmentSignal), [openSelectionMenu, selectionScope, selectionAuthScope, selectionEnvironmentSignal]));
   useEffect(() => () => clearTimeout(selectionTimer.current), []);
-  useEffect(() => { clearTimeout(selectionTimer.current); setSelectionMenu(null); }, [currentSession?.id, threadTerminal.terminalId]);
+  useEffect(() => { clearTimeout(selectionTimer.current); setSelectionMenu(null); }, [selectionScope]);
   const agentExecutionAllowed = visible && environmentAllows(environment, 'agentExecute');
   const sessionInputAllowed = isStructuredSession ? agentExecutionAllowed : terminalInputAllowed;
   const inferredAiType = currentSession ? (isManagedConversation ? inferSessionAiType(currentSession) : sessionAiTypes[currentSession.id] ?? inferSessionAiType(currentSession)) : null;
@@ -258,6 +327,7 @@ export function MobileShell({
     pendingApproval,
     isStreaming: structuredIsStreaming,
     connectionState: structuredConnectionState,
+    reconnect: structuredReconnect,
     isHistoryOnly: structuredHistoryOnly,
     sendMessage: structuredSendMessage,
     checkPendingMessage: structuredCheckPendingMessage,
@@ -272,7 +342,9 @@ export function MobileShell({
     actionError: structuredActionError,
     controlState: structuredControlState,
     controlError: structuredControlError,
+    contextUsage: structuredContextUsage,
   } = useStructuredSession({
+    ...strictProps,
     sessionId: isStructuredSession ? currentSession?.id ?? null : null,
     active: isStructuredSession,
     ...(isV4Session ? { aiType: currentSession.aiType, model: currentSession.model } : {}),
@@ -436,8 +508,21 @@ export function MobileShell({
     setIsTerminalPanelOpen(true);
   }, []);
 
+  const composerRouteRef = useRef('');
+  composerRouteRef.current = JSON.stringify([currentSession?.id, Boolean(structuredIsStreaming), serverQueue.status,
+    serverQueue.snapshot?.revision ?? null, serverQueue.snapshot?.order?.length ?? 0,
+    Boolean(userImages), userImages?.items?.map(item => [item.localId, item.status]) ?? [],
+    planMode, currentSession?.model, currentSession?.reasoning, currentSession?.serviceTier,
+    sessionInputAllowed, structuredHistoryOnly, structuredRequiresCleanup, structuredConnectionState,
+    structuredIsSending, structuredIsInterrupting]);
+  const sendImageDraftRef = useRef(sendImageDraft);
+  sendImageDraftRef.current = sendImageDraft;
+  const structuredSendMessageRef = useRef(structuredSendMessage);
+  structuredSendMessageRef.current = structuredSendMessage;
+
   const handleComposerSubmit = useCallback(async (text) => {
     if (attachmentDraftError || !validateAttachmentDraft()) return;
+    if (isStructuredSession && structuredConnectionState === 'unavailable') return;
     if (!currentSession?.id || composerRequestRef.current || !environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput')) return;
     const trimmed = typeof text === 'string' ? text.trim() : '';
     const submittedAttachments = composerAttachments;
@@ -450,41 +535,45 @@ export function MobileShell({
     const request = {};
     composerRequestRef.current = request;
     setComposerSubmitting(true);
-    if ((isClaudeChat || isCodexSession) && serverQueue.status === 'available' && (structuredIsStreaming || serverQueue.snapshot?.order.length)) {
-      try {
-        const queued = await enqueueServerFollowup(currentSession.id, payload);
-        if (composerRequestRef.current !== request) return;
-        clearComposerDraft(submittedDraftRevision, trimmed);
-        setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
-        serverQueue.refresh();
-        setTransportNotice(queued.mode === 'held' ? 'Queued on the server. The queue is paused: open Queue to resume it.' : 'Queued on the server.');
-      } catch (error) {
-        if (composerRequestRef.current === request) setTransportNotice(error.message || 'Could not queue this message. Your draft was kept.');
-      } finally {
-        if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
-      }
-      return;
-    }
+    const sessionId = currentSession.id;
+    const route = composerRouteRef.current;
+    const queueing = (isClaudeChat || isCodexSession) && serverQueue.status === 'available' && (structuredIsStreaming || serverQueue.snapshot?.order.length);
     try {
-      const result = isV4Session && userImages ? await sendImageDraft(payload)
-        : isStructuredSession ? await structuredSendMessage(payload) : handleChatSend(payload);
-      if (result?.completion) await result.completion;
-      if (composerRequestRef.current !== request) return;
-      if (isStructuredSession && result?.accepted !== true) {
-        setTransportNotice('Message was not accepted. Your draft was kept.');
-        return;
-      }
-      if (!result?.draftManaged) {
-        clearComposerDraft(submittedDraftRevision, trimmed);
-        setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
-      }
-      setTransportNotice(result?.queued ? 'Terminal is still connecting. Command queued.' : '');
+      const admission = await dispatchWithAttachmentDraft(submittedAttachments,
+        () => mountedRef.current && visibleRef.current && cwdSession.current.id === sessionId && composerRouteRef.current === route
+          && composerRequestRef.current === request && environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput'),
+        async () => {
+          if (queueing) {
+            const queued = await enqueueServerFollowup(sessionId, payload);
+            if (composerRequestRef.current !== request) return;
+            clearComposerDraft(submittedDraftRevision, trimmed);
+            setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+            serverQueue.refresh();
+            setTransportNotice(queued.mode === 'held' ? 'Queued on the server. The queue is paused: open Queue to resume it.' : 'Queued on the server.');
+            return;
+          }
+          const result = isV4Session && userImages ? await sendImageDraftRef.current(payload)
+            : isStructuredSession ? await structuredSendMessageRef.current(payload) : handleChatSend(payload);
+          if (result?.completion) await result.completion;
+          if (composerRequestRef.current !== request) return;
+          if (isStructuredSession && result?.accepted !== true) {
+            setTransportNotice('Message was not accepted. Your draft was kept.');
+            return;
+          }
+          if (!result?.draftManaged) {
+            clearComposerDraft(submittedDraftRevision, trimmed);
+            setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+          }
+          setTransportNotice(result?.queued ? 'Terminal is still connecting. Command queued.' : '');
+        });
+      if (admission.started) await admission.completion;
+      else if (composerRequestRef.current === request) setTransportNotice('The conversation or file selection changed while preparing. Your draft was kept; try again.');
     } catch (error) {
-      if (composerRequestRef.current === request) { setTransportNotice(error.message || 'Send failed. Your draft was kept.'); }
+      if (composerRequestRef.current === request) { setTransportNotice(error.message || (queueing ? 'Could not queue this message. Your draft was kept.' : 'Send failed. Your draft was kept.')); }
     } finally {
       if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
     }
-  }, [attachmentDraftError, validateAttachmentDraft, composerAttachments, composerDraftRevision, clearComposerDraft, handleChatSend, isStructuredSession, isV4Session, isClaudeChat, isCodexSession, planMode, currentSession?.id, serverQueue, structuredIsStreaming, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
+  }, [attachmentDraftError, validateAttachmentDraft, dispatchWithAttachmentDraft, composerAttachments, composerDraftRevision, clearComposerDraft, handleChatSend, isStructuredSession, isV4Session, isClaudeChat, isCodexSession, planMode, currentSession?.id, serverQueue, structuredIsStreaming, structuredConnectionState, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
 
   const conversationActionsAllowed = sessionInputAllowed && !structuredHistoryOnly && structuredConnectionState === 'online'
     && !structuredIsStreaming && !structuredIsSending && !structuredIsInterrupting && !structuredRequiresCleanup && !pendingApproval;
@@ -615,9 +704,15 @@ export function MobileShell({
 
       {isStructuredSession && structuredHistoryOnly && <p role="status" aria-label="Connection recovery" className="remote-readonly-notice">{structuredActionError}</p>}
       {isStructuredSession && (structuredIsInterrupting || structuredRequiresCleanup) && <p role="status" aria-label="Response cancellation" className="remote-readonly-notice">{structuredIsInterrupting ? 'Stopping response…' : sessionInputAllowed ? 'Cancellation is not confirmed. Retry cancellation before sending another message.' : 'Cancellation is not confirmed. Ask the session owner to retry cancellation before sending another message.'}</p>}
-      {isStructuredSession && !structuredHistoryOnly && resolvedConnectionState !== 'online' && <p role="status" className="remote-readonly-notice">{resolvedConnectionState === 'unavailable' ? 'Conversation unavailable.' : resolvedConnectionState === 'offline' ? 'Conversation offline. Reconnecting…' : 'Connecting to conversation…'}</p>}
+      {isStructuredSession && !structuredHistoryOnly && resolvedConnectionState !== 'online' && (
+        <div className="remote-readonly-notice mobile-connection-notice">
+          <span role="status">{resolvedConnectionState === 'unavailable' ? 'Conversation unavailable.' : resolvedConnectionState === 'offline' ? 'Conversation offline. Reconnecting…' : 'Connecting to conversation…'}</span>
+          {resolvedConnectionState === 'unavailable' && <button type="button" onClick={structuredReconnect}>Reconnect conversation</button>}
+        </div>
+      )}
       {composerDraftError && composerDraftError !== structuredActionError && <p role="alert" className="remote-readonly-notice">{composerDraftError}</p>}
       {attachmentDraftError && <AttachmentDraftStatus error={attachmentDraftError} conflict={attachmentConflict} currentItems={composerAttachments} onRetry={retryAttachmentDraft} onUseSaved={useSavedAttachments} />}
+      {attachmentDraftSaving && <p role="status" className="remote-readonly-notice">Saving file selections…</p>}
       {restoredAttachments && !attachmentDraftError && <p role="status" className="remote-readonly-notice">Restored file selections. Check the files before sending; they may have changed.</p>}
       {modelUpdateError && <p role="alert" className="remote-readonly-notice">{modelUpdateError}</p>}
       <section className={`mobile-shell-stage mobile-shell-stage-parity${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
@@ -651,9 +746,12 @@ export function MobileShell({
                     isTerminalDockVisible={isTerminalDockVisible}
                     mode={isStructuredSession ? 'structured' : 'terminal'}
                     workspacePath={isStructuredSession ? sessionCwd : ''}
+                    filePreviewVisible={visible}
+                    onRevealProjectFile={visible && onRevealProjectFile ? target => onRevealProjectFile({ ...target, mobile: true }) : undefined}
                     structuredMessages={structuredMessages}
                     structuredToolCalls={structuredToolCalls}
                     pendingApproval={pendingApproval}
+                    privateReviewVisible={visible}
                     browserApprovals={browserReview.requests}
                     onBrowserApprove={canReviewBrowser ? browserReview.decide : undefined}
                     isBrowserApproving={browserReview.isDeciding}
@@ -680,8 +778,11 @@ export function MobileShell({
                 <div className="desktop-terminal-runtime-host" data-persistent-terminal="" {...mainSelectionPress}>
                   {shouldRenderTerminalRuntime ? (
                     <LazyTerminalChat
+                      {...strictProps}
                       key={`${currentSession.id}-${refreshToken}`}
                       surface="mobile"
+                      filePreviewThreadId={isStructuredSession ? currentSession.id : undefined}
+                      filePreviewRoot={isStructuredSession ? sessionCwd : undefined}
                       sessionId={currentSession.id}
                       keybarOpen={accessoryOpen}
                       viewportHeight={viewportHeight}
@@ -701,7 +802,7 @@ export function MobileShell({
                       onOutputChunk={handleOutputChunk}
                       onScreenSnapshot={handleScreenSnapshot}
                       onRegisterSendText={handleRegisterSendText}
-                      onRegisterSelectionActions={mainAddToChat.register}
+                      onRegisterSelectionActions={registerMainSelection}
                       onTurn={handleTurn}
                     />
                   ) : null}
@@ -711,7 +812,16 @@ export function MobileShell({
               {isStructuredSession && threadTerminalOpen && <section className="mobile-thread-terminal" aria-label="Thread terminal" {...drawerSelectionPress}>
                 {threadTerminal.terminals.length > 0 && <ThreadTerminalTabs className="mobile-thread-terminal-tabs" terminals={threadTerminal.terminals}
                   selectedId={threadTerminal.terminalId} onSelect={threadTerminal.select} onAdd={() => threadTerminal.addTerminal()}
-                  disabled={!terminalInputAllowed} withPanels={false} />}
+                  onClose={closeSession && (threadTerminal.terminals.length > 1 || onThreadTerminalOpenChange) ? id => setConfirmThreadTerminalClose(id) : undefined}
+                  closeButtonRef={closeThreadTerminalButton} disabled={!terminalInputAllowed || closingThreadTerminal} withPanels={false} />}
+                {confirmThreadTerminalClose && <div className="mobile-thread-terminal-confirm" role="group" aria-label={`Confirm closing Terminal ${threadTerminal.terminals.findIndex(item => item.id === confirmThreadTerminalClose) + 1}`}
+                  onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); keepThreadTerminalOpen(); } }}>
+                  <p>{`Close Terminal ${threadTerminal.terminals.findIndex(item => item.id === confirmThreadTerminalClose) + 1}? Anything running in it will stop.`}</p>
+                  <button type="button" ref={keepThreadTerminalButton} onClick={keepThreadTerminalOpen}>Keep open</button>
+                  <button type="button" disabled={!terminalInputAllowed || closingThreadTerminal} onClick={() => closeThreadTerminal(confirmThreadTerminalClose)}>{`Close Terminal ${threadTerminal.terminals.findIndex(item => item.id === confirmThreadTerminalClose) + 1}`}</button>
+                </div>}
+                {threadTerminal.closeError && <div className="mobile-thread-terminal-error"><p role="alert">{threadTerminal.closeError}</p>
+                  <button type="button" aria-label="Dismiss close error" onClick={threadTerminal.dismissCloseError}>Dismiss</button></div>}
                 {threadTerminal.createError && <div className="mobile-thread-terminal-error"><p role="alert">{threadTerminal.createError}</p>
                   {threadTerminal.canRetryCreate && <button type="button" aria-label="Retry adding terminal" disabled={!terminalInputAllowed} onClick={() => threadTerminal.retryCreate()}>Retry</button>}
                   <button type="button" aria-label="Dismiss terminal error" onClick={() => threadTerminal.dismissCreateError()}>Dismiss</button>
@@ -724,8 +834,11 @@ export function MobileShell({
                   : !sessionCwd ? <p role="status">This conversation has no workspace folder for a terminal.</p>
                     : !terminalInputAllowed && !threadTerminal.terminalId ? <p role="status">Terminal access is unavailable for this environment.</p>
                       : threadTerminal.terminalId ? <LazyTerminalChat
+                        {...strictProps}
                         key={threadTerminal.terminalId}
                         surface="mobile"
+                        filePreviewThreadId={currentSession.id}
+                        filePreviewRoot={sessionCwd}
                         sessionId={threadTerminal.terminalId}
                         keybarOpen={accessoryOpen}
                         viewportHeight={viewportHeight}
@@ -736,7 +849,7 @@ export function MobileShell({
                         inputEnabled={terminalInputAllowed}
                         isPrimary={visible}
                         onRegisterFocusTerminal={onRegisterFocusTerminal}
-                        onRegisterSelectionActions={drawerAddToChat.register}
+                        onRegisterSelectionActions={registerDrawerSelection}
                       /> : <p role="status">Opening a terminal in this thread's folder…</p>}
               </section>}
 
@@ -763,6 +876,7 @@ export function MobileShell({
                 showAiSelector={!isManagedConversation}
                 onAddCustomAiCommand={handleAddCustomAiCommand}
                 composerValue={composerValue}
+                composerDraftStore={composerStore}
                 composerAttachments={composerAttachments}
                 attachmentsEnabled={isV4Session || (environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer'))}
                 skills={installedSkills}
@@ -776,10 +890,12 @@ export function MobileShell({
                 onComposerSubmit={handleComposerSubmit}
                 onComposerAttachmentAdd={handleComposerAttachmentAdd}
                 onComposerAttachmentRemove={handleComposerAttachmentRemove}
+                waitForAttachmentPersistence={waitForAttachmentPersistence}
                 getAttachmentSelectionToken={getAttachmentSelectionToken}
                 isAttachmentSelectionTokenCurrent={isAttachmentSelectionTokenCurrent}
                 composerPlaceholder={sessionInputAllowed ? getComposerPlaceholder({ isStructuredSession, session: currentSession, foregroundAiType: currentAiType, customProviders: customAiProviders }) : 'Read-only remote session'}
-                composerSubmitDisabled={Boolean(attachmentDraftError) || (isStructuredSession && structuredHistoryOnly)}
+                composerSubmitDisabled={Boolean(attachmentDraftError) || attachmentDraftSaving || (isStructuredSession && (structuredHistoryOnly || structuredConnectionState === 'unavailable'))}
+                composerContext={(isCodexSession || isClaudeChat) ? contextMeter(structuredContextUsage) : null}
                 isStreaming={isStructuredSession && structuredIsStreaming}
                 isInterrupting={isStructuredSession && structuredIsInterrupting}
                 requiresCleanup={isStructuredSession && structuredRequiresCleanup}
@@ -821,6 +937,8 @@ export function MobileShell({
             originThread={worktreeOrigin}
             currentPath={startWorkspacePath || projectInfo?.cwd || ''}
             projects={startProjects}
+            sessions={sessions}
+            customAiProviders={customAiProviders}
             recentFolders={recentFolders}
             onSelectWorkspace={onSelectWorkspace}
             onCreateSession={onCreateSession}

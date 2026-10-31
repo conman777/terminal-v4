@@ -4,6 +4,10 @@ mod agent_mcp;
 mod agent_mcp_apps;
 mod agent_runtime;
 mod auth;
+#[cfg(test)]
+mod auth_protocol;
+#[cfg(unix)]
+mod auth_session_logout;
 mod browser_runtime;
 mod build_info;
 mod collaboration;
@@ -35,6 +39,10 @@ pub mod screenshots;
 mod system_doctor;
 mod telegram_gateway;
 mod workspace_files;
+// Board routes stay disabled until admission and receipt durability are safe.
+#[cfg(test)]
+#[allow(dead_code)]
+mod workspace_board;
 mod workspace_scripts;
 
 #[cfg(test)]
@@ -68,6 +76,8 @@ mod user_images;
 mod utility_route_tests;
 pub mod v4_agent;
 pub mod vault;
+#[cfg(unix)]
+mod vault_admission;
 pub mod webcontainer;
 mod workspace;
 mod workspace_activity;
@@ -352,6 +362,14 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/structured/sessions/{id}/approve",
             post(approve_structured_session),
+        )
+        .route(
+            "/api/structured/sessions/{id}/private-output/preview",
+            post(preview_private_output),
+        )
+        .route(
+            "/api/structured/sessions/{id}/private-output/approve",
+            post(approve_private_output),
         )
         .route(
             "/api/structured/sessions/{id}/approval-capability",
@@ -1016,7 +1034,15 @@ async fn refresh(
 async fn logout(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<crate::auth::LocalAuthority>>,
 ) -> Result<axum::response::Response, ApiError> {
+    let authority = authority
+        .map(|Extension(value)| value)
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "A valid local session is required to sign out".into(),
+        })?;
+    let session_scoped = authority.auth_protocol() == 1;
     #[cfg(unix)]
     let manager = state.structured_session_manager();
     #[cfg(unix)]
@@ -1027,10 +1053,21 @@ async fn logout(
     let logout_owner = user.user_id.clone();
     #[cfg(unix)]
     let status_owner = logout_owner.clone();
-    tokio::task::spawn_blocking(move || logout_state.logout_user(&logout_owner))
-        .await
-        .map_err(|_| ApiError::internal("Logout worker unavailable"))?
-        .map_err(ApiError::internal)?;
+    let revoked = tokio::task::spawn_blocking(move || {
+        logout_state.logout_user_authorized(&logout_owner, &authority)
+    })
+    .await
+    .map_err(|_| ApiError::internal("Logout worker unavailable"))?
+    .map_err(ApiError::internal)?;
+    if !revoked {
+        return Err(ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "The session changed before sign out".into(),
+        });
+    }
+    if session_scoped {
+        return Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response());
+    }
     tokio::spawn(async move {
         workspace_browser::close_owner(&state, &user.user_id).await;
         tokio::join!(
@@ -1176,6 +1213,21 @@ struct StructuredApprovalInput {
     /// Also allow this kind of action for the rest of the conversation.
     #[serde(default)]
     for_session: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrivateOutputPreviewInput {
+    approval_id: String,
+    action_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrivateOutputDecisionInput {
+    approval_id: String,
+    action_id: String,
+    preview_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2114,6 +2166,111 @@ async fn review_codex_approval_claim(
     #[cfg(unix)]
     Ok(Json(json!({"approvalId":approval_id,"status":"reviewed"})))
 }
+#[cfg(unix)]
+fn valid_private_output_reference(approval_id: &str, action_id: &str) -> bool {
+    approval_id.len() == 36
+        && uuid::Uuid::parse_str(approval_id).is_ok()
+        && action_id.len() == 64
+        && action_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+async fn preview_private_output(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
+    Json(input): Json<PrivateOutputPreviewInput>,
+) -> Result<axum::response::Response, ApiError> {
+    #[cfg(unix)]
+    {
+        if !valid_private_output_reference(&input.approval_id, &input.action_id) {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: "Invalid private review reference".into(),
+            });
+        }
+        let (token, output) = state
+            .structured_session_manager()
+            .preview_private_output(
+                &user.user_id,
+                &id,
+                &input.approval_id,
+                &input.action_id,
+                authority.as_ref().map(|Extension(value)| value),
+                paired.as_ref().map(|Extension(value)| value),
+                &state,
+            )
+            .await
+            .map_err(structured_control_error)?;
+        Ok((
+            [
+                (axum::http::header::CACHE_CONTROL, "private, no-store"),
+                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            Json(json!({"previewToken":token,"output":output})),
+        )
+            .into_response())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, user, authority, paired, id, input);
+        Err(ApiError::internal(
+            "Private output review is unavailable on this platform",
+        ))
+    }
+}
+
+async fn approve_private_output(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
+    Json(input): Json<PrivateOutputDecisionInput>,
+) -> Result<axum::response::Response, ApiError> {
+    #[cfg(unix)]
+    {
+        if !valid_private_output_reference(&input.approval_id, &input.action_id)
+            || input.preview_token.len() != 36
+            || uuid::Uuid::parse_str(&input.preview_token).is_err()
+        {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: "Invalid private review token".into(),
+            });
+        }
+        let receipt = state
+            .structured_session_manager()
+            .decide_private_output(
+                &user.user_id,
+                &id,
+                &input.approval_id,
+                &input.action_id,
+                &input.preview_token,
+                authority.as_ref().map(|Extension(value)| value),
+                paired.as_ref().map(|Extension(value)| value),
+                &state,
+            )
+            .await
+            .map_err(structured_control_error)?;
+        Ok((
+            [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+            Json(json!(receipt)),
+        )
+            .into_response())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, user, authority, paired, id, input);
+        Err(ApiError::internal(
+            "Private output review is unavailable on this platform",
+        ))
+    }
+}
+
 async fn approve_structured_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -2180,11 +2337,39 @@ async fn delete_structured_session(
 async fn get_settings(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
 ) -> Result<Json<terminal_v4_core::UserSettings>, ApiError> {
-    state
-        .get_settings(&user)
+    let authority = settings_local_authority(authority)?;
+    tokio::task::spawn_blocking(move || state.get_settings_authorized(&user, &authority))
+        .await
+        .map_err(|_| ApiError::internal("Settings worker unavailable"))?
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(settings_authority_error)
+}
+
+fn settings_local_authority(
+    authority: Option<Extension<auth::LocalAuthority>>,
+) -> Result<auth::LocalAuthority, ApiError> {
+    authority
+        .map(|Extension(value)| value)
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "A valid local session is required".into(),
+        })
+}
+
+fn settings_authority_error(error: String) -> ApiError {
+    if matches!(
+        error.as_str(),
+        "Credential is invalid or expired" | "Credential has been revoked"
+    ) {
+        ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "The session is no longer valid".into(),
+        }
+    } else {
+        ApiError::internal(error)
+    }
 }
 
 async fn list_terminal_sessions(
@@ -2331,6 +2516,16 @@ fn terminal_session_error(message: String) -> ApiError {
     }
 }
 
+#[cfg(unix)]
+struct TerminalRequestLifetime(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+#[cfg(unix)]
+impl Drop for TerminalRequestLifetime {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 async fn create_terminal_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -2368,6 +2563,7 @@ async fn create_terminal_session(
     validate_optional_terminal_size(input.cols, "cols")?;
     validate_optional_terminal_size(input.rows, "rows")?;
 
+    #[cfg(not(unix))]
     let admission = terminal::credential_admission(
         &state,
         &user.user_id,
@@ -2375,26 +2571,53 @@ async fn create_terminal_session(
         paired.as_ref().map(|Extension(value)| value),
     );
     let request_id = input.request_id.clone();
+    let options = TerminalCreateOptions {
+        cwd: input.cwd,
+        cols: input.cols,
+        rows: input.rows,
+        title: input.title,
+        shell: input.shell,
+        sandbox_mode: input.sandbox_mode,
+        sandbox_workspace_root: input.workspace_root,
+        initial_command: input.initial_command,
+    };
+    let intent = terminal::TerminalCreateIntent {
+        request_id: input.request_id,
+        companion_of: input.companion_of.clone(),
+    };
+    #[cfg(unix)]
+    let creation = {
+        let lifetime = TerminalRequestLifetime(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let cancelled = lifetime.0.clone();
+        let app = state.clone();
+        let owner = user.user_id.clone();
+        let local = authority.map(|Extension(value)| value);
+        let paired = paired.map(|Extension(value)| value);
+        let result = tokio::spawn(async move {
+            app.terminal_manager()
+                .create_session_authorized(
+                    &owner,
+                    options,
+                    intent,
+                    &app,
+                    local.as_ref(),
+                    paired.as_ref(),
+                    &cancelled,
+                )
+                .await
+        })
+        .await
+        .map_err(|_| ApiError::internal("Terminal creation outcome is uncertain"))?
+        .map_err(terminal_session_error)?;
+        drop(lifetime);
+        result
+    };
+    #[cfg(not(unix))]
     let creation = state
         .terminal_manager()
-        .create_session_admitted(
-            &user.user_id,
-            TerminalCreateOptions {
-                cwd: input.cwd,
-                cols: input.cols,
-                rows: input.rows,
-                title: input.title,
-                shell: input.shell,
-                sandbox_mode: input.sandbox_mode,
-                sandbox_workspace_root: input.workspace_root,
-                initial_command: input.initial_command,
-            },
-            terminal::TerminalCreateIntent {
-                request_id: input.request_id,
-                companion_of: input.companion_of.clone(),
-            },
-            Some(&admission),
-        )
+        .create_session_admitted(&user.user_id, options, intent, Some(&admission))
         .await
         .map_err(terminal_session_error)?;
     let session = creation.session;
@@ -2467,18 +2690,34 @@ async fn rename_terminal_session(
 async fn write_terminal_input(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
     Path(session_id): Path<String>,
     Json(input): Json<TerminalInputBody>,
 ) -> Result<StatusCode, ApiError> {
     validate_string(&input.command, 1, 1024 * 1024, "command")?;
+    let admission = terminal::credential_admission(
+        &state,
+        &user.user_id,
+        authority.as_ref().map(|Extension(value)| value),
+        paired.as_ref().map(|Extension(value)| value),
+    );
     state
         .terminal_manager()
-        .write(&user.user_id, &session_id, &input.command)
+        .write_admitted(&user.user_id, &session_id, &input.command, Some(&admission))
         .await
-        .map_err(|error| ApiError {
-            status: StatusCode::NOT_FOUND,
-            message: error,
-        })?;
+        .map_err(
+            |error| match error.strip_prefix(terminal::TERMINAL_UNAUTHORIZED) {
+                Some(reason) => ApiError {
+                    status: StatusCode::UNAUTHORIZED,
+                    message: reason.to_string(),
+                },
+                None => ApiError {
+                    status: StatusCode::NOT_FOUND,
+                    message: error,
+                },
+            },
+        )?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2524,13 +2763,45 @@ async fn restore_terminal_session(
     validate_optional_terminal_size(input.cols, "cols")?;
     validate_optional_terminal_size(input.rows, "rows")?;
 
+    #[cfg(not(unix))]
     let admission = terminal::credential_admission(
         &state,
         &user.user_id,
         authority.as_ref().map(|Extension(value)| value),
         paired.as_ref().map(|Extension(value)| value),
     );
-    let Some(session) = state
+    #[cfg(unix)]
+    let restored = {
+        let lifetime = TerminalRequestLifetime(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let cancelled = lifetime.0.clone();
+        let app = state.clone();
+        let owner = user.user_id.clone();
+        let local = authority.map(|Extension(value)| value);
+        let paired = paired.map(|Extension(value)| value);
+        let result = tokio::spawn(async move {
+            app.terminal_manager()
+                .restore_session_authorized(
+                    &owner,
+                    &session_id,
+                    input.cols,
+                    input.rows,
+                    &app,
+                    local.as_ref(),
+                    paired.as_ref(),
+                    &cancelled,
+                )
+                .await
+        })
+        .await
+        .map_err(|_| ApiError::internal("Terminal restore outcome is uncertain"))?
+        .map_err(terminal_session_error)?;
+        drop(lifetime);
+        result
+    };
+    #[cfg(not(unix))]
+    let restored = state
         .terminal_manager()
         .restore_session_admitted(
             &user.user_id,
@@ -2540,8 +2811,8 @@ async fn restore_terminal_session(
             Some(&admission),
         )
         .await
-        .map_err(terminal_session_error)?
-    else {
+        .map_err(terminal_session_error)?;
+    let Some(session) = restored else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: "Persisted session not found".to_string(),
@@ -2731,32 +3002,59 @@ async fn update_terminal_thread(
     if let Some(Some(companion_of)) = &input.companion_of {
         validate_string(companion_of, 1, 200, "companionOf")?;
     }
+    #[cfg(not(unix))]
     let admission = terminal::credential_admission(
         &state,
         &user.user_id,
         authority.as_ref().map(|Extension(value)| value),
         paired.as_ref().map(|Extension(value)| value),
     );
-    let Some(thread) = state
-        .terminal_manager()
-        .update_thread_admitted(
-            &user.user_id,
-            &session_id,
-            ThreadUpdate {
-                topic: input.topic,
-                topic_auto_generated: input.topic_auto_generated,
-                pinned: input.pinned,
-                archived: input.archived,
-                project_path: input.project_path,
-                sandbox_mode: input.sandbox_mode,
-                sandbox_workspace_root: input.sandbox_workspace_root,
-                companion_of: input.companion_of,
-            },
-            Some(&admission),
-        )
+    let updates = ThreadUpdate {
+        topic: input.topic,
+        topic_auto_generated: input.topic_auto_generated,
+        pinned: input.pinned,
+        archived: input.archived,
+        project_path: input.project_path,
+        sandbox_mode: input.sandbox_mode,
+        sandbox_workspace_root: input.sandbox_workspace_root,
+        companion_of: input.companion_of,
+    };
+    #[cfg(unix)]
+    let updated = {
+        let lifetime = TerminalRequestLifetime(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let cancelled = lifetime.0.clone();
+        let app = state.clone();
+        let owner = user.user_id.clone();
+        let local = authority.map(|Extension(value)| value);
+        let paired = paired.map(|Extension(value)| value);
+        let result = tokio::spawn(async move {
+            app.terminal_manager()
+                .update_thread_authorized(
+                    &owner,
+                    &session_id,
+                    updates,
+                    &app,
+                    local.as_ref(),
+                    paired.as_ref(),
+                    &cancelled,
+                )
+                .await
+        })
         .await
-        .map_err(terminal_session_error)?
-    else {
+        .map_err(|_| ApiError::internal("Terminal update outcome is uncertain"))?
+        .map_err(terminal_session_error)?;
+        drop(lifetime);
+        result
+    };
+    #[cfg(not(unix))]
+    let updated = state
+        .terminal_manager()
+        .update_thread_admitted(&user.user_id, &session_id, updates, Some(&admission))
+        .await
+        .map_err(terminal_session_error)?;
+    let Some(thread) = updated else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: "Terminal session not found".to_string(),
@@ -3056,12 +3354,15 @@ async fn list_filesystem_folders(
 async fn update_settings(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     let patch = SettingsPatch::from_value(payload).map_err(ApiError::bad_request)?;
-    state
-        .update_settings(&user, patch)
-        .map_err(ApiError::internal)?;
+    let authority = settings_local_authority(authority)?;
+    tokio::task::spawn_blocking(move || state.update_settings_authorized(&user, &authority, patch))
+        .await
+        .map_err(|_| ApiError::internal("Settings worker unavailable"))?
+        .map_err(settings_authority_error)?;
     Ok(Json(json!({ "success": true })))
 }
 
@@ -3093,32 +3394,161 @@ struct NoteUpdateInput {
     category: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+enum UtilityKind {
+    Note,
+    Bookmark,
+}
+
+fn utility_with_authority<T>(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    prepare: impl FnOnce() -> Result<state::PreparedUtility<T>, String>,
+) -> Result<T, ApiError> {
+    utility_with_authority_for(state, user, authority, UtilityKind::Note, prepare)
+}
+
+fn utility_with_authority_for<T>(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    kind: UtilityKind,
+    prepare: impl FnOnce() -> Result<state::PreparedUtility<T>, String>,
+) -> Result<T, ApiError> {
+    let authority = settings_local_authority(authority)?;
+    let resource = match kind {
+        UtilityKind::Note => "note",
+        UtilityKind::Bookmark => "bookmark",
+    };
+    let ownership_error = match kind {
+        UtilityKind::Note => state::NOTE_OWNER_AMBIGUOUS,
+        UtilityKind::Bookmark => {
+            "Bookmark storage ownership is ambiguous. Administrator review is required."
+        }
+    };
+    let uncertain =
+        format!("The {resource} operation may have completed. Check its status before retrying");
+    let map_error = |error: String| {
+        if error == state::NOTE_OWNER_AMBIGUOUS {
+            ApiError {
+                status: StatusCode::CONFLICT,
+                message: ownership_error.into(),
+            }
+        } else if error == "Notes storage is busy or unavailable"
+            || error == "Authentication admission unavailable"
+            || error == "Authentication admission is busy"
+        {
+            ApiError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message: if error == "Notes storage is busy or unavailable"
+                    && matches!(kind, UtilityKind::Bookmark)
+                {
+                    "Bookmarks storage is busy or unavailable".into()
+                } else {
+                    error
+                },
+            }
+        } else {
+            settings_authority_error(error)
+        }
+    };
+    let _file_lock = state.try_lock_note_files().map_err(&map_error)?;
+    #[cfg(unix)]
+    let _lease = vault_admission::notes_exclusive(
+        &state.config().data_dir,
+        &state
+            .note_storage_id(user)
+            .map_err(settings_authority_error)?,
+    )
+    .map_err(|_| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message: match kind {
+            UtilityKind::Note => "Notes storage or its lock is unavailable".into(),
+            UtilityKind::Bookmark => "Bookmarks storage or its lock is unavailable".into(),
+        },
+    })?;
+    let attempted = std::cell::Cell::new(false);
+    #[cfg(unix)]
+    state
+        .try_with_owner_review(&user.user_id, &authority, |tx, check| {
+            check()?;
+            AppState::verify_note_owner(tx, &user.user_id)
+        })
+        .map_err(&map_error)?;
+    #[cfg(unix)]
+    let prepared = prepare();
+    let review = |tx: &rusqlite::Transaction<'_>, check: &dyn Fn() -> Result<(), String>| {
+        check()?;
+        AppState::verify_note_owner(tx, &user.user_id)?;
+        #[cfg(not(unix))]
+        let prepared = prepare();
+        check()?;
+        attempted.set(true);
+        let result = prepared.and_then(|value| value.commit());
+        if check().is_err() {
+            return Ok(Err(uncertain.clone()));
+        }
+        Ok(result)
+    };
+    #[cfg(unix)]
+    let result = state.try_with_owner_review(&user.user_id, &authority, review);
+    #[cfg(not(unix))]
+    let result = state.with_owner_review(&user.user_id, &authority, review);
+    let result = result.map_err(|error| {
+        if attempted.get()
+            && matches!(
+                error.as_str(),
+                "Credential is invalid or expired" | "Credential has been revoked"
+            )
+        {
+            uncertain.clone()
+        } else {
+            error
+        }
+    });
+    result.map_err(&map_error)?.map_err(map_error)
+}
+
 async fn list_bookmarks(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
 ) -> Result<Json<Value>, ApiError> {
-    let bookmarks = state.list_bookmarks(&user).map_err(ApiError::internal)?;
+    let bookmarks = tokio::task::spawn_blocking(move || {
+        utility_with_authority_for(&state, &user, authority, UtilityKind::Bookmark, || {
+            state.prepare_bookmark_list(&user)
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Bookmarks worker unavailable"))??;
     Ok(Json(json!({ "bookmarks": bookmarks })))
 }
 
 async fn create_bookmark(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Json(input): Json<BookmarkCreateInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     validate_string(&input.name, 1, 100, "name")?;
     validate_string(&input.command, 1, 1000, "command")?;
     validate_string(&input.category, 1, 50, "category")?;
 
-    let bookmark = state
-        .create_bookmark(&user, input.name, input.command, input.category)
-        .map_err(ApiError::internal)?;
+    let bookmark = tokio::task::spawn_blocking(move || {
+        utility_with_authority_for(&state, &user, authority, UtilityKind::Bookmark, || {
+            state.prepare_bookmark_create(&user, input.name, input.command, input.category)
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Bookmarks worker unavailable"))??;
     Ok((StatusCode::CREATED, Json(json!({ "bookmark": bookmark }))))
 }
 
 async fn update_bookmark(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Path(bookmark_id): Path<String>,
     Json(input): Json<BookmarkUpdateInput>,
 ) -> Result<Json<Value>, ApiError> {
@@ -3132,17 +3562,21 @@ async fn update_bookmark(
         validate_string(category, 1, 50, "category")?;
     }
 
-    match state
-        .update_bookmark(
-            &user,
-            &bookmark_id,
-            BookmarkUpdate {
-                name: input.name,
-                command: input.command,
-                category: input.category,
-            },
-        )
-        .map_err(ApiError::internal)?
+    match tokio::task::spawn_blocking(move || {
+        utility_with_authority_for(&state, &user, authority, UtilityKind::Bookmark, || {
+            state.prepare_bookmark_update(
+                &user,
+                &bookmark_id,
+                BookmarkUpdate {
+                    name: input.name,
+                    command: input.command,
+                    category: input.category,
+                },
+            )
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Bookmarks worker unavailable"))??
     {
         Some(bookmark) => Ok(Json(json!({ "bookmark": bookmark }))),
         None => Err(ApiError {
@@ -3155,11 +3589,16 @@ async fn update_bookmark(
 async fn delete_bookmark(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Path(bookmark_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = state
-        .delete_bookmark(&user, &bookmark_id)
-        .map_err(ApiError::internal)?;
+    let deleted = tokio::task::spawn_blocking(move || {
+        utility_with_authority_for(&state, &user, authority, UtilityKind::Bookmark, || {
+            state.prepare_bookmark_delete(&user, &bookmark_id)
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Bookmarks worker unavailable"))??;
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -3217,29 +3656,40 @@ async fn clear_mobile_keyboard_debug_entries(
 async fn list_notes(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
 ) -> Result<Json<Value>, ApiError> {
-    let notes = state.list_notes(&user).map_err(ApiError::internal)?;
+    let notes = tokio::task::spawn_blocking(move || {
+        utility_with_authority(&state, &user, authority, || state.prepare_note_list(&user))
+    })
+    .await
+    .map_err(|_| ApiError::internal("Notes worker unavailable"))??;
     Ok(Json(json!({ "notes": notes })))
 }
 
 async fn create_note(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Json(input): Json<NoteCreateInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     validate_string(&input.title, 1, 200, "title")?;
     validate_string(&input.content, 0, 50_000, "content")?;
     validate_string(&input.category, 1, 50, "category")?;
 
-    let note = state
-        .create_note(&user, input.title, input.content, input.category)
-        .map_err(ApiError::internal)?;
+    let note = tokio::task::spawn_blocking(move || {
+        utility_with_authority(&state, &user, authority, || {
+            state.prepare_note_create(&user, input.title, input.content, input.category)
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Notes worker unavailable"))??;
     Ok((StatusCode::CREATED, Json(json!({ "note": note }))))
 }
 
 async fn update_note(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Path(note_id): Path<String>,
     Json(input): Json<NoteUpdateInput>,
 ) -> Result<Json<Value>, ApiError> {
@@ -3253,17 +3703,21 @@ async fn update_note(
         validate_string(category, 1, 50, "category")?;
     }
 
-    match state
-        .update_note(
-            &user,
-            &note_id,
-            NoteUpdate {
-                title: input.title,
-                content: input.content,
-                category: input.category,
-            },
-        )
-        .map_err(ApiError::internal)?
+    match tokio::task::spawn_blocking(move || {
+        utility_with_authority(&state, &user, authority, || {
+            state.prepare_note_update(
+                &user,
+                &note_id,
+                NoteUpdate {
+                    title: input.title,
+                    content: input.content,
+                    category: input.category,
+                },
+            )
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Notes worker unavailable"))??
     {
         Some(note) => Ok(Json(json!({ "note": note }))),
         None => Err(ApiError {
@@ -3276,11 +3730,16 @@ async fn update_note(
 async fn delete_note(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Path(note_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = state
-        .delete_note(&user, &note_id)
-        .map_err(ApiError::internal)?;
+    let deleted = tokio::task::spawn_blocking(move || {
+        utility_with_authority(&state, &user, authority, || {
+            state.prepare_note_delete(&user, &note_id)
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Notes worker unavailable"))??;
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -3296,24 +3755,28 @@ async fn delete_note(
 async fn list_vault_keys(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
 ) -> Result<Json<Value>, ApiError> {
-    let cipher = vault::VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
-    let entries = state.list_vault_keys(&user).map_err(ApiError::internal)?;
-    let masked: Vec<Value> = entries
-        .into_iter()
-        .map(|e| {
-            let display_value = cipher
-                .decrypt(&e.key_value)
-                .map(|value| vault::mask_key(&value))?;
-            Ok(json!({
-                "id": e.id,
-                "keyName": e.key_name,
-                "keyValue": display_value,
-                "createdAt": e.created_at
-            }))
+    let authority = settings_local_authority(authority)?;
+    let masked = tokio::task::spawn_blocking(move || {
+        state.with_authorized_vault(&user, &authority, |tx| {
+            let cipher = vault::VaultCipher::load(&state.config().data_dir)?;
+            AppState::list_vault_keys_from_connection(tx, &user)?
+                .into_iter()
+                .map(|e| {
+                    Ok(json!({
+                        "id": e.id,
+                        "keyName": e.key_name,
+                        "keyValue": vault::mask_key(&cipher.decrypt(&e.key_value)?),
+                        "createdAt": e.created_at
+                    }))
+                })
+                .collect::<Result<Vec<Value>, String>>()
         })
-        .collect::<Result<_, String>>()
-        .map_err(ApiError::internal)?;
+    })
+    .await
+    .map_err(|_| ApiError::internal("Vault worker unavailable"))?
+    .map_err(vault_authority_error)?;
     Ok(Json(json!({ "keys": masked })))
 }
 
@@ -3324,56 +3787,104 @@ struct AddVaultKeyInput {
     key_value: String,
 }
 
+fn vault_mutation_error(error: String) -> ApiError {
+    #[cfg(unix)]
+    {
+        vault_admission::api_error(error)
+    }
+    #[cfg(not(unix))]
+    {
+        ApiError::internal(error)
+    }
+}
+
+fn vault_authority_error(error: String) -> ApiError {
+    if matches!(
+        error.as_str(),
+        "Credential is invalid or expired" | "Credential has been revoked"
+    ) {
+        settings_authority_error(error)
+    } else {
+        vault_mutation_error(error)
+    }
+}
+
 async fn add_vault_key(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Json(input): Json<AddVaultKeyInput>,
 ) -> Result<Json<Value>, ApiError> {
     validate_string(&input.key_name, 1, 100, "keyName")?;
     validate_string(&input.key_value, 1, 10000, "keyValue")?;
-    let cipher = vault::VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
-    let encrypted = cipher
-        .encrypt(&input.key_value)
-        .map_err(ApiError::internal)?;
+    let authority = settings_local_authority(authority)?;
     let id = Uuid::new_v4().to_string();
     let now = iso_timestamp();
-    state
-        .add_vault_key(&user, &id, input.key_name.trim(), &encrypted, &now)
-        .map_err(ApiError::internal)?;
-    Ok(Json(json!({
+    let response = json!({
         "id": id,
         "keyName": input.key_name.trim(),
         "keyValue": vault::mask_key(&input.key_value),
         "createdAt": now
-    })))
+    });
+    tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        let _lease = vault_admission::exclusive(&state.config().data_dir, &user.user_id)?;
+        state.with_authorized_vault(&user, &authority, |tx| {
+            let cipher = vault::VaultCipher::load(&state.config().data_dir)?;
+            let encrypted = cipher.encrypt(&input.key_value)?;
+            tx.execute("INSERT INTO api_key_vault (id, user_id, key_name, key_value, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![id, user.user_id, input.key_name.trim(), encrypted, now])
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+    }).await.map_err(|_| ApiError::internal("Vault worker unavailable"))?.map_err(vault_authority_error)?;
+    Ok(Json(response))
 }
 
 async fn reveal_vault_key(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Path(key_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let entry = state
-        .get_vault_key(&user, &key_id)
-        .map_err(ApiError::internal)?
+    let authority = settings_local_authority(authority)?;
+    let entry = tokio::task::spawn_blocking(move || {
+        let first = state.with_authorized_vault(&user, &authority, |tx| {
+            let entry = AppState::get_vault_key_from_connection(tx, &user, &key_id)?;
+            match entry {
+                Some(mut entry) if entry.key_value.starts_with("enc:v2:") => {
+                    entry.key_value = vault::VaultCipher::load(&state.config().data_dir)?.decrypt(&entry.key_value)?;
+                    Ok((Some(entry), false))
+                }
+                Some(_) => Ok((None, true)),
+                None => Ok((None, false)),
+            }
+        })?;
+        if !first.1 { return Ok(first.0); }
+        #[cfg(unix)]
+        let _lease = vault_admission::exclusive(&state.config().data_dir, &user.user_id)?;
+        state.with_authorized_vault(&user, &authority, |tx| {
+            let Some(mut entry) = AppState::get_vault_key_from_connection(tx, &user, &key_id)? else { return Ok(None); };
+            let cipher = vault::VaultCipher::load(&state.config().data_dir)?;
+            let decrypted = cipher.decrypt(&entry.key_value)?;
+            if !entry.key_value.starts_with("enc:v2:") {
+                let encrypted = cipher.encrypt(&decrypted)?;
+                tx.execute("UPDATE api_key_vault SET key_value = ?1 WHERE id = ?2 AND user_id = ?3 AND key_value = ?4",
+                    rusqlite::params![encrypted, entry.id, user.user_id, entry.key_value])
+                    .map_err(|error| error.to_string())?;
+            }
+            entry.key_value = decrypted;
+            Ok(Some(entry))
+        })
+    }).await.map_err(|_| ApiError::internal("Vault worker unavailable"))?.map_err(vault_authority_error)?
         .ok_or_else(|| ApiError {
             status: StatusCode::NOT_FOUND,
             message: "Key not found".to_string(),
         })?;
-    let cipher = vault::VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
-    let decrypted = cipher
-        .decrypt(&entry.key_value)
-        .map_err(ApiError::internal)?;
-    if !entry.key_value.starts_with("enc:v2:") {
-        let encrypted = cipher.encrypt(&decrypted).map_err(ApiError::internal)?;
-        state
-            .migrate_vault_key(&user, &entry.id, &entry.key_value, &encrypted)
-            .map_err(ApiError::internal)?;
-    }
     Ok(Json(json!({
         "id": entry.id,
         "keyName": entry.key_name,
-        "keyValue": decrypted,
+        "keyValue": entry.key_value,
         "createdAt": entry.created_at
     })))
 }
@@ -3381,11 +3892,26 @@ async fn reveal_vault_key(
 async fn delete_vault_key(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = state
-        .delete_vault_key(&user, &key_id)
-        .map_err(ApiError::internal)?;
+    let authority = settings_local_authority(authority)?;
+    let deleted = tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        let _lease = vault_admission::exclusive(&state.config().data_dir, &user.user_id)?;
+        state.with_authorized_vault(&user, &authority, |tx| {
+            let count = tx
+                .execute(
+                    "DELETE FROM api_key_vault WHERE id = ? AND user_id = ?",
+                    rusqlite::params![key_id, user.user_id],
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(count > 0)
+        })
+    })
+    .await
+    .map_err(|_| ApiError::internal("Vault worker unavailable"))?
+    .map_err(vault_authority_error)?;
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -6192,7 +6718,7 @@ fn project_scan_paths(state: &AppState, user: &AuthenticatedUser) -> Result<Vec<
 }
 
 fn project_scan_entries(state: &AppState, user: &AuthenticatedUser) -> Result<Vec<Value>, String> {
-    project_scan_paths(state, user).map(|paths| project_entries_from_paths(paths.into_iter()))
+    project_scan_paths(state, user).map(project_entries_from_paths)
 }
 
 fn project_entries_from_paths(paths: impl IntoIterator<Item = String>) -> Vec<Value> {
@@ -6847,7 +7373,7 @@ fn authenticate_runtime_websocket(
     } else {
         query_token
             .ok_or_else(|| "Missing session token".to_string())
-            .and_then(|token| crate::auth::authenticate_local_token(&state, token))
+            .and_then(|token| crate::auth::authenticate_local_token(state, token))
     };
     result.map_err(|_| ApiError {
         status: StatusCode::UNAUTHORIZED,
@@ -6860,7 +7386,7 @@ async fn wait_for_preview_revocation(state: &AppState, token: &str, path: &str) 
     loop {
         interval.tick().await;
         if auth::authenticate_runtime_request(state, token, "GET", path).is_err()
-            && crate::auth::authenticate_runtime_preview_token(&state, token, path).is_err()
+            && crate::auth::authenticate_runtime_preview_token(state, token, path).is_err()
         {
             return;
         }
@@ -6894,28 +7420,24 @@ fn authenticate_preview_request_user(
         message: "Missing preview session".to_string(),
     })?;
 
-    crate::auth::authenticate_runtime_preview_token(
-        &state,
-        &token,
-        preview_auth_route_path(request),
-    )
-    .or_else(|_| {
-        let path = if preview_subdomain_port(request.headers()).is_some() {
-            format!("/preview/{port}{}", request.uri().path())
-        } else {
-            request.uri().path().into()
-        };
-        preview::auth_urls::authenticate_resource_token(
-            state,
-            &token,
-            request.method().as_str(),
-            &path,
-        )
-    })
-    .map_err(|_| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        message: "Invalid or expired preview session".to_string(),
-    })
+    crate::auth::authenticate_runtime_preview_token(state, &token, preview_auth_route_path(request))
+        .or_else(|_| {
+            let path = if preview_subdomain_port(request.headers()).is_some() {
+                format!("/preview/{port}{}", request.uri().path())
+            } else {
+                request.uri().path().into()
+            };
+            preview::auth_urls::authenticate_resource_token(
+                state,
+                &token,
+                request.method().as_str(),
+                &path,
+            )
+        })
+        .map_err(|_| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Invalid or expired preview session".to_string(),
+        })
 }
 
 fn preview_auth_route_path(request: &axum::extract::Request) -> &str {
@@ -7018,7 +7540,7 @@ async fn preview_proxy_logs_after_cursor_for_user(
         .await
 }
 
-fn sort_proxy_logs(entries: &mut Vec<preview::request_logs::ProxyLogEntry>) {
+fn sort_proxy_logs(entries: &mut [preview::request_logs::ProxyLogEntry]) {
     entries.sort_by(|left, right| {
         left.timestamp
             .cmp(&right.timestamp)
@@ -9367,6 +9889,9 @@ mod tests {
     #[tokio::test]
     async fn bookmarks_and_notes_routes_support_crud() {
         let state = test_state();
+        state.lock_db().unwrap().execute(
+            "INSERT INTO users(id,username,password_hash,created_at,updated_at) VALUES('user-3','conor','synthetic','2026','2026')", [],
+        ).unwrap();
         let token = issue_access_token(&state.config().jwt_secret, "user-3", "conor");
         let app = app(state);
 

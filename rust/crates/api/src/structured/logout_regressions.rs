@@ -1127,7 +1127,11 @@ async fn logout_revokes_existing_access_before_waiting_for_session_cleanup() {
             user_id: auth.user.id.clone(),
             username: auth.user.username.clone(),
         };
-        async move { crate::logout(State(state), Extension(user)).await }
+        let authority =
+            crate::auth::authenticate_local_with_authority(&state, &auth.tokens.access_token)
+                .unwrap()
+                .1;
+        async move { crate::logout(State(state), Extension(user), Some(Extension(authority))).await }
     });
     let revoked = tokio::time::timeout(Duration::from_secs(2), async {
         while crate::auth::authenticate_local_token(&state, &auth.tokens.access_token).is_ok() {
@@ -1193,7 +1197,11 @@ async fn disconnect_after_revocation_does_not_cancel_session_cleanup() {
             user_id: auth.user.id.clone(),
             username: auth.user.username.clone(),
         };
-        async move { crate::logout(State(state), Extension(user)).await }
+        let authority =
+            crate::auth::authenticate_local_with_authority(&state, &auth.tokens.access_token)
+                .unwrap()
+                .1;
+        async move { crate::logout(State(state), Extension(user), Some(Extension(authority))).await }
     });
     tokio::time::timeout(Duration::from_secs(2), async {
         while crate::auth::authenticate_local_token(&state, &auth.tokens.access_token).is_ok() {

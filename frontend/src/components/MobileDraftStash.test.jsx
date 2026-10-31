@@ -40,6 +40,16 @@ describe('MobileDraftStash', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('could not be stashed');
   });
 
+  it('keeps the current draft and explains how to make room when the stash is full', () => {
+    for (let index = 0; index < 20; index += 1) stashDraft(`Draft ${index}`, index + 1);
+    const saved = loadStash();
+    render(<Harness initial="Keep this new draft" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Stash (20)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stash this draft' }));
+    expect([draft(), loadStash()]).toEqual(['Keep this new draft', saved]);
+    expect(screen.getByRole('alert')).toHaveTextContent(/stash is full.*restore/i);
+  });
+
   it('disables stashing an empty draft and says when nothing is stashed', () => {
     render(<Harness initial="  " />);
     fireEvent.click(screen.getByRole('button', { name: 'Stash' }));

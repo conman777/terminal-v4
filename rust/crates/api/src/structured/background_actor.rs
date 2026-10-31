@@ -26,6 +26,9 @@ async fn fixture() -> Fixture {
     .unwrap();
     let manager = app.structured_session_manager();
     manager.bind_live_ownership().unwrap();
+    manager
+        .bind_local_admission(app.local_admission().unwrap())
+        .unwrap();
     let id = manager
         .create_session(
             "owner",

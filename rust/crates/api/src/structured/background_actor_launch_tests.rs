@@ -1,9 +1,1309 @@
 use super::*;
 use crate::v4_agent::background_process::{
-    tool::BackgroundActor, BackgroundProcesses, BackgroundRequest, BackgroundScope, BackgroundState,
+    tool::{execute_actor, BackgroundActor},
+    BackgroundProcesses, BackgroundRequest, BackgroundScope, BackgroundState,
 };
 
 const TEST_CALL: &str = "fixture-background-call";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_paired_grant_cannot_approve_a_previously_previewed_output() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let bound: Arc<dyn BackgroundActor> = actor.clone();
+    fixture
+        .controller
+        .resources
+        .bind_background_actor(&bound)
+        .unwrap();
+    let action = started_through_actor(
+        &fixture,
+        &actor,
+        "paired-revoke-start",
+        "printf synthetic",
+        5,
+    )
+    .await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "paired-revoke-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let task = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) =
+        wait_tool_approval(&fixture, "paired-revoke-review", "background_read_output").await;
+    let (grant_id, paired) =
+        crate::paired_environments::synthetic_input_grant(&fixture.app, "owner");
+    let local = crate::auth::issue_access_token(&fixture.app.config().jwt_secret, "owner", "owner");
+    let base = format!("/api/structured/sessions/{}/private-output", fixture.id);
+    let post = |path: String, credential: &str, body: Value| {
+        Request::post(path)
+            .header("authorization", format!("Bearer {credential}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let app = crate::app(fixture.app.clone());
+    let response = app
+        .clone()
+        .oneshot(post(
+            format!("{base}/preview"),
+            &paired,
+            serde_json::json!({"approvalId":id,"actionId":action}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await.unwrap()).unwrap();
+    let revoked = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/environments/grants/{grant_id}"))
+                .header("authorization", format!("Bearer {local}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+    let denied = app.clone().oneshot(post(format!("{base}/approve"), &paired, serde_json::json!({"approvalId":id,"actionId":action,"previewToken":preview["previewToken"]}))).await.unwrap();
+    assert_ne!(denied.status(), StatusCode::OK);
+    let rejected = app
+        .oneshot(post(
+            format!("/api/structured/sessions/{}/approve", fixture.id),
+            &local,
+            serde_json::json!({"approvalId":id,"approved":false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::OK);
+    assert!(task.await.unwrap().is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_review_http_allows_an_authorized_paired_owner() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let bound: Arc<dyn BackgroundActor> = actor.clone();
+    fixture
+        .controller
+        .resources
+        .bind_background_actor(&bound)
+        .unwrap();
+    let action = started_through_actor(
+        &fixture,
+        &actor,
+        "paired-private-start",
+        "printf synthetic",
+        5,
+    )
+    .await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "paired-private-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let task = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) =
+        wait_tool_approval(&fixture, "paired-private-review", "background_read_output").await;
+    let (_, paired) = crate::paired_environments::synthetic_input_grant(&fixture.app, "owner");
+    let (_, foreign) = crate::paired_environments::synthetic_input_grant(&fixture.app, "other");
+    let (observer_id, observer) =
+        crate::paired_environments::synthetic_input_grant(&fixture.app, "owner");
+    fixture
+        .app
+        .lock_db()
+        .unwrap()
+        .execute(
+            "UPDATE paired_grants SET capabilities=?1 WHERE id=?2",
+            rusqlite::params![
+                serde_json::to_string(&crate::remote_permissions::Capabilities::observer())
+                    .unwrap(),
+                observer_id
+            ],
+        )
+        .unwrap();
+    let base = format!("/api/structured/sessions/{}/private-output", fixture.id);
+    let post = |path: String, credential: &str, body: Value| {
+        Request::post(path)
+            .header("authorization", format!("Bearer {credential}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let app = crate::app(fixture.app.clone());
+    let body = serde_json::json!({"approvalId":id,"actionId":action});
+    let denied = app
+        .clone()
+        .oneshot(post(format!("{base}/preview"), &foreign, body.clone()))
+        .await
+        .unwrap();
+    assert_ne!(denied.status(), StatusCode::OK);
+    let read_only = app
+        .clone()
+        .oneshot(post(format!("{base}/preview"), &observer, body.clone()))
+        .await
+        .unwrap();
+    assert_ne!(read_only.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(post(format!("{base}/preview"), &paired, body))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("cache-control")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("no-store"));
+    let preview: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await.unwrap()).unwrap();
+    assert_eq!(preview["output"]["stdout"], "synthetic");
+    let accepted = app.oneshot(post(format!("{base}/approve"), &paired, serde_json::json!({"approvalId":id,"actionId":action,"previewToken":preview["previewToken"]}))).await.unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    assert_eq!(
+        actor
+            .release_output(task.await.unwrap().unwrap())
+            .await
+            .unwrap()
+            .stdout,
+        "synthetic"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_review_http_denial_never_journals_the_previewed_output() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    fn contains(path: &std::path::Path, needle: &[u8]) -> bool {
+        std::fs::read_dir(path)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                let path = entry.path();
+                if path.is_dir() {
+                    contains(&path, needle)
+                } else {
+                    std::fs::read(path)
+                        .is_ok_and(|bytes| bytes.windows(needle.len()).any(|part| part == needle))
+                }
+            })
+    }
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let bound: Arc<dyn BackgroundActor> = actor.clone();
+    fixture
+        .controller
+        .resources
+        .bind_background_actor(&bound)
+        .unwrap();
+    let secret = b"SYNTHETIC_DENIED_PRIVATE_OUTPUT";
+    std::fs::write(fixture._workspace.path().join("secret-fixture"), secret).unwrap();
+    let action =
+        started_through_actor(&fixture, &actor, "denial-start", "cat secret-fixture", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "denial-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let task = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) = wait_tool_approval(&fixture, "denial-review", "background_read_output").await;
+    let access =
+        crate::auth::issue_access_token(&fixture.app.config().jwt_secret, "owner", "owner");
+    let app = crate::app(fixture.app.clone());
+    let post = |path: String, body: Value| {
+        Request::post(path)
+            .header("authorization", format!("Bearer {access}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let response = app
+        .clone()
+        .oneshot(post(
+            format!(
+                "/api/structured/sessions/{}/private-output/preview",
+                fixture.id
+            ),
+            serde_json::json!({"approvalId":id,"actionId":action}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let preview = to_bytes(response.into_body(), 1_048_576).await.unwrap();
+    assert!(preview.windows(secret.len()).any(|part| part == secret));
+    let denied = app
+        .oneshot(post(
+            format!("/api/structured/sessions/{}/approve", fixture.id),
+            serde_json::json!({"approvalId":id,"approved":false}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::OK);
+    assert!(task.await.unwrap().is_err());
+    assert!(!format!("{:?}", fixture.live.state.lock().await.events)
+        .contains(std::str::from_utf8(secret).unwrap()));
+    assert!(!contains(fixture._data.path(), secret));
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_review_http_requires_owner_preview_and_exact_decision() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let bound: Arc<dyn BackgroundActor> = actor.clone();
+    fixture
+        .controller
+        .resources
+        .bind_background_actor(&bound)
+        .unwrap();
+    std::fs::write(
+        fixture._workspace.path().join("secret-fixture"),
+        b"SYNTHETIC_PRIVATE_OUTPUT",
+    )
+    .unwrap();
+    let action = started_through_actor(
+        &fixture,
+        &actor,
+        "http-private-start",
+        "cat secret-fixture",
+        5,
+    )
+    .await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "http-private-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let task = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) =
+        wait_tool_approval(&fixture, "http-private-review", "background_read_output").await;
+    let access =
+        crate::auth::issue_access_token(&fixture.app.config().jwt_secret, "owner", "owner");
+    let foreign =
+        crate::auth::issue_access_token(&fixture.app.config().jwt_secret, "other", "other");
+    let base = format!("/api/structured/sessions/{}/private-output", fixture.id);
+    let post = |path: String, credential: &str, body: Value| {
+        Request::post(path)
+            .header("authorization", format!("Bearer {credential}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let body = serde_json::json!({"approvalId": id, "actionId": action});
+    let app = crate::app(fixture.app.clone());
+    let denied = app
+        .clone()
+        .oneshot(post(format!("{base}/preview"), &foreign, body.clone()))
+        .await
+        .unwrap();
+    assert_ne!(denied.status(), StatusCode::OK);
+    let generic = app
+        .clone()
+        .oneshot(post(
+            format!("/api/structured/sessions/{}/approve", fixture.id),
+            &access,
+            serde_json::json!({"approvalId":id,"approved":true}),
+        ))
+        .await
+        .unwrap();
+    assert_ne!(generic.status(), StatusCode::OK);
+    let session_approval = app
+        .clone()
+        .oneshot(post(
+            format!("/api/structured/sessions/{}/approve", fixture.id),
+            &access,
+            serde_json::json!({"approvalId":id,"approved":true,"forSession":true}),
+        ))
+        .await
+        .unwrap();
+    assert_ne!(session_approval.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(post(format!("{base}/preview"), &access, body.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("cache-control")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("no-store"));
+    let preview: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await.unwrap()).unwrap();
+    assert_eq!(preview["output"]["stdout"], "SYNTHETIC_PRIVATE_OUTPUT");
+    let token = preview["previewToken"].as_str().unwrap();
+    let bad = app
+        .clone()
+        .oneshot(post(
+            format!("{base}/approve"),
+            &access,
+            serde_json::json!({"approvalId":id,"actionId":action,"previewToken":"bad"}),
+        ))
+        .await
+        .unwrap();
+    assert_ne!(bad.status(), StatusCode::OK);
+    let wrong_action = app
+        .clone()
+        .oneshot(post(
+            format!("{base}/approve"),
+            &access,
+            serde_json::json!({"approvalId":id,"actionId":"f".repeat(64),"previewToken":token}),
+        ))
+        .await
+        .unwrap();
+    assert_ne!(wrong_action.status(), StatusCode::OK);
+    let accepted = app
+        .clone()
+        .oneshot(post(
+            format!("{base}/approve"),
+            &access,
+            serde_json::json!({"approvalId":id,"actionId":action,"previewToken":token}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let retry = app
+        .oneshot(post(
+            format!("{base}/approve"),
+            &access,
+            serde_json::json!({"approvalId":id,"actionId":action,"previewToken":token}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let receipt: Value =
+        serde_json::from_slice(&to_bytes(retry.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(receipt["status"], "already_decided");
+    let output = actor
+        .release_output(task.await.unwrap().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(output.stdout, "SYNTHETIC_PRIVATE_OUTPUT");
+    assert!(!format!("{:?}", fixture.live.state.lock().await.events)
+        .contains("SYNTHETIC_PRIVATE_OUTPUT"));
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_decision_rejects_a_reviewer_revoked_after_preview() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = started_through_actor(&fixture, &actor, "revoke-start", "printf private", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "revoke-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let task = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) = wait_tool_approval(&fixture, "revoke-review", "background_read_output").await;
+    let reviewer = crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX);
+    let (token, _) = actor
+        .private_output_preview(&id, &action, &reviewer)
+        .await
+        .unwrap();
+    fixture.app.logout_user("owner").unwrap();
+    let context = Arc::new(PairedDecisionContext {
+        guard: Arc::new(fixture.app.acquire_input_guard("owner").unwrap()),
+        state: fixture.app.clone(),
+        authority: DecisionAuthority::Local(reviewer),
+        owner: "owner".into(),
+    });
+    assert!(actor
+        .private_output_decision(&id, &action, &token, &context)
+        .await
+        .is_err());
+    drop(context);
+    fixture.controller.cancel.cancel();
+    assert!(task.await.unwrap().is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_decision_requires_live_owner_action_and_matching_preview() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action =
+        started_through_actor(&fixture, &actor, "decision-start", "printf private", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "decision-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let task = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) = wait_tool_approval(&fixture, "decision-review", "background_read_output").await;
+    let reviewer = crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX);
+    let (token, _) = actor
+        .private_output_preview(&id, &action, &reviewer)
+        .await
+        .unwrap();
+    let wrong_guard = Arc::new(PairedDecisionContext {
+        guard: Arc::new(fixture.app.acquire_input_guard("other").unwrap()),
+        state: fixture.app.clone(),
+        authority: DecisionAuthority::Local(reviewer.clone()),
+        owner: "owner".into(),
+    });
+    assert!(actor
+        .private_output_decision(&id, &action, &token, &wrong_guard)
+        .await
+        .is_err());
+    drop(wrong_guard);
+    let foreign_root = tempfile::tempdir().unwrap();
+    let foreign_app = crate::state::AppState::new(AppConfig {
+        data_dir: foreign_root.path().into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let wrong_root = Arc::new(PairedDecisionContext {
+        guard: Arc::new(foreign_app.acquire_input_guard("owner").unwrap()),
+        state: fixture.app.clone(),
+        authority: DecisionAuthority::Local(reviewer.clone()),
+        owner: "owner".into(),
+    });
+    assert!(actor
+        .private_output_decision(&id, &action, &token, &wrong_root)
+        .await
+        .is_err());
+    drop(wrong_root);
+    let context = Arc::new(PairedDecisionContext {
+        guard: Arc::new(fixture.app.acquire_input_guard("owner").unwrap()),
+        state: fixture.app.clone(),
+        authority: DecisionAuthority::Local(reviewer),
+        owner: "owner".into(),
+    });
+    assert!(actor
+        .private_output_decision(&id, &"f".repeat(64), &token, &context)
+        .await
+        .is_err());
+    assert!(actor
+        .private_output_decision(&id, &action, "wrong-token", &context)
+        .await
+        .is_err());
+    let workspace = fixture._workspace.path();
+    let backup = fixture._data.path().join("decision-original-workspace");
+    std::fs::rename(workspace, &backup).unwrap();
+    std::fs::create_dir(workspace).unwrap();
+    let replaced = actor
+        .private_output_decision(&id, &action, &token, &context)
+        .await;
+    std::fs::remove_dir(workspace).unwrap();
+    std::fs::rename(&backup, workspace).unwrap();
+    assert!(replaced.is_err());
+    assert!(
+        actor
+            .private_output_decision(&id, &action, &token, &context)
+            .await
+            .unwrap()
+            .approved
+    );
+    assert_eq!(
+        actor
+            .private_output_decision(&id, &action, &token, &context)
+            .await
+            .unwrap()
+            .status,
+        "already_decided"
+    );
+    let output = actor
+        .release_output(task.await.unwrap().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(output.stdout, "private");
+    drop(context);
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_preview_requires_matching_action_and_live_origin_authority() {
+    let fixture = fixture().await;
+    let (background, actor, request) = actor_fixture(&fixture).await;
+    let action =
+        started_through_actor(&fixture, &actor, "preview-start", "printf private", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "preview-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let task = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) = wait_tool_approval(&fixture, "preview-review", "background_read_output").await;
+    let reviewer = crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX);
+    let other_actor = BackgroundTurn::new(
+        fixture.manager.clone(),
+        background,
+        actor_scope(&actor),
+        7,
+        request.scope.workspace,
+        fixture.controller.clone(),
+        reviewer.clone(),
+    )
+    .unwrap();
+    let foreign = crate::auth::LocalAuthority::for_test("other", 0, i64::MAX);
+    let expired = crate::auth::LocalAuthority::for_test("owner", 0, 1);
+    let newer_generation = crate::auth::LocalAuthority::for_test("owner", 1, i64::MAX);
+    assert!(actor
+        .private_output_preview(&id, &"f".repeat(64), &reviewer)
+        .await
+        .is_err());
+    assert!(actor
+        .private_output_preview(&id, &action, &foreign)
+        .await
+        .is_err());
+    assert!(actor
+        .private_output_preview(&id, &action, &expired)
+        .await
+        .is_err());
+    assert!(actor
+        .private_output_preview(&id, &action, &newer_generation)
+        .await
+        .is_err());
+    assert!(other_actor
+        .private_output_preview(&id, &action, &reviewer)
+        .await
+        .is_err());
+    let workspace = fixture._workspace.path();
+    let backup = fixture._data.path().join("preview-original-workspace");
+    std::fs::rename(workspace, &backup).unwrap();
+    std::fs::create_dir(workspace).unwrap();
+    let replaced_preview = actor.private_output_preview(&id, &action, &reviewer).await;
+    std::fs::remove_dir(workspace).unwrap();
+    std::fs::rename(&backup, workspace).unwrap();
+    assert!(replaced_preview.is_err());
+    let (token, preview) = actor
+        .private_output_preview(&id, &action, &reviewer)
+        .await
+        .unwrap();
+    assert_eq!(preview["stdout"], "private");
+    assert!(fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            other_actor.review_origin_for_test(),
+            actor.review_workspace_for_test(),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(())
+        )
+        .await
+        .is_err());
+    assert!(fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            actor.review_origin_for_test(),
+            (u64::MAX, u64::MAX),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(())
+        )
+        .await
+        .is_err());
+    fixture.app.logout_user("owner").unwrap();
+    assert!(actor
+        .private_output_preview(&id, &action, &reviewer)
+        .await
+        .is_err());
+    fixture.controller.cancel.cancel();
+    assert!(task.await.unwrap().is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_background_review_cannot_release_after_stop_or_session_replacement() {
+    for replace_session in [false, true] {
+        let fixture = fixture().await;
+        let (_background, actor, _) = actor_fixture(&fixture).await;
+        let action =
+            started_through_actor(&fixture, &actor, "identity-start", "printf private", 5).await;
+        assert_eq!(
+            terminal(&actor, &action).await,
+            BackgroundState::Exited { code: Some(0) }
+        );
+        let prepared = actor
+            .prepare_output(&action, "identity-review")
+            .await
+            .unwrap();
+        let approving = actor.clone();
+        let approval = tokio::spawn(async move { approving.approve_output(prepared).await });
+        let (id, _) =
+            wait_tool_approval(&fixture, "identity-review", "background_read_output").await;
+        let (token, _) = fixture
+            .controller
+            .gate
+            .private_output_preview_checked(&id, &|| Ok(()))
+            .await
+            .unwrap();
+        fixture
+            .controller
+            .gate
+            .decide_private_output_with_expiry(
+                &id,
+                &action,
+                &token,
+                actor.review_origin_for_test(),
+                actor.review_workspace_for_test(),
+                fixture.controller.sink.as_ref(),
+                i64::MAX,
+                &|| Ok(()),
+            )
+            .await
+            .unwrap();
+        let approved = approval.await.unwrap().unwrap();
+        if replace_session {
+            fixture.live.state.lock().await.session_incarnation =
+                Some(SessionIncarnation(Uuid::new_v4()));
+        } else {
+            fixture.controller.cancel.cancel();
+        }
+        assert!(actor.release_output(approved).await.is_err());
+        fixture.controller.done.send_replace(true);
+        fixture.manager.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_background_review_is_bound_to_its_originating_actor() {
+    let fixture = fixture().await;
+    let (background, actor, request) = actor_fixture(&fixture).await;
+    let action = started_through_actor(&fixture, &actor, "actor-start", "printf private", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let other = BackgroundTurn::new(
+        fixture.manager.clone(),
+        background,
+        actor_scope(&actor),
+        7,
+        request.scope.workspace.clone(),
+        fixture.controller.clone(),
+        crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX),
+    )
+    .unwrap();
+    let before = approvals_shown(&fixture).await;
+    let prepared = actor
+        .prepare_output(&action, "foreign-review")
+        .await
+        .unwrap();
+    assert!(other.approve_output(prepared).await.is_err());
+    assert_eq!(approvals_shown(&fixture).await, before);
+
+    let prepared = actor
+        .prepare_output(&action, "origin-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let approval = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) = wait_tool_approval(&fixture, "origin-review", "background_read_output").await;
+    let (token, _) = fixture
+        .controller
+        .gate
+        .private_output_preview_checked(&id, &|| Ok(()))
+        .await
+        .unwrap();
+    fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            actor.review_origin_for_test(),
+            actor.review_workspace_for_test(),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    assert!(other
+        .release_output(approval.await.unwrap().unwrap())
+        .await
+        .is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_background_review_does_not_prompt_after_logout() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action =
+        started_through_actor(&fixture, &actor, "before-logout", "printf private", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "after-logout-review")
+        .await
+        .unwrap();
+    let before = approvals_shown(&fixture).await;
+    fixture.app.logout_user("owner").unwrap();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        actor.approve_output(prepared),
+    )
+    .await;
+    assert!(
+        matches!(result, Ok(Err(_))),
+        "revoked output should not reach review"
+    );
+    assert_eq!(approvals_shown(&fixture).await, before);
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_background_review_releases_only_the_frozen_snapshot() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = started_through_actor(
+        &fixture,
+        &actor,
+        "freeze-start",
+        "printf initial; while [ ! -f continue ]; do sleep 0.05; done; printf later",
+        10,
+    )
+    .await;
+    actor
+        .wait_output(&action, 0, std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
+    let prepared = actor
+        .prepare_output(&action, "freeze-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let approval = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) = wait_tool_approval(&fixture, "freeze-review", "background_read_output").await;
+    let (token, preview) = fixture
+        .controller
+        .gate
+        .private_output_preview_checked(&id, &|| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(preview["stdout"], "initial");
+    std::fs::write(fixture._workspace.path().join("continue"), b"go").unwrap();
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            actor.review_origin_for_test(),
+            actor.review_workspace_for_test(),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    let released = actor
+        .release_output(approval.await.unwrap().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(released.stdout, "initial");
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn followed_background_tail_requires_review_and_preserves_latest_output() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = started_through_actor(
+        &fixture,
+        &actor,
+        "tail-start",
+        "head -c 66000 /dev/zero | tr '\\000' a; printf TAIL_END",
+        10,
+    )
+    .await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let following: Arc<dyn BackgroundActor> = actor.clone();
+    let following_action = action.clone();
+    let task = tokio::spawn(async move {
+        execute_actor(
+            &following,
+            "tail-review",
+            "background_follow_output",
+            &serde_json::json!({"actionId":following_action,"afterRevision":0,"timeoutSeconds":1}),
+        )
+        .await
+    });
+    let (id, _) = wait_tool_approval(&fixture, "tail-review", "background_read_output").await;
+    assert!(!task.is_finished());
+    let (token, preview) = fixture
+        .controller
+        .gate
+        .private_output_preview_checked(&id, &|| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(preview["window"], "tail");
+    assert_eq!(preview["stdoutTruncated"], true);
+    assert!(preview["stdout"].as_str().unwrap().ends_with("TAIL_END"));
+    fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            actor.review_origin_for_test(),
+            actor.review_workspace_for_test(),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_str(&task.await.unwrap().unwrap()).unwrap();
+    assert_eq!(value["window"], "tail");
+    assert_eq!(value["stdout"], preview["stdout"]);
+    assert_eq!(value["outputWithheld"], false);
+    assert!(value["outputRevision"].as_u64().unwrap() > 0);
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn follow_waits_without_requesting_review_when_output_has_not_changed() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = started_through_actor(&fixture, &actor, "quiet-start", "sleep 5", 10).await;
+    let before = approvals_shown(&fixture).await;
+    let bound: Arc<dyn BackgroundActor> = actor.clone();
+    let output = execute_actor(
+        &bound,
+        "quiet-follow",
+        "background_follow_output",
+        &serde_json::json!({"actionId":action,"afterRevision":0,"timeoutSeconds":1}),
+    )
+    .await
+    .unwrap();
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["outputRevision"], 0);
+    assert_eq!(value["outputChanged"], false);
+    assert_eq!(value["outputWithheld"], false);
+    assert!(value.get("stdout").is_none());
+    assert_eq!(approvals_shown(&fixture).await, before);
+    actor.cancel(&action).await.unwrap();
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn followed_tail_freezes_review_and_denial_never_releases_output() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    std::fs::write(
+        fixture._workspace.path().join("later-fixture"),
+        b"SYNTHETIC_TAIL_TWO",
+    )
+    .unwrap();
+    let action = started_through_actor(&fixture, &actor, "follow-freeze-start", "printf SYNTHETIC_TAIL_ONE; while [ ! -f continue ]; do sleep 0.05; done; cat later-fixture", 10).await;
+    actor
+        .wait_output(&action, 0, std::time::Duration::from_secs(5))
+        .await
+        .unwrap();
+    let following: Arc<dyn BackgroundActor> = actor.clone();
+    let selected = action.clone();
+    let task = tokio::spawn(async move {
+        execute_actor(
+            &following,
+            "follow-freeze-review",
+            "background_follow_output",
+            &serde_json::json!({"actionId":selected,"afterRevision":0,"timeoutSeconds":1}),
+        )
+        .await
+    });
+    let (id, _) =
+        wait_tool_approval(&fixture, "follow-freeze-review", "background_read_output").await;
+    let (token, preview) = fixture
+        .controller
+        .gate
+        .private_output_preview_checked(&id, &|| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(preview["stdout"], "SYNTHETIC_TAIL_ONE");
+    std::fs::write(fixture._workspace.path().join("continue"), b"go").unwrap();
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            actor.review_origin_for_test(),
+            actor.review_workspace_for_test(),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    let value: Value = serde_json::from_str(&task.await.unwrap().unwrap()).unwrap();
+    assert_eq!(value["stdout"], "SYNTHETIC_TAIL_ONE");
+    let following: Arc<dyn BackgroundActor> = actor.clone();
+    let selected = action.clone();
+    let revision = value["outputRevision"].as_u64().unwrap();
+    let denied = tokio::spawn(async move {
+        execute_actor(
+            &following,
+            "follow-denied-review",
+            "background_follow_output",
+            &serde_json::json!({"actionId":selected,"afterRevision":revision,"timeoutSeconds":1}),
+        )
+        .await
+    });
+    let (id, _) =
+        wait_tool_approval(&fixture, "follow-denied-review", "background_read_output").await;
+    let (_, preview) = fixture
+        .controller
+        .gate
+        .private_output_preview_checked(&id, &|| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(preview["stdout"], "SYNTHETIC_TAIL_ONESYNTHETIC_TAIL_TWO");
+    decide(&fixture, &id, false).await;
+    assert!(denied.await.unwrap().unwrap_err().contains("denied"));
+    let events = format!("{:?}", fixture.live.state.lock().await.events);
+    assert!(!events.contains("SYNTHETIC_TAIL_TWO"));
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn followed_tail_cannot_be_released_after_logout() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action =
+        started_through_actor(&fixture, &actor, "follow-logout-start", "printf private", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let following: Arc<dyn BackgroundActor> = actor.clone();
+    let selected = action.clone();
+    let task = tokio::spawn(async move {
+        execute_actor(
+            &following,
+            "follow-logout-review",
+            "background_follow_output",
+            &serde_json::json!({"actionId":selected,"afterRevision":0,"timeoutSeconds":1}),
+        )
+        .await
+    });
+    let (id, _) =
+        wait_tool_approval(&fixture, "follow-logout-review", "background_read_output").await;
+    let (token, _) = fixture
+        .controller
+        .gate
+        .private_output_preview_checked(&id, &|| Ok(()))
+        .await
+        .unwrap();
+    fixture.app.logout_user("owner").unwrap();
+    let _ = fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            actor.review_origin_for_test(),
+            actor.review_workspace_for_test(),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(()),
+        )
+        .await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn private_background_review_cannot_release_after_logout() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = started_through_actor(&fixture, &actor, "logout-start", "printf private", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let prepared = actor
+        .prepare_output(&action, "logout-review")
+        .await
+        .unwrap();
+    let approving = actor.clone();
+    let approval = tokio::spawn(async move { approving.approve_output(prepared).await });
+    let (id, _) = wait_tool_approval(&fixture, "logout-review", "background_read_output").await;
+    let (token, _) = fixture
+        .controller
+        .gate
+        .private_output_preview_checked(&id, &|| Ok(()))
+        .await
+        .unwrap();
+    fixture
+        .controller
+        .gate
+        .decide_private_output_with_expiry(
+            &id,
+            &action,
+            &token,
+            actor.review_origin_for_test(),
+            actor.review_workspace_for_test(),
+            fixture.controller.sink.as_ref(),
+            i64::MAX,
+            &|| Ok(()),
+        )
+        .await
+        .unwrap();
+    let approved = approval.await.unwrap().unwrap();
+    fixture.app.logout_user("owner").unwrap();
+    assert!(actor.release_output(approved).await.is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn denied_background_output_never_enters_history_or_durable_storage() {
+    fn tree_contains(path: &std::path::Path, needle: &[u8]) -> bool {
+        std::fs::read_dir(path)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                let path = entry.path();
+                if path.is_dir() {
+                    tree_contains(&path, needle)
+                } else {
+                    std::fs::read(path).is_ok_and(|bytes| {
+                        bytes.windows(needle.len()).any(|window| window == needle)
+                    })
+                }
+            })
+    }
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let secret = b"SYNTHETIC_DENIED_OUTPUT_MUST_NOT_BE_PERSISTED";
+    std::fs::write(fixture._workspace.path().join("output-fixture"), secret).unwrap();
+    let action =
+        started_through_actor(&fixture, &actor, "privacy-start", "cat output-fixture", 5).await;
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    let before = approvals_shown(&fixture).await;
+    let reviewing = actor.clone();
+    let review_action = action.clone();
+    let result = tokio::spawn(async move {
+        BackgroundActor::review_output(reviewing.as_ref(), "privacy-review", &review_action).await
+    });
+    let (id, _) = wait_tool_approval(&fixture, "privacy-review", "background_read_output").await;
+    decide(&fixture, &id, false).await;
+    assert!(result.await.unwrap().unwrap_err().contains("denied"));
+    assert_eq!(approvals_shown(&fixture).await, before + 1);
+    let events = format!("{:?}", fixture.live.state.lock().await.events);
+    assert!(
+        !events
+            .as_bytes()
+            .windows(secret.len())
+            .any(|window| window == secret),
+        "denied output entered session history"
+    );
+    assert!(
+        !tree_contains(fixture._data.path(), secret),
+        "denied output entered durable storage"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_wait_output_notifies_without_releasing_output_and_rechecks_logout() {
+    let fixture = fixture().await;
+    let (_background, actor, mut request) = actor_fixture(&fixture).await;
+    request.command = "sleep 1; printf private; sleep 2".into();
+    let prepared = actor.prepare(&request).await.unwrap();
+    let approved = approve_prepared(&fixture, &actor, prepared).await;
+    actor.start_approved(approved).await.unwrap();
+    let tool: Arc<dyn BackgroundActor> = actor.clone();
+    let input =
+        serde_json::json!({"actionId": request.action_id, "afterRevision": 0, "timeoutSeconds": 5});
+    let notification = crate::v4_agent::background_process::tool::execute_actor(
+        &tool,
+        "follow-call",
+        "background_wait_output",
+        &input,
+    )
+    .await
+    .unwrap();
+    let notification: serde_json::Value = serde_json::from_str(&notification).unwrap();
+    assert!(notification["outputRevision"].as_u64().unwrap() > 0);
+    assert_eq!(notification["retention"], "current_server_memory_only");
+    assert!(!notification.to_string().contains("private"));
+    assert!(notification.get("stdout").is_none());
+    fixture.app.logout_user("owner").unwrap();
+    assert!(crate::v4_agent::background_process::tool::execute_actor(
+        &tool,
+        "follow-call",
+        "background_wait_output",
+        &input,
+    )
+    .await
+    .is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_wait_output_does_not_return_after_logout_while_waiting() {
+    let fixture = fixture().await;
+    let (_background, actor, mut request) = actor_fixture(&fixture).await;
+    request.command = "sleep 1".into();
+    let prepared = actor.prepare(&request).await.unwrap();
+    let approved = approve_prepared(&fixture, &actor, prepared).await;
+    actor.start_approved(approved).await.unwrap();
+    let tool: Arc<dyn BackgroundActor> = actor.clone();
+    let input =
+        serde_json::json!({"actionId": request.action_id, "afterRevision": 0, "timeoutSeconds": 3});
+    let waiting = tokio::spawn(async move {
+        crate::v4_agent::background_process::tool::execute_actor(
+            &tool,
+            "follow-call",
+            "background_wait_output",
+            &input,
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    fixture.app.logout_user("owner").unwrap();
+    assert!(waiting.await.unwrap().is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_list_returns_only_current_session_metadata_and_rechecks_logout() {
+    let fixture = fixture().await;
+    let (_background, actor, mut request) = actor_fixture(&fixture).await;
+    request.command = "sleep 30".into();
+    let prepared = actor.prepare(&request).await.unwrap();
+    let approved = approve_prepared(&fixture, &actor, prepared).await;
+    actor.start_approved(approved).await.unwrap();
+    let tool: Arc<dyn BackgroundActor> = actor.clone();
+    let listed = crate::v4_agent::background_process::tool::execute_actor(
+        &tool,
+        "list-call",
+        "background_list",
+        &serde_json::json!({}),
+    )
+    .await
+    .unwrap();
+    let listed: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    assert_eq!(listed["retention"], "bounded_durable_and_memory");
+    assert_eq!(listed["historyIncomplete"], true);
+    assert_eq!(listed["memoryOnlyEntriesMayDisappear"], true);
+    assert_eq!(listed["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["actions"][0]["actionId"], request.action_id);
+    assert_eq!(listed["actions"][0]["state"], "running");
+    assert!(listed["actions"][0].get("stdout").is_none());
+    fixture.app.logout_user("owner").unwrap();
+    assert!(crate::v4_agent::background_process::tool::execute_actor(
+        &tool,
+        "list-call",
+        "background_list",
+        &serde_json::json!({}),
+    )
+    .await
+    .is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn background_actor_status_and_cancel_revalidate_the_live_owner_after_logout() {
@@ -27,6 +1327,88 @@ async fn background_actor_status_and_cancel_revalidate_the_live_owner_after_logo
     })
     .await
     .expect("revoked cancellation interrupted the process");
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn revoked_origin_session_cannot_access_cancel_review_or_write_background_action() {
+    let fixture = fixture().await;
+    let (_background, actor, mut request) = actor_fixture(&fixture).await;
+    request.interactive = true;
+    request.command = "printf synthetic; IFS= read -r line; printf '%s' \"$line\" > marker".into();
+    let prepared = actor.prepare(&request).await.unwrap();
+    let approved = approve_prepared(&fixture, &actor, prepared).await;
+    actor.start_approved(approved).await.unwrap();
+    let old_session = Uuid::new_v4().to_string();
+    let fresh_session = Uuid::new_v4().to_string();
+    {
+        let db = fixture.app.lock_db().unwrap();
+        db.execute("INSERT INTO users(id,username,password_hash,created_at,updated_at,auth_protocol_min) VALUES ('owner','fixture','fixture','now','now',1)", []).unwrap();
+        for session in [&old_session, &fresh_session] {
+            db.execute("INSERT INTO auth_sessions(id,user_id,generation,logout_capability_hash,revoked_at,created_at) VALUES (?1,'owner',0,'fixture',NULL,'now')", [session]).unwrap();
+        }
+    }
+    let old_authority =
+        crate::auth::LocalAuthority::for_test_session("owner", 0, i64::MAX, &old_session);
+    let fresh_authority =
+        crate::auth::LocalAuthority::for_test_session("owner", 0, i64::MAX, &fresh_session);
+    let old = Arc::new(actor.with_test_authority(old_authority.clone()));
+    let fresh = Arc::new(actor.with_test_authority(fresh_authority));
+    let deadline = crate::v4_agent::interaction::now_ms() + 500;
+    let mut callback_ran = false;
+    let expired_result = _background.with_output_for_actor(
+        &request.scope,
+        &request.action_id,
+        0,
+        deadline,
+        &fixture.controller.cancel,
+        &old_authority,
+        &fixture.app.local_admission().unwrap(),
+        |_| {
+            callback_ran = true;
+            std::thread::sleep(std::time::Duration::from_millis(650));
+            Ok("private output")
+        },
+    );
+    assert!(callback_ran, "the read callback must run before expiry");
+    assert!(
+        expired_result.is_err(),
+        "expired output must not be returned"
+    );
+    assert!(old.status(&request.action_id).await.is_ok());
+    assert!(old.list().await.is_ok());
+    assert!(old
+        .prepare_output(&request.action_id, "before-revoke")
+        .await
+        .is_ok());
+    assert!(fixture
+        .app
+        .logout_user_authorized("owner", &old_authority)
+        .unwrap());
+    assert!(old.status(&request.action_id).await.is_err());
+    assert!(old.list().await.is_err());
+    assert!(old.cancel(&request.action_id).await.is_err());
+    assert!(old
+        .prepare_output(&request.action_id, "after-revoke")
+        .await
+        .is_err());
+    assert!(BackgroundActor::write_input(
+        old.as_ref(),
+        "write-after-revoke",
+        &request.action_id,
+        "unapproved\n"
+    )
+    .await
+    .is_err());
+    assert!(
+        BackgroundActor::close_input(old.as_ref(), "close-after-revoke", &request.action_id)
+            .await
+            .is_err()
+    );
+    assert!(!fixture._workspace.path().join("marker").exists());
+    assert!(fresh.status(&request.action_id).await.is_ok());
+    assert!(fresh.cancel(&request.action_id).await.is_ok());
     fixture.controller.done.send_replace(true);
     fixture.manager.shutdown().await.unwrap();
 }
@@ -167,6 +1549,499 @@ pub(super) async fn approve_prepared(
     let approval = tokio::spawn(async move { approving.approve(prepared, &task_id).await });
     decide_background_approval(fixture, call_id, true).await;
     approval.await.unwrap().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interactive_start_approval_explicitly_discloses_input_capability() {
+    let fixture = fixture().await;
+    let (_background, actor, mut request) = actor_fixture(&fixture).await;
+    request.interactive = true;
+    let prepared = actor.prepare(&request).await.unwrap();
+    let approving = actor.clone();
+    let approval = tokio::spawn(async move { approving.approve(prepared, TEST_CALL).await });
+    let event = decide_background_approval(&fixture, TEST_CALL, true).await;
+    let StructuredSessionEvent::ApprovalRequired {
+        tool_input,
+        description,
+        ..
+    } = event
+    else {
+        panic!("expected approval")
+    };
+    assert_eq!(tool_input["interactive"], true);
+    assert!(description.to_lowercase().contains("interactive input"));
+    assert!(approval.await.unwrap().is_ok());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interactive_tool_requires_exact_input_approval_before_writing() {
+    use crate::v4_agent::background_process::tool::{execute_actor, BackgroundActor};
+    assert!(crate::v4_agent::background_process::tool::handles(
+        "background_write"
+    ));
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let start_actor: Arc<dyn BackgroundActor> = actor.clone();
+    let start = tokio::spawn(async move {
+        execute_actor(&start_actor, "interactive-start", "background_start", &serde_json::json!({"command":"IFS= read -r line; printf '%s' \"$line\" > marker", "timeoutSeconds":10, "interactive":true})).await
+    });
+    let (approval, description) =
+        wait_tool_approval(&fixture, "interactive-start", "background_start").await;
+    assert!(description.to_lowercase().contains("interactive input"));
+    decide(&fixture, &approval, true).await;
+    let started: serde_json::Value = serde_json::from_str(&start.await.unwrap().unwrap()).unwrap();
+    let action = started["actionId"].as_str().unwrap().to_owned();
+
+    let denied_actor: Arc<dyn BackgroundActor> = actor.clone();
+    let denied_action = action.clone();
+    let denied = tokio::spawn(async move {
+        execute_actor(
+            &denied_actor,
+            "input-denied",
+            "background_write",
+            &serde_json::json!({"actionId":denied_action,"text":"denied\n"}),
+        )
+        .await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "input-denied", "background_write").await;
+    decide(&fixture, &approval, false).await;
+    assert!(denied.await.unwrap().is_err());
+    assert!(!fixture._workspace.path().join("marker").exists());
+
+    let writer: Arc<dyn BackgroundActor> = actor.clone();
+    let write_action = action.clone();
+    let written = tokio::spawn(async move {
+        execute_actor(
+            &writer,
+            "input-approved",
+            "background_write",
+            &serde_json::json!({"actionId":write_action,"text":"hello\u{202e}\n"}),
+        )
+        .await
+    });
+    let (approval, description) =
+        wait_tool_approval(&fixture, "input-approved", "background_write").await;
+    assert!(description.contains("hello\\u{202e}\\n"));
+    assert!(!description.contains('\u{202e}'));
+    assert!(description.contains("IFS= read -r line"));
+    decide(&fixture, &approval, true).await;
+    let result: serde_json::Value = serde_json::from_str(&written.await.unwrap().unwrap()).unwrap();
+    assert_eq!(result["state"], "written_to_pipe");
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture._workspace.path().join("marker")).unwrap(),
+        "hello\u{202e}"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interactive_close_requires_approval_and_allows_eof_dependent_command_to_finish() {
+    use crate::v4_agent::background_process::tool::{execute_actor, BackgroundActor};
+    assert!(crate::v4_agent::background_process::tool::handles(
+        "background_close_input"
+    ));
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let starter: Arc<dyn BackgroundActor> = actor.clone();
+    let start = tokio::spawn(async move {
+        execute_actor(
+            &starter,
+            "eof-start",
+            "background_start",
+            &serde_json::json!({"command":"cat > marker", "timeoutSeconds":10, "interactive":true}),
+        )
+        .await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "eof-start", "background_start").await;
+    decide(&fixture, &approval, true).await;
+    let started: Value = serde_json::from_str(&start.await.unwrap().unwrap()).unwrap();
+    let action = started["actionId"].as_str().unwrap().to_owned();
+    let writer: Arc<dyn BackgroundActor> = actor.clone();
+    let write_action = action.clone();
+    let write = tokio::spawn(async move {
+        execute_actor(
+            &writer,
+            "eof-write",
+            "background_write",
+            &serde_json::json!({"actionId":write_action,"text":"hello"}),
+        )
+        .await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "eof-write", "background_write").await;
+    decide(&fixture, &approval, true).await;
+    assert!(write.await.unwrap().is_ok());
+    let closer: Arc<dyn BackgroundActor> = actor.clone();
+    let denied_action = action.clone();
+    let denied = tokio::spawn(async move {
+        execute_actor(
+            &closer,
+            "eof-denied",
+            "background_close_input",
+            &serde_json::json!({"actionId":denied_action}),
+        )
+        .await
+    });
+    let (approval, description) =
+        wait_tool_approval(&fixture, "eof-denied", "background_close_input").await;
+    assert!(description.contains("cat > marker"));
+    assert!(description.to_lowercase().contains("end-of-file"));
+    decide(&fixture, &approval, false).await;
+    assert!(denied.await.unwrap().is_err());
+    assert_eq!(
+        actor.status(&action).await.unwrap().state,
+        BackgroundState::Running
+    );
+    let closer: Arc<dyn BackgroundActor> = actor.clone();
+    let close_action = action.clone();
+    let close = tokio::spawn(async move {
+        execute_actor(
+            &closer,
+            "eof-approved",
+            "background_close_input",
+            &serde_json::json!({"actionId":close_action}),
+        )
+        .await
+    });
+    let (approval, _) =
+        wait_tool_approval(&fixture, "eof-approved", "background_close_input").await;
+    decide(&fixture, &approval, true).await;
+    let result: Value = serde_json::from_str(&close.await.unwrap().unwrap()).unwrap();
+    assert_eq!(result["state"], "input_closed");
+    assert_eq!(result["eofConsumptionConfirmed"], false);
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture._workspace.path().join("marker")).unwrap(),
+        "hello"
+    );
+    let receipts = rusqlite::Connection::open(
+        fixture
+            ._data
+            .path()
+            .join("background-processes/receipts.sqlite3"),
+    )
+    .unwrap();
+    let delivered: i64 = receipts
+        .query_row(
+            "SELECT COUNT(*) FROM background_input_receipts WHERE state='delivered'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(delivered, 2);
+    drop(receipts);
+    let closer: Arc<dyn BackgroundActor> = actor.clone();
+    assert!(execute_actor(
+        &closer,
+        "eof-approved",
+        "background_close_input",
+        &serde_json::json!({"actionId":action})
+    )
+    .await
+    .is_err());
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interactive_binary_input_requires_exact_review_and_preserves_bytes() {
+    use crate::v4_agent::background_process::tool::{execute_actor, BackgroundActor};
+    use base64::Engine;
+    assert!(crate::v4_agent::background_process::tool::handles(
+        "background_write_bytes"
+    ));
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let starter: Arc<dyn BackgroundActor> = actor.clone();
+    let start = tokio::spawn(async move {
+        execute_actor(
+            &starter,
+            "binary-start",
+            "background_start",
+            &serde_json::json!({"command":"cat > marker", "timeoutSeconds":10, "interactive":true}),
+        )
+        .await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "binary-start", "background_start").await;
+    decide(&fixture, &approval, true).await;
+    let started: Value = serde_json::from_str(&start.await.unwrap().unwrap()).unwrap();
+    let action = started["actionId"].as_str().unwrap().to_owned();
+    let direct: Arc<dyn BackgroundActor> = actor.clone();
+    let approvals_before = approvals_shown(&fixture).await;
+    assert!(execute_actor(
+        &direct,
+        "invalid-binary",
+        "background_write_bytes",
+        &serde_json::json!({"actionId":&action,"base64":"not base64"})
+    )
+    .await
+    .is_err());
+    let too_large = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 513]);
+    assert!(execute_actor(
+        &direct,
+        "oversized-binary",
+        "background_write_bytes",
+        &serde_json::json!({"actionId":&action,"base64":too_large})
+    )
+    .await
+    .is_err());
+    assert_eq!(approvals_shown(&fixture).await, approvals_before);
+    let writer: Arc<dyn BackgroundActor> = actor.clone();
+    let write_action = action.clone();
+    let write = tokio::spawn(async move {
+        execute_actor(
+            &writer,
+            "binary-write",
+            "background_write_bytes",
+            &serde_json::json!({"actionId":write_action,"base64":"AP+AQQ=="}),
+        )
+        .await
+    });
+    let (approval, description) =
+        wait_tool_approval(&fixture, "binary-write", "background_write_bytes").await;
+    assert!(description.contains("00 ff 80 41"));
+    assert!(description.contains("cat > marker"));
+    decide(&fixture, &approval, true).await;
+    let written: Value = serde_json::from_str(&write.await.unwrap().unwrap()).unwrap();
+    assert_eq!(written["bytes"], 4);
+    let closer: Arc<dyn BackgroundActor> = actor.clone();
+    let close_action = action.clone();
+    let close = tokio::spawn(async move {
+        execute_actor(
+            &closer,
+            "binary-close",
+            "background_close_input",
+            &serde_json::json!({"actionId":close_action}),
+        )
+        .await
+    });
+    let (approval, _) =
+        wait_tool_approval(&fixture, "binary-close", "background_close_input").await;
+    decide(&fixture, &approval, true).await;
+    assert!(close.await.unwrap().is_ok());
+    assert_eq!(
+        terminal(&actor, &action).await,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    assert_eq!(
+        std::fs::read(fixture._workspace.path().join("marker")).unwrap(),
+        [0x00, 0xff, 0x80, 0x41]
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_close_approval_does_not_send_eof_or_claim_an_operation() {
+    use crate::v4_agent::background_process::tool::{execute_actor, BackgroundActor};
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let starter: Arc<dyn BackgroundActor> = actor.clone();
+    let start = tokio::spawn(async move {
+        execute_actor(&starter, "cancel-eof-start", "background_start", &serde_json::json!({"command":"cat >/dev/null; printf finished > marker", "timeoutSeconds":10, "interactive":true})).await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "cancel-eof-start", "background_start").await;
+    decide(&fixture, &approval, true).await;
+    let started: Value = serde_json::from_str(&start.await.unwrap().unwrap()).unwrap();
+    let closer: Arc<dyn BackgroundActor> = actor.clone();
+    let action = started["actionId"].clone();
+    let close = tokio::spawn(async move {
+        execute_actor(
+            &closer,
+            "cancel-eof",
+            "background_close_input",
+            &serde_json::json!({"actionId":action}),
+        )
+        .await
+    });
+    wait_tool_approval(&fixture, "cancel-eof", "background_close_input").await;
+    fixture.controller.cancel.cancel();
+    assert!(close.await.unwrap().is_err());
+    assert!(!fixture._workspace.path().join("marker").exists());
+    assert_eq!(
+        std::fs::read(
+            fixture
+                ._data
+                .path()
+                .join(".background-processes.background-guard")
+        )
+        .unwrap(),
+        b"v4-background-ledger-v2-ready\n"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+async fn start_interactive_fixture(
+    fixture: &Fixture,
+    actor: &Arc<BackgroundTurn>,
+    call: &str,
+) -> String {
+    let starter = actor.clone();
+    let call_id = call.to_owned();
+    let task = tokio::spawn(async move {
+        BackgroundActor::start_interactive(
+            starter,
+            &call_id,
+            "IFS= read -r line; printf '%s' \"$line\" > marker",
+            std::time::Duration::from_secs(10),
+        )
+        .await
+    });
+    let (approval, _) = wait_tool_approval(fixture, call, "background_start").await;
+    decide(fixture, &approval, true).await;
+    task.await.unwrap().unwrap().0
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_turn_during_input_approval_never_writes_or_claims() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = start_interactive_fixture(&fixture, &actor, "cancel-input-start").await;
+    let writer = actor.clone();
+    let task = tokio::spawn(async move {
+        BackgroundActor::write_input(writer.as_ref(), "cancel-input", &action, "should-not-run\n")
+            .await
+    });
+    wait_tool_approval(&fixture, "cancel-input", "background_write").await;
+    fixture.controller.cancel.cancel();
+    assert!(task.await.unwrap().is_err());
+    assert!(!fixture._workspace.path().join("marker").exists());
+    assert_eq!(
+        std::fs::read(
+            fixture
+                ._data
+                .path()
+                .join(".background-processes.background-guard")
+        )
+        .unwrap(),
+        b"v4-background-ledger-v2-ready\n"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_input_does_not_write_after_command_is_cancelled() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = start_interactive_fixture(&fixture, &actor, "stopped-input-start").await;
+    let writer = actor.clone();
+    let write_action = action.clone();
+    let task = tokio::spawn(async move {
+        BackgroundActor::write_input(
+            writer.as_ref(),
+            "stopped-input",
+            &write_action,
+            "should-not-run\n",
+        )
+        .await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "stopped-input", "background_write").await;
+    actor.cancel(&action).await.unwrap();
+    assert_eq!(terminal(&actor, &action).await, BackgroundState::Cancelled);
+    decide(&fixture, &approval, true).await;
+    assert!(task.await.unwrap().is_err());
+    assert!(!fixture._workspace.path().join("marker").exists());
+    assert_eq!(
+        std::fs::read(
+            fixture
+                ._data
+                .path()
+                .join(".background-processes.background-guard")
+        )
+        .unwrap(),
+        b"v4-background-ledger-v2-ready\n"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_input_does_not_cross_a_replaced_session_identity() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = start_interactive_fixture(&fixture, &actor, "replaced-input-start").await;
+    let writer = actor.clone();
+    let task = tokio::spawn(async move {
+        BackgroundActor::write_input(
+            writer.as_ref(),
+            "replaced-input",
+            &action,
+            "should-not-run\n",
+        )
+        .await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "replaced-input", "background_write").await;
+    fixture.live.state.lock().await.session_incarnation = Some(SessionIncarnation(Uuid::new_v4()));
+    fixture
+        .controller
+        .gate
+        .decide(&approval, true, fixture.controller.sink.as_ref())
+        .await
+        .unwrap();
+    assert!(task.await.unwrap().is_err());
+    assert!(!fixture._workspace.path().join("marker").exists());
+    assert_eq!(
+        std::fs::read(
+            fixture
+                ._data
+                .path()
+                .join(".background-processes.background-guard")
+        )
+        .unwrap(),
+        b"v4-background-ledger-v2-ready\n"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn logout_during_input_approval_never_writes_to_the_command() {
+    let fixture = fixture().await;
+    let (_background, actor, _) = actor_fixture(&fixture).await;
+    let action = start_interactive_fixture(&fixture, &actor, "logout-input-start").await;
+    let writer = actor.clone();
+    let task = tokio::spawn(async move {
+        BackgroundActor::write_input(writer.as_ref(), "logout-input", &action, "should-not-run\n")
+            .await
+    });
+    let (approval, _) = wait_tool_approval(&fixture, "logout-input", "background_write").await;
+    fixture.app.logout_user("owner").unwrap();
+    let _ = fixture
+        .controller
+        .gate
+        .decide(&approval, true, fixture.controller.sink.as_ref())
+        .await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+    assert!(!fixture._workspace.path().join("marker").exists());
+    assert_eq!(
+        std::fs::read(
+            fixture
+                ._data
+                .path()
+                .join(".background-processes.background-guard")
+        )
+        .unwrap(),
+        b"v4-background-ledger-v2-ready\n"
+    );
+    fixture.controller.done.send_replace(true);
+    fixture.manager.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -598,6 +2473,7 @@ pub(super) async fn actor_fixture(
         .unwrap(),
     );
     let request = BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: "owner".into(),
             session: fixture.id.clone(),
@@ -1056,7 +2932,7 @@ pub(super) fn actor_scope(actor: &Arc<BackgroundTurn>) -> ActionScope {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn output_is_withheld_until_the_user_approves_the_exact_bounded_snapshot() {
+async fn output_is_withheld_when_private_review_is_denied() {
     std::env::set_var("V4_BACKGROUND_TEST_SECRET", "must-not-reach-child");
     let fixture = fixture().await;
     let (_background, actor, _) = actor_fixture(&fixture).await;
@@ -1075,66 +2951,17 @@ async fn output_is_withheld_until_the_user_approves_the_exact_bounded_snapshot()
     let status = actor.status(&action).await.unwrap();
     assert!((status.stdout.is_empty() && status.stderr.is_empty()) && status.output_withheld);
 
-    for approved in [false, true] {
-        let reviewer = actor.clone();
-        let (call, id) = (format!("review-{approved}"), action.clone());
-        let call_for_task = call.clone();
-        let review = tokio::spawn(async move {
-            BackgroundActor::review_output(reviewer.as_ref(), &call_for_task, &id).await
-        });
-        let (approval, description) =
-            wait_tool_approval(&fixture, &call, "background_read_output").await;
-        assert!(description.contains("out:absent"), "{description}");
-        decide(&fixture, &approval, approved).await;
-        let result = review.await.unwrap();
-        if approved {
-            let released = result.unwrap();
-            assert_eq!(
-                (released.stdout.as_str(), released.stderr.as_str()),
-                ("out:absent", "err")
-            );
-        } else {
-            assert!(result.is_err());
-        }
-    }
-    fixture.controller.done.send_replace(true);
-    fixture.manager.shutdown().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approved_output_is_not_released_after_logout_or_a_session_identity_change() {
-    let fixture = fixture().await;
-    let (_background, actor, _) = actor_fixture(&fixture).await;
-    let action = started_through_actor(&fixture, &actor, "fence-call", "printf private", 5).await;
-    terminal(&actor, &action).await;
-    let reviewer = actor.clone();
-    let id = action.clone();
-    let review = tokio::spawn(async move {
-        BackgroundActor::review_output(reviewer.as_ref(), "fence-review", &id).await
+    let before = approvals_shown(&fixture).await;
+    let reviewing = actor.clone();
+    let result = tokio::spawn(async move {
+        BackgroundActor::review_output(reviewing.as_ref(), "review", &action).await
     });
-    let (approval, _) =
-        wait_tool_approval(&fixture, "fence-review", "background_read_output").await;
-    let original = fixture.live.state.lock().await.session_incarnation;
-    fixture.live.state.lock().await.session_incarnation = Some(SessionIncarnation(Uuid::new_v4()));
-    decide(&fixture, &approval, true).await;
-    assert!(review.await.unwrap().is_err());
-    fixture.live.state.lock().await.session_incarnation = original;
-
-    assert!(review_is_refused_before_prompting_after_logout(&fixture, &actor, &action).await);
+    let (id, _) = wait_tool_approval(&fixture, "review", "background_read_output").await;
+    decide(&fixture, &id, false).await;
+    assert!(result.await.unwrap().unwrap_err().contains("denied"));
+    assert_eq!(approvals_shown(&fixture).await, before + 1);
     fixture.controller.done.send_replace(true);
     fixture.manager.shutdown().await.unwrap();
-}
-
-async fn review_is_refused_before_prompting_after_logout(
-    fixture: &Fixture,
-    actor: &Arc<BackgroundTurn>,
-    action: &str,
-) -> bool {
-    fixture.app.logout_user("owner").unwrap();
-    let before = approvals_shown(fixture).await;
-    let result =
-        BackgroundActor::review_output(actor.as_ref(), "after-logout-review", action).await;
-    result.is_err() && approvals_shown(fixture).await == before
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1254,6 +3081,25 @@ async fn durable_outcomes_survive_restart_and_a_crashed_action_stays_honestly_un
         actor.status(&crashed).await.unwrap().state,
         BackgroundState::Unknown
     );
+    let listed = actor.list().await.unwrap();
+    let state_for = |id: &str| {
+        listed
+            .iter()
+            .find(|(action, _)| action == id)
+            .map(|(_, snapshot)| snapshot.state.clone())
+    };
+    assert_eq!(
+        state_for(&finished),
+        Some(BackgroundState::Exited { code: Some(0) })
+    );
+    assert_eq!(
+        state_for(&failed),
+        Some(BackgroundState::Exited { code: Some(3) })
+    );
+    assert_eq!(state_for(&crashed), Some(BackgroundState::Unknown));
+    assert!(listed
+        .iter()
+        .all(|(_, snapshot)| snapshot.stdout.is_empty() && snapshot.stderr.is_empty()));
     assert_eq!(
         actor
             .wait(&crashed, std::time::Duration::from_secs(1))
@@ -1312,9 +3158,20 @@ pub(super) fn tool_call_response(id: &str, name: &str, arguments: Value) -> Valu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_agent_turn_runs_launch_status_wait_cancel_and_reviewed_output_through_the_actor() {
-    use axum::{routing::post, Json, Router};
+async fn real_agent_turn_requires_private_review_before_releasing_background_output() {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+        routing::post,
+        Json, Router,
+    };
+    use tower::ServiceExt;
     let fixture = fixture().await;
+    std::fs::write(
+        fixture._workspace.path().join("denied-output-file"),
+        b"SYNTHETIC_DENIED_PROVIDER_OUTPUT",
+    )
+    .unwrap();
     let (background, _, _) = actor_fixture(&fixture).await;
     let turn_id = Uuid::new_v4().to_string();
     let live_controller = controller_for_turn(
@@ -1359,7 +3216,20 @@ async fn real_agent_turn_runs_launch_status_wait_cancel_and_reviewed_output_thro
                 3 => tool_call_response("bg-long", "background_start", serde_json::json!({"command":"sleep 30","timeoutSeconds":40})),
                 4 => tool_call_response("bg-cancel", "background_cancel", serde_json::json!({"actionId":action(3)})),
                 5 => tool_call_response("bg-wait-long", "background_wait", serde_json::json!({"actionId":action(3),"timeoutSeconds":10})),
-                6 => tool_call_response("bg-output", "background_read_output", serde_json::json!({"actionId":action(0)})),
+                6 => tool_call_response("bg-output", "background_follow_output", serde_json::json!({"actionId":action(0),"afterRevision":0,"timeoutSeconds":1})),
+                7 => tool_call_response("bg-denied-start", "background_start", serde_json::json!({"command":"cat denied-output-file","timeoutSeconds":10})),
+                8 => tool_call_response("bg-denied-wait", "background_wait", serde_json::json!({"actionId":action(7),"timeoutSeconds":10})),
+                9 => tool_call_response("bg-denied-read", "background_read_output", serde_json::json!({"actionId":action(7)})),
+                10 => tool_call_response("bg-list", "background_list", serde_json::json!({})),
+                11 => tool_call_response("bg-follow", "background_wait_output", serde_json::json!({"actionId":action(3),"afterRevision":0,"timeoutSeconds":1})),
+                12 => tool_call_response("bg-interactive", "background_start", serde_json::json!({"command":"cat > interactive-marker","timeoutSeconds":10,"interactive":true})),
+                13 => tool_call_response("bg-input", "background_write", serde_json::json!({"actionId":action(12),"text":"scripted-hello\n"})),
+                14 => tool_call_response("bg-eof", "background_close_input", serde_json::json!({"actionId":action(12)})),
+                15 => tool_call_response("bg-interactive-wait", "background_wait", serde_json::json!({"actionId":action(12),"timeoutSeconds":10})),
+                16 => tool_call_response("bg-binary-start", "background_start", serde_json::json!({"command":"cat > binary-marker","timeoutSeconds":10,"interactive":true})),
+                17 => tool_call_response("bg-binary-write", "background_write_bytes", serde_json::json!({"actionId":action(16),"base64":"AP+AQQ=="})),
+                18 => tool_call_response("bg-binary-close", "background_close_input", serde_json::json!({"actionId":action(16)})),
+                19 => tool_call_response("bg-binary-wait", "background_wait", serde_json::json!({"actionId":action(16),"timeoutSeconds":10})),
                 _ => serde_json::json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"All done"}}]}),
             };
             bodies.push(body);
@@ -1386,7 +3256,10 @@ async fn real_agent_turn_runs_launch_status_wait_cancel_and_reviewed_output_thro
         let live = fixture.live.clone();
         tokio::spawn(async move {
             let authority = crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX);
+            let (_, paired) = crate::paired_environments::synthetic_input_grant(&app, "owner");
+            let router = crate::app(app.clone());
             let mut decided = std::collections::HashSet::new();
+            let mut read_count = 0;
             loop {
                 let pending: Vec<_> = live
                     .state
@@ -1399,29 +3272,67 @@ async fn real_agent_turn_runs_launch_status_wait_cancel_and_reviewed_output_thro
                             approval_id: Some(id),
                             tool_name,
                             description,
+                            tool_call_id,
+                            tool_input,
                             ..
                         } if tool_name.starts_with("background_") && !decided.contains(id) => {
-                            Some((id.clone(), tool_name.clone(), description.clone()))
+                            Some((
+                                id.clone(),
+                                tool_name.clone(),
+                                description.clone(),
+                                tool_call_id.clone(),
+                                tool_input.clone(),
+                            ))
                         }
                         _ => None,
                     })
                     .collect();
-                for (approval, tool, description) in pending {
-                    manager
-                        .approve_with_paired(
-                            "owner",
-                            &session,
-                            Some(&approval),
-                            true,
-                            None,
-                            false,
-                            None,
-                            Some(&authority),
-                            None,
-                            &app,
+                for (approval, tool, description, _call, input) in pending {
+                    if tool == "background_read_output" && read_count == 0 {
+                        let base = format!("/api/structured/sessions/{session}/private-output");
+                        let post = |path: String, body: Value| {
+                            Request::post(path)
+                                .header("authorization", format!("Bearer {paired}"))
+                                .header("content-type", "application/json")
+                                .body(Body::from(body.to_string()))
+                                .unwrap()
+                        };
+                        let mut response = router.clone().oneshot(post(format!("{base}/preview"), serde_json::json!({"approvalId":approval,"actionId":input["actionId"]}))).await.unwrap();
+                        for _ in 0..20 {
+                            if response.status() != StatusCode::CONFLICT {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                            response = router.clone().oneshot(post(format!("{base}/preview"), serde_json::json!({"approvalId":approval,"actionId":input["actionId"]}))).await.unwrap();
+                        }
+                        assert_eq!(response.status(), StatusCode::OK);
+                        let preview: Value = serde_json::from_slice(
+                            &to_bytes(response.into_body(), 1_048_576).await.unwrap(),
                         )
-                        .await
                         .unwrap();
+                        assert_eq!(preview["output"]["stdout"], "out-ok");
+                        let response = router.clone().oneshot(post(format!("{base}/approve"), serde_json::json!({"approvalId":approval,"actionId":input["actionId"],"previewToken":preview["previewToken"]}))).await.unwrap();
+                        assert_eq!(response.status(), StatusCode::OK);
+                    } else {
+                        manager
+                            .approve_with_paired(
+                                "owner",
+                                &session,
+                                Some(&approval),
+                                tool != "background_read_output",
+                                None,
+                                false,
+                                None,
+                                Some(&authority),
+                                None,
+                                &app,
+                            )
+                            .await
+                            .unwrap();
+                    }
+                    if tool == "background_read_output" {
+                        read_count += 1;
+                    }
                     seen.lock().unwrap().push((tool, description));
                     decided.insert(approval);
                 }
@@ -1480,14 +3391,26 @@ async fn real_agent_turn_runs_launch_status_wait_cancel_and_reviewed_output_thro
         [
             "background_start",
             "background_start",
-            "background_read_output"
+            "background_read_output",
+            "background_start",
+            "background_read_output",
+            "background_start",
+            "background_write",
+            "background_close_input",
+            "background_start",
+            "background_write_bytes",
+            "background_close_input"
         ]
     );
-    assert!(approvals[2].1.contains("out-ok") && approvals[2].1.contains("err-ok"));
 
     let bodies = bodies.lock().unwrap();
     let results = tool_results(bodies.last().unwrap());
-    assert_eq!(results.len(), 7, "{:?}", bodies.last().unwrap()["messages"]);
+    assert_eq!(
+        results.len(),
+        20,
+        "{:?}",
+        bodies.last().unwrap()["messages"]
+    );
     assert_eq!(results[0]["state"], "running");
     assert_eq!(results[0]["actionId"], results[1]["actionId"]);
     assert_ne!(results[0]["actionId"], results[3]["actionId"]);
@@ -1504,8 +3427,52 @@ async fn real_agent_turn_runs_launch_status_wait_cancel_and_reviewed_output_thro
         assert!(withheld.get("stdout").is_none() && !withheld.to_string().contains("out-ok"));
     }
     assert_eq!(
-        (results[6]["stdout"].as_str(), results[6]["stderr"].as_str()),
-        (Some("out-ok"), Some("err-ok"))
+        results[6]["stdout"], "out-ok",
+        "reviewed tool result: {:?}",
+        results[6]
+    );
+    assert_eq!(results[6]["stderr"], "err-ok");
+    assert_eq!(results[6]["window"], "tail");
+    assert_eq!(results[6]["outputChanged"], true);
+    assert!(!bodies
+        .last()
+        .unwrap()
+        .to_string()
+        .contains("SYNTHETIC_DENIED_PROVIDER_OUTPUT"));
+    assert_eq!(
+        results[10]["retention"], "bounded_durable_and_memory",
+        "background_list result: {:?}",
+        results[10]
+    );
+    assert_eq!(results[10]["actions"].as_array().unwrap().len(), 3);
+    assert!(results[10]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["actionId"] == results[0]["actionId"]));
+    assert!(!results[10].to_string().contains("out-ok"));
+    assert_eq!(results[11]["retention"], "current_server_memory_only");
+    assert_eq!(results[11]["state"], "cancelled");
+    assert!(results[11]["outputRevision"].is_u64());
+    assert!(results[11].get("stdout").is_none());
+    assert_eq!(results[12]["state"], "running");
+    assert_eq!(results[13]["state"], "written_to_pipe");
+    assert_eq!(results[13]["consumptionConfirmed"], false);
+    assert_eq!(results[14]["state"], "input_closed");
+    assert_eq!(results[14]["eofConsumptionConfirmed"], false);
+    assert_eq!(results[15]["state"], "exited");
+    assert_eq!(
+        std::fs::read_to_string(root.join("interactive-marker")).unwrap(),
+        "scripted-hello\n"
+    );
+    assert_eq!(results[16]["state"], "running");
+    assert_eq!(results[17]["state"], "written_to_pipe");
+    assert_eq!(results[17]["bytes"], 4);
+    assert_eq!(results[18]["state"], "input_closed");
+    assert_eq!(results[19]["state"], "exited");
+    assert_eq!(
+        std::fs::read(root.join("binary-marker")).unwrap(),
+        [0x00, 0xff, 0x80, 0x41]
     );
     drop(bodies);
     server.abort();

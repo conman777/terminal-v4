@@ -463,7 +463,9 @@ works through Tailscale. The address bar accepts websites, local development
 server URLs, and searches. Preview remains the separate development inspector.
 The address selects its contents on focus; Escape restores the current page
 address. Desktop page typing controls expand from **Typing**. Touch layouts keep
-those controls available. **Browser actions → Reset** clears tabs and sign-ins.
+those controls available. While the browser resizes, you can keep editing the
+typing draft; sending waits until the new page view is ready. **Browser actions →
+Reset** clears tabs and sign-ins.
 
 From the repository root, run:
 

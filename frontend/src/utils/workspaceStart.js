@@ -5,11 +5,13 @@ import { getEnvironmentSignal } from './remoteEnvironments';
 import { bindStartImageTarget, copyStartImages } from './startImageTransfer';
 import { sendPreparedStartImages } from './startImageSend';
 import { retainUserImageComposer } from './userImageComposerController';
+import { splitContext } from '../components/composer-context/composerContext';
 
 // An empty conversation supplies the image composer's real session scope.
 // With an image transfer, the explicit start action also submits the message.
 export async function openWorkspaceImageConversation(prompt, options, { customAiProviders, createStructuredSession, rememberProject, addSessionToDesktop, isDesktopCurrent = () => true, desktopId, onSelected }) {
   const text = typeof prompt === 'string' ? prompt : '';
+  const title = splitContext(text).text.trim().slice(0, 80) || undefined;
   const cwd = options.path;
   if (!cwd) throw new Error('Choose a project first.');
   const signal = getEnvironmentSignal();
@@ -23,13 +25,13 @@ export async function openWorkspaceImageConversation(prompt, options, { customAi
   let sourceBinding = options.imageTransfer?.sourceBinding;
   if (sourceBinding && !sourceBinding.creation) {
     sourceBinding = { ...sourceBinding, creation: { kind: launch.kind, provider: launch.provider, model: launch.model,
-      reasoning: launch.reasoning, serviceTier: launch.serviceTier, cwd, title: text.trim().slice(0, 80) || undefined } };
+      reasoning: launch.reasoning, serviceTier: launch.serviceTier, cwd, title } };
     if (!options.imageTransfer.bind(sourceBinding)) throw new Error('The image request could not be saved. Your originals were kept.');
   }
   const creation = sourceBinding?.creation;
   if (creation && creation.cwd !== cwd) throw new Error('The saved project changed. Review the original request.');
   let prepared = false;
-  const session = await createStructuredSession({ cwd, provider: launch.provider, model: launch.model, reasoning: launch.reasoning, serviceTier: launch.serviceTier, title: creation?.title ?? (text.trim().slice(0, 80) || undefined),
+  const session = await createStructuredSession({ cwd, provider: launch.provider, model: launch.model, reasoning: launch.reasoning, serviceTier: launch.serviceTier, title: creation?.title ?? title,
     ...(sourceBinding ? { startRequestId: sourceBinding.requestId } : {}),
     shouldSelectSession: isDesktopCurrent,
     onSelected,
@@ -98,7 +100,8 @@ export async function startWorkspacePrompt(prompt, options, { customAiProviders,
   const launch = await resolveAgentSessionLaunch(options.agentId || 'codex', options.selection, customAiProviders);
   assertScope();
   if (launch.kind !== 'structured') throw new Error('Use New terminal for this agent. Select Codex or a supported conversation agent here.');
-  const session = await createStructuredSession({ cwd, provider: launch.provider, model: launch.model, reasoning: launch.reasoning, serviceTier: launch.serviceTier, title: text.slice(0, 80) });
+  const title = splitContext(text).text.trim().slice(0, 80) || undefined;
+  const session = await createStructuredSession({ cwd, provider: launch.provider, model: launch.model, reasoning: launch.reasoning, serviceTier: launch.serviceTier, title });
   assertScope();
   if (!session?.id) throw new Error('The agent session could not be created.');
   rememberProject(cwd, session);

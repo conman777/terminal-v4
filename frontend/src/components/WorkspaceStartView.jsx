@@ -21,6 +21,10 @@ import { createWorkspaceStartAttachments } from '../utils/workspaceStartAttachme
 import { startImageRequestId } from '../utils/startImageTransfer';
 import { discardUnfinishedWorktree, fetchWorktreeProgress } from '../utils/worktreeProgress';
 import { WorktreeSetupCard } from './WorktreeSetupCard';
+import { useInstalledSkills } from '../hooks/useInstalledSkills';
+import { useCurrentPullRequest } from '../hooks/useCurrentPullRequest';
+import { buildMentionThreads } from './composer-context/mentionThreads';
+import { splitContext } from './composer-context/composerContext';
 
 function availabilityReason(value) {
   return [value?.reason, value?.unavailableReason].find(reason => typeof reason === 'string' && reason.trim())?.trim();
@@ -34,7 +38,7 @@ const PLACEMENT_OPTIONS = [
 ];
 
 export function worktreeNameFromPrompt(text) {
-  const words = text.replace(/[^\p{L}\p{N} _-]+/gu, ' ').trim().split(/\s+/).filter(Boolean).slice(0, 8);
+  const words = splitContext(text).text.replace(/[^\p{L}\p{N} _-]+/gu, ' ').trim().split(/\s+/).filter(Boolean).slice(0, 8);
   return words.join(' ').slice(0, 60).trim() || 'Thread';
 }
 
@@ -64,6 +68,8 @@ const SETUP_STATUSES = ['auth-required', 'not-configured'];
 export function WorkspaceStartView({
   currentPath,
   projects = [],
+  sessions = [],
+  customAiProviders = [],
   recentFolders = [],
   onSelectWorkspace,
   originThread = null,
@@ -86,6 +92,10 @@ export function WorkspaceStartView({
   const [agentId, setAgentId] = useState('codex');
   const [selection, setSelection] = useState(() => loadSavedAgentSelection('codex'));
   const [selectedPath, setSelectedPath] = useState(currentPath || '');
+  const canReadWorkspace = environmentAllows(environment, 'fileRead');
+  const installedSkills = useInstalledSkills(canReadWorkspace ? selectedPath : '');
+  const mentionPullRequests = useCurrentPullRequest(selectedPath, null, { enabled: canReadWorkspace && Boolean(selectedPath) });
+  const mentionThreads = useMemo(() => buildMentionThreads(sessions, null), [sessions]);
   const [placement, setPlacement] = useState('here');
   const [baseRef, setBaseRef] = useState('HEAD');
   const [branchResult, setBranchResult] = useState(null);
@@ -120,7 +130,10 @@ export function WorkspaceStartView({
     return () => controller.abort();
   }, [placement, selectedPath, environmentSignal, authKey]);
   const branchState = branchResult?.path === selectedPath && branchResult.environmentSignal === environmentSignal && branchResult.authKey === authKey ? branchResult : null;
-  useEffect(() => { if (selectedPath) composerShell.current?.querySelector('textarea')?.focus(); }, [selectedPath]);
+  useEffect(() => {
+    const width = Math.max(window.innerWidth || 0, window.visualViewport?.width || 0, document.documentElement?.clientWidth || 0);
+    if (selectedPath && width > 768 && !window.matchMedia?.('(pointer: coarse)').matches) composerShell.current?.querySelector('textarea')?.focus();
+  }, [selectedPath]);
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -334,7 +347,14 @@ export function WorkspaceStartView({
         <div className="workspace-start-composer-shell" ref={composerShell}>
           <DesktopStatusBar
             sessionId="workspace-start"
+            aiType={agentId}
+            customAiProviders={customAiProviders}
+            mentionRoot={canReadWorkspace ? selectedPath : ''}
+            mentionThreads={mentionThreads}
+            mentionPullRequests={mentionPullRequests}
+            skills={installedSkills}
             composerValue={composerValue}
+            composerDraftStore={composerStore}
             composerAttachments={attachmentDraft.attachments}
             attachmentsEnabled={nativeAttachments || Boolean(imageComposer)}
             attachmentsDisabledMessage="Images cannot be attached on this screen. Open a conversation to add images."

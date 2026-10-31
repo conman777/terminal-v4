@@ -150,6 +150,20 @@ struct StructuredSessionManagerInner {
     #[cfg(all(test, unix))]
     native_after_publication:
         std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(all(test, unix))]
+    v4_before_paired_capture:
+        std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(all(test, unix))]
+    checkpoint_before_publication:
+        std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    #[cfg(all(test, unix))]
+    v4_after_publication: std::sync::Mutex<
+        Option<(
+            std::sync::mpsc::Sender<()>,
+            std::sync::mpsc::Receiver<()>,
+            std::sync::mpsc::Sender<Option<crate::auth::LocalAuthority>>,
+        )>,
+    >,
     /// Claude permission prompts awaiting the user, by approval id.
     claude_permissions: std::sync::Mutex<HashMap<String, ClaudePermission>>,
     /// Claude tools the user allowed for the rest of a chat, by session id.
@@ -191,6 +205,8 @@ struct PairedPreparation {
     session: OwnedSession,
     snapshot: PairedSnapshot,
     activity: Option<crate::workspace_activity::WorkspaceActivity>,
+    #[cfg(unix)]
+    guard: Option<crate::state::owner_input::OwnerInputGuard>,
 }
 #[cfg(unix)]
 #[derive(Clone)]
@@ -314,6 +330,7 @@ struct SessionReadAdmission<'a> {
     app: &'a crate::state::AppState,
     local: Option<&'a crate::auth::LocalAuthority>,
     paired: Option<&'a crate::auth::PairedInputAuthority>,
+    nonblocking: bool,
 }
 
 impl SessionReadAdmission<'_> {
@@ -352,6 +369,24 @@ impl SessionReadAdmission<'_> {
         owner: &str,
         action: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, String>,
     ) -> Result<T, ThreadUpdateFailure> {
+        #[cfg(unix)]
+        if self.nonblocking {
+            let review = |_: &rusqlite::Transaction<'_>, check: &dyn Fn() -> Result<(), String>| {
+                let result = action(check)?;
+                check()?;
+                Ok(result)
+            };
+            let result = if let Some(local) = self.local {
+                self.app.try_with_owner_review(owner, local, review)
+            } else if let Some(paired) = self.paired {
+                self.app.try_with_paired_owner_review(owner, paired, review)
+            } else {
+                return Err(ThreadUpdateFailure::Unauthorized(
+                    "Credential scope mismatch".into(),
+                ));
+            };
+            return result.map_err(read_authority_error);
+        }
         #[cfg(unix)]
         if let Some(local) = self.local {
             let (result, confirmed) = self
@@ -586,18 +621,32 @@ impl PairedDecisionContext {
                 )
             }
             DecisionAuthority::Local(authority) => {
-                let (generation, expiry) = authority
-                    .valid_for(&self.owner, crate::v4_agent::interaction::now_ms())
-                    .ok_or("Credential is invalid or expired")?;
                 self.state
-                    .validate_auth_generation(&self.owner, generation)?;
-                Ok(expiry)
+                    .with_owner_review(&self.owner, authority, |tx, _| {
+                        crate::state::AppState::validate_local_authority(tx, &self.owner, authority)
+                            .map(|(_, expiry)| expiry)
+                    })
             }
         }
     }
     #[cfg(test)]
     pub(crate) fn check_for_test(&self) -> Result<i64, String> {
         self.check()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_for_test(
+        state: crate::state::AppState,
+        owner: String,
+        guard: crate::state::owner_input::OwnerInputGuard,
+        authority: crate::auth::LocalAuthority,
+    ) -> Self {
+        Self {
+            guard: Arc::new(guard),
+            state,
+            authority: DecisionAuthority::Local(authority),
+            owner,
+        }
     }
 }
 
@@ -640,6 +689,25 @@ pub(crate) trait StructuredProcessController: Send + Sync {
         _answers: Value,
     ) -> Result<DecisionReceipt, String> {
         Err("This agent cannot receive answers to questions".into())
+    }
+    #[cfg(unix)]
+    async fn private_output_preview(
+        &self,
+        _approval_id: &str,
+        _action_id: &str,
+        _context: &PairedDecisionContext,
+    ) -> Result<(String, Value), String> {
+        Err("This provider does not support private output review".into())
+    }
+    #[cfg(unix)]
+    async fn private_output_decision(
+        &self,
+        _approval_id: &str,
+        _action_id: &str,
+        _token: &str,
+        _context: &PairedDecisionContext,
+    ) -> Result<DecisionReceipt, String> {
+        Err("This provider does not support private output review".into())
     }
     #[cfg(unix)]
     async fn send_paired_decision(
@@ -778,6 +846,12 @@ impl StructuredSessionManager {
                 input_waiting_owner: Default::default(),
                 #[cfg(all(test, unix))]
                 native_after_publication: Default::default(),
+                #[cfg(all(test, unix))]
+                v4_before_paired_capture: Default::default(),
+                #[cfg(all(test, unix))]
+                checkpoint_before_publication: Default::default(),
+                #[cfg(all(test, unix))]
+                v4_after_publication: Default::default(),
                 claude_permissions: Default::default(),
                 claude_session_allows: Default::default(),
             }),
@@ -1798,6 +1872,7 @@ impl StructuredSessionManager {
             );
             let item = StructuredSessionInventory {
                 id: metadata.id,
+                session_incarnation: state.session_incarnation,
                 title: metadata.title,
                 cwd: metadata.cwd,
                 provider: metadata.provider,
@@ -1903,7 +1978,12 @@ impl StructuredSessionManager {
         paired: Option<&crate::auth::PairedInputAuthority>,
         method: &str,
     ) -> Result<Value, StructuredControlError> {
-        let admission = SessionReadAdmission { app, local, paired };
+        let admission = SessionReadAdmission {
+            app,
+            local,
+            paired,
+            nonblocking: false,
+        };
         admission
             .validate_scope(self, method, "/api/structured/sessions")
             .map_err(ThreadUpdateFailure::control)?;
@@ -1932,7 +2012,12 @@ impl StructuredSessionManager {
         paired: Option<&crate::auth::PairedInputAuthority>,
         method: &str,
     ) -> Result<Option<StructuredSessionSnapshot>, StructuredControlError> {
-        let admission = SessionReadAdmission { app, local, paired };
+        let admission = SessionReadAdmission {
+            app,
+            local,
+            paired,
+            nonblocking: false,
+        };
         admission
             .validate_scope(self, method, &format!("/api/structured/sessions/{id}"))
             .map_err(ThreadUpdateFailure::control)?;
@@ -2300,7 +2385,7 @@ impl StructuredSessionManager {
         id: &str,
         updates: StructuredThreadUpdate,
     ) -> Result<Option<StructuredThreadMetadata>, String> {
-        self.update_thread_inner(user_id, id, updates, None)
+        self.update_thread_inner(user_id, id, updates, None, None)
             .await
             .map_err(ThreadUpdateFailure::message)
     }
@@ -2347,6 +2432,7 @@ impl StructuredSessionManager {
             id,
             updates,
             Some(ThreadPatchAdmission { app, local, paired }),
+            None,
         )
         .await
         .map_err(ThreadUpdateFailure::control)
@@ -2358,6 +2444,7 @@ impl StructuredSessionManager {
         id: &str,
         updates: StructuredThreadUpdate,
         admission: Option<ThreadPatchAdmission<'_>>,
+        expected_auto_settle: Option<&StructuredSessionInventory>,
     ) -> Result<Option<StructuredThreadMetadata>, ThreadUpdateFailure> {
         let Some(session) = self.owned_session(user_id, id).await? else {
             return Ok(None);
@@ -2442,6 +2529,20 @@ impl StructuredSessionManager {
         }
         if state.deleting || state.retiring {
             return Err("Session is being retired".into());
+        }
+        if let Some(expected) = expected_auto_settle {
+            let unchanged = expected.id == state.id
+                && expected.session_incarnation == state.session_incarnation
+                && expected.latest_seq
+                    == state.events.last().map_or(0, StructuredSessionEvent::seq)
+                && expected
+                    .thread
+                    .as_ref()
+                    .map(|thread| &thread.last_activity_at)
+                    == state.thread.as_ref().map(|thread| &thread.last_activity_at);
+            if !unchanged {
+                return Ok(None);
+            }
         }
         let mut snapshot = snapshot_from_state(&state);
         let mut thread = snapshot.thread.unwrap_or_else(|| {
@@ -3962,6 +4063,8 @@ impl StructuredSessionManager {
             None,
             #[cfg(unix)]
             false,
+            #[cfg(unix)]
+            false,
         )
         .await
     }
@@ -4366,6 +4469,7 @@ impl StructuredSessionManager {
                 session,
                 snapshot,
                 activity,
+                guard: None,
             };
             let manager_root =
                 self.inner.config.data_dir.canonicalize().map_err(|_| {
@@ -4403,6 +4507,8 @@ impl StructuredSessionManager {
                     manager
                         .validate_live_owner(&owner)
                         .map_err(StructuredControlError::internal)?;
+                    let mut preparation = preparation;
+                    preparation.guard = Some(guard);
                     runtime.block_on(manager.submit_content(
                         &owner,
                         &session_id,
@@ -4414,6 +4520,8 @@ impl StructuredSessionManager {
                         Some(&paired),
                         Some(preparation),
                         Some(&state),
+                        #[cfg(unix)]
+                        false,
                         #[cfg(unix)]
                         false,
                     ))
@@ -4482,6 +4590,8 @@ impl StructuredSessionManager {
                             Some(&state),
                             #[cfg(unix)]
                             false,
+                            #[cfg(unix)]
+                            false,
                         ))
                     })
                     .map_err(StructuredControlError::conflict)?;
@@ -4501,6 +4611,8 @@ impl StructuredSessionManager {
             None,
             None,
             Some(app_state),
+            #[cfg(unix)]
+            false,
             #[cfg(unix)]
             false,
         )
@@ -4527,6 +4639,32 @@ impl StructuredSessionManager {
             None,
             None,
             true,
+            false,
+        )
+        .await
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn submit_legacy_queued(
+        &self,
+        user_id: &str,
+        id: &str,
+        text: &str,
+        request_id: &str,
+    ) -> Result<StructuredReceipt, StructuredControlError> {
+        self.submit_content(
+            user_id,
+            id,
+            text,
+            Some(request_id),
+            &[],
+            false,
+            None,
+            None,
+            None,
+            None,
+            false,
+            true,
         )
         .await
     }
@@ -4544,12 +4682,20 @@ impl StructuredSessionManager {
         preparation: Option<PairedPreparation>,
         app_state: Option<&crate::state::AppState>,
         #[cfg(unix)] queued: bool,
+        #[cfg(unix)] legacy_queued: bool,
     ) -> Result<StructuredReceipt, StructuredControlError> {
         #[cfg(unix)]
         let job_permit = self
             .internal_admission()
             .map_err(StructuredControlError::internal)?;
-        let (session, prepared, _preparation_activity) = if let Some(preparation) = preparation {
+        #[cfg(unix)]
+        let mut paired_guard = None;
+        let (session, prepared, _preparation_activity) = if let Some(mut preparation) = preparation
+        {
+            #[cfg(unix)]
+            {
+                paired_guard = preparation.guard.take();
+            }
             (
                 preparation.session,
                 Some(preparation.snapshot),
@@ -4579,6 +4725,12 @@ impl StructuredSessionManager {
         {
             return Err(StructuredControlError::conflict(
                 "Session changed while preparing the message; try again",
+            ));
+        }
+        #[cfg(unix)]
+        if legacy_queued && !crate::v4_agent::supports(&state.provider) {
+            return Err(StructuredControlError::conflict(
+                "Legacy queued work requires a V4 conversation",
             ));
         }
         if state.provider == "codex" && !image_route {
@@ -4658,7 +4810,7 @@ impl StructuredSessionManager {
             ));
         }
         #[cfg(unix)]
-        let queued_authority = if queued {
+        let (queued_authority, queued_paired_grant) = if queued {
             let proof =
                 queue::verify_queue_authority_for_admission(self, &state, &request_id, &text)?;
             if proof.is_none() && (cfg!(not(test)) || self.inner.local_admission.get().is_some()) {
@@ -4666,9 +4818,21 @@ impl StructuredSessionManager {
                     "Queued message needs authorization. Sign in locally, edit and save the message, then resume the queue",
                 ));
             }
-            proof.map(crate::auth::LocalAuthority::from_verified_queue)
+            match proof {
+                Some(crate::followup_queue::VerifiedQueueAuthority::Paired(grant)) => {
+                    (None, Some(grant))
+                }
+                Some(local) => (
+                    Some(
+                        crate::auth::LocalAuthority::from_verified_queue(local)
+                            .map_err(StructuredControlError::conflict)?,
+                    ),
+                    None,
+                ),
+                None => (None, None),
+            }
         } else {
-            None
+            (None, None)
         };
         #[cfg(unix)]
         let authority = if queued {
@@ -4721,6 +4885,32 @@ impl StructuredSessionManager {
                         "Credential admission unavailable",
                     ));
                 }
+            }
+        }
+        #[cfg(unix)]
+        if let Some(grant) = &queued_paired_grant {
+            self.validate_live_owner(user_id)
+                .map_err(StructuredControlError::internal)?;
+            let admission = self.inner.local_admission.get().ok_or_else(|| {
+                StructuredControlError::internal("Paired credential admission unavailable")
+            })?;
+            let (checked, confirmed) = admission
+                .accept_paired(user_id, grant, |check| check())
+                .map_err(|message| {
+                    if message == "Owner input is busy" {
+                        StructuredControlError {
+                            code: "paired_owner_busy",
+                            message,
+                        }
+                    } else {
+                        StructuredControlError::conflict(message)
+                    }
+                })?;
+            checked.map_err(StructuredControlError::conflict)?;
+            if !confirmed {
+                return Err(StructuredControlError::internal(
+                    "Paired credential admission unavailable",
+                ));
             }
         }
         if state.events.iter().any(|event|matches!(event,StructuredSessionEvent::CommandAccepted{request_id:id,..} if id==&request_id)){return Err(StructuredControlError::conflict("requestId was accepted as a different command"));}
@@ -4868,11 +5058,38 @@ impl StructuredSessionManager {
             return Err(StructuredControlError::conflict("Conversation storage is full; start a new conversation. Existing request receipts are preserved."));
         }
         #[cfg(unix)]
+        let mut paired_grant = queued_paired_grant.clone();
+        #[cfg(unix)]
         if let Some(paired) = paired {
             let app_state = app_state
                 .ok_or_else(|| StructuredControlError::internal("Paired admission unavailable"))?;
             crate::paired_environments::validate_message_authority(app_state, paired, user_id)
                 .map_err(StructuredControlError::conflict)?;
+            #[cfg(test)]
+            if let Some((entered, release)) =
+                self.inner.v4_before_paired_capture.lock().unwrap().take()
+            {
+                let _ = entered.send(());
+                release
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .map_err(|_| {
+                        StructuredControlError::internal("Paired capture fixture timed out")
+                    })?;
+            }
+            paired_grant = Some(
+                match crate::paired_environments::capture_paired_grant(app_state, paired, user_id) {
+                    Ok(grant) => grant,
+                    Err(error) => {
+                        if let Some(publication) = publication.take() {
+                            publication.rollback().map_err(|e| StructuredControlError {
+                                code: e.code,
+                                message: e.message,
+                            })?;
+                        }
+                        return Err(StructuredControlError::conflict(error));
+                    }
+                },
+            );
             self.validate_live_owner(user_id)
                 .map_err(StructuredControlError::internal)?;
         }
@@ -4925,6 +5142,98 @@ impl StructuredSessionManager {
                 }
                 Err(error) => Err(error.to_string()),
             }
+        } else if paired.is_some() {
+            let admission_result = app_state
+                .ok_or_else(|| "Paired credential admission unavailable".to_string())
+                .and_then(|app_state| app_state.local_admission())
+                .and_then(|admission| {
+                    let grant = paired_grant.as_ref().ok_or("Paired grant unavailable")?;
+                    let guard = paired_guard
+                        .as_ref()
+                        .ok_or("Paired owner guard unavailable")?;
+                    admission.accept_paired_with_guard(user_id, grant, guard, |check| {
+                        self.persist_snapshot_with_mode(
+                            user_id,
+                            &snapshot,
+                            state.session_incarnation,
+                            false,
+                            false,
+                            true,
+                            Some(check),
+                        )
+                    })
+                });
+            match admission_result {
+                Ok((result, confirmed)) => {
+                    if !confirmed && result.is_ok() {
+                        tracing::warn!(
+                            "Paired credential outcome uncertain after canonical acceptance"
+                        );
+                    }
+                    result
+                }
+                Err(error) => Err(error),
+            }
+        } else if let Some(grant) = &queued_paired_grant {
+            let admission_result = self
+                .inner
+                .local_admission
+                .get()
+                .ok_or_else(|| "Paired credential admission unavailable".to_string())
+                .and_then(|admission| {
+                    admission.accept_paired(user_id, grant, |check| {
+                        self.persist_snapshot_with_mode(
+                            user_id,
+                            &snapshot,
+                            state.session_incarnation,
+                            false,
+                            false,
+                            true,
+                            Some(check),
+                        )
+                    })
+                });
+            match admission_result {
+                Ok((result, confirmed)) => {
+                    if !confirmed && result.is_ok() {
+                        tracing::warn!(
+                            "Paired credential outcome uncertain after canonical acceptance"
+                        );
+                    }
+                    result
+                }
+                Err(error) => Err(error),
+            }
+        } else if legacy_queued {
+            let admission_result = self
+                .inner
+                .local_admission
+                .get()
+                .ok_or_else(|| "Legacy queue admission unavailable".to_string())
+                .and_then(|admission| {
+                    admission.accept_legacy_queue(user_id, |check| {
+                        self.persist_snapshot_with_mode(
+                            user_id,
+                            &snapshot,
+                            state.session_incarnation,
+                            false,
+                            false,
+                            true,
+                            Some(check),
+                        )
+                    })
+                });
+            match admission_result {
+                Ok((result, confirmed)) => {
+                    if !confirmed && result.is_ok() {
+                        tracing::warn!(
+                            "Legacy queue transaction outcome uncertain after canonical acceptance"
+                        );
+                    }
+                    result
+                }
+                Err(error) => Err(error),
+            }
         } else {
             self.persist_snapshot(user_id, &snapshot, state.session_incarnation)
         };
@@ -4940,11 +5249,33 @@ impl StructuredSessionManager {
                     message: e.message,
                 })?;
             }
+            #[cfg(unix)]
+            if queued_paired_grant.is_some() && error == "Owner input is busy" {
+                return Err(StructuredControlError {
+                    code: "paired_owner_busy",
+                    message: error,
+                });
+            }
             return Err(StructuredControlError::internal(error));
         }
         if let Some(publication) = publication.take() {
             publication.commit();
         }
+        #[cfg(all(test, unix))]
+        let v4_origin_observer = {
+            let pause = self.inner.v4_after_publication.lock().unwrap().take();
+            if let Some((entered, release, observer)) = pause {
+                let _ = entered.send(());
+                release
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .map_err(|_| {
+                        StructuredControlError::internal("V4 publication fixture timed out")
+                    })?;
+                Some(observer)
+            } else {
+                None
+            }
+        };
         let scope = ActionScope {
             owner: user_id.into(),
             session_id: id.into(),
@@ -4975,14 +5306,14 @@ impl StructuredSessionManager {
             prompt: text,
             attachments: attachments.to_vec(),
             recovery_events: state.events.clone(),
-            local_authority: authority
-                .filter(|value| {
-                    value
-                        .valid_for(user_id, crate::v4_agent::interaction::now_ms())
-                        .is_some()
-                })
-                .cloned(),
+            local_authority: authority.cloned(),
+            #[cfg(unix)]
+            paired_authority: paired_grant,
         };
+        #[cfg(all(test, unix))]
+        if let Some(observer) = v4_origin_observer {
+            let _ = observer.send(options.local_authority.clone());
+        }
         state.events = snapshot.events;
         state.updated_at = snapshot.updated_at;
         state.thread = snapshot.thread;
@@ -7147,6 +7478,19 @@ impl StructuredSessionManager {
         }
         #[cfg(unix)]
         let directory_handle = fs::File::open(&directory).map_err(|error| error.to_string())?;
+        #[cfg(all(test, unix))]
+        if let Some((entered, release)) = self
+            .inner
+            .checkpoint_before_publication
+            .lock()
+            .unwrap()
+            .take()
+        {
+            let _ = entered.send(());
+            release
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|_| "Checkpoint publication fixture timed out")?;
+        }
         if let Some(check) = before_publish {
             check()?;
         }
@@ -7421,6 +7765,8 @@ pub(crate) const MAX_STRUCTURED_EVENTS: usize = 32768;
 #[serde(rename_all = "camelCase")]
 pub struct StructuredSessionInventory {
     id: String,
+    #[serde(skip)]
+    session_incarnation: Option<SessionIncarnation>,
     title: String,
     cwd: String,
     provider: String,
@@ -7649,6 +7995,10 @@ fn legacy_owner_is_unique(config: &AppConfig, owner: &str) -> Result<bool, Strin
     legacy_history_owner_is_unique(&config.data_dir, owner)
 }
 pub(crate) fn legacy_history_owner_is_unique(data: &Path, owner: &str) -> Result<bool, String> {
+    let target = sanitize_identifier(owner);
+    if target.is_empty() {
+        return Ok(false);
+    }
     let connection = match rusqlite::Connection::open_with_flags(
         data.join("terminal.db"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -7662,14 +8012,13 @@ pub(crate) fn legacy_history_owner_is_unique(data: &Path, owner: &str) -> Result
     let rows = statement
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(|_| "Cannot verify legacy structured account ownership")?;
-    let target = sanitize_identifier(owner);
     let mut matches = Vec::new();
     for (index, row) in rows.take(20001).enumerate() {
         if index >= 20000 {
             return Err("Legacy account ownership lookup exceeds its bound".into());
         }
         let candidate = row.map_err(|_| "Cannot verify legacy structured account ownership")?;
-        if sanitize_identifier(&candidate) == target {
+        if sanitize_identifier(&candidate).eq_ignore_ascii_case(&target) {
             matches.push(candidate);
         }
     }
@@ -7979,6 +8328,35 @@ impl StructuredProcessController for V4StructuredController {
         answers: Value,
     ) -> Result<DecisionReceipt, String> {
         self.gate.answer(id, answers, self.sink.as_ref()).await
+    }
+    #[cfg(unix)]
+    async fn private_output_preview(
+        &self,
+        approval_id: &str,
+        action_id: &str,
+        context: &PairedDecisionContext,
+    ) -> Result<(String, Value), String> {
+        let actor = self
+            .resources
+            .background_actor(self.gate.scope())
+            .ok_or("Private output review is unavailable")?;
+        actor.private_preview(approval_id, action_id, context).await
+    }
+    #[cfg(unix)]
+    async fn private_output_decision(
+        &self,
+        approval_id: &str,
+        action_id: &str,
+        token: &str,
+        context: &PairedDecisionContext,
+    ) -> Result<DecisionReceipt, String> {
+        let actor = self
+            .resources
+            .background_actor(self.gate.scope())
+            .ok_or("Private output review is unavailable")?;
+        actor
+            .private_decision(approval_id, action_id, token, context)
+            .await
     }
     #[cfg(unix)]
     async fn send_paired_decision(
@@ -9029,6 +9407,30 @@ mod tests {
     }
 
     #[test]
+    fn legacy_history_owner_check_rejects_case_insensitive_aliases() {
+        let data = tempfile::tempdir().unwrap();
+        let db = rusqlite::Connection::open(data.path().join("terminal.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE users(id TEXT PRIMARY KEY); INSERT INTO users VALUES('owner-a');",
+        )
+        .unwrap();
+        assert!(legacy_history_owner_is_unique(data.path(), "owner-a").unwrap());
+        db.execute("INSERT INTO users VALUES (?1)", ["OWNER-_A"])
+            .unwrap();
+        assert!(!legacy_history_owner_is_unique(data.path(), "owner-a").unwrap());
+        assert!(!legacy_history_owner_is_unique(data.path(), "OWNER-_A").unwrap());
+    }
+
+    #[test]
+    fn legacy_history_owner_check_rejects_an_empty_sanitized_directory() {
+        let data = tempfile::tempdir().unwrap();
+        let db = rusqlite::Connection::open(data.path().join("terminal.db")).unwrap();
+        db.execute_batch("CREATE TABLE users(id TEXT PRIMARY KEY); INSERT INTO users VALUES('_');")
+            .unwrap();
+        assert!(!legacy_history_owner_is_unique(data.path(), "_").unwrap());
+    }
+
+    #[test]
     fn default_structured_title_known_providers() {
         assert_eq!(default_structured_title("claude"), "Claude Code");
         assert_eq!(default_structured_title("codex"), "Codex");
@@ -9815,7 +10217,7 @@ impl V4Job {
                 _ => None,
             };
             #[cfg(unix)]
-            let _delegation_turn = if matches!(&work, V4Work::Turn(_)) {
+            let _delegation_turn = if let V4Work::Turn(options) = &work {
                 manager
                     .inner
                     .delegation_supervisor
@@ -9833,7 +10235,8 @@ impl V4Job {
                                 scope,
                                 generation,
                             )
-                            .ok()?,
+                            .ok()?
+                            .with_paired_authority(options.paired_authority.clone()),
                         );
                         controller.resources.bind_delegation(&turn).ok()?;
                         Some(turn)
@@ -9964,6 +10367,13 @@ impl V4Job {
                         .err();
             }
             let mut blocked = !healthy || terminal.is_err() || settlement_error.is_some();
+            // A new turn may be admitted as soon as finalization releases the
+            // session barrier. Retire the old turn-scoped actors first.
+            #[cfg(unix)]
+            {
+                drop(_background_turn);
+                drop(_delegation_turn);
+            }
             if !blocked {
                 if let Err(error) = manager
                     .settle_finalization(&owner, &session_id, generation, owns_barrier)
@@ -10433,6 +10843,52 @@ mod owned_controller_regressions {
             }
             assert!(manager(data.path()).list_sessions("owner_a").await.is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn case_insensitive_alias_blocks_legacy_migration_without_changing_history() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let first = manager(data.path());
+        let snapshot = first
+            .create_session(
+                "owner_a",
+                workspace.path().to_str().unwrap(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        legacy_fixture(data.path(), "owner_a", &snapshot);
+        users(data.path(), &["owner_a", "OWNERA"]);
+        let legacy = legacy_structured_user_dir(&first.inner.config, "owner_a")
+            .join(format!("{}.json", snapshot.id));
+        let original = fs::read(&legacy).unwrap();
+        let restored = manager(data.path());
+        assert!(restored.list_sessions("owner_a").await.is_err());
+        assert_eq!(fs::read(legacy).unwrap(), original);
+        assert!(!structured_session_path(&restored.inner.config, "owner_a", &snapshot.id).exists());
+    }
+
+    #[tokio::test]
+    async fn empty_sanitized_owner_cannot_migrate_a_parent_directory() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let first = manager(data.path());
+        let snapshot = first
+            .create_session("_", workspace.path().to_str().unwrap(), None, None, None)
+            .await
+            .unwrap();
+        legacy_fixture(data.path(), "_", &snapshot);
+        users(data.path(), &["_"]);
+        let legacy = legacy_structured_user_dir(&first.inner.config, "_")
+            .join(format!("{}.json", snapshot.id));
+        let original = fs::read(&legacy).unwrap();
+        let restored = manager(data.path());
+        assert!(restored.list_sessions("_").await.is_err());
+        assert_eq!(fs::read(legacy).unwrap(), original);
+        assert!(!structured_session_path(&restored.inner.config, "_", &snapshot.id).exists());
     }
 }
 

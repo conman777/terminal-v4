@@ -14,6 +14,10 @@ struct ResourceClaims {
     #[serde(default)]
     generation: i64,
     #[serde(default)]
+    auth_protocol: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(default)]
     jti: String,
     prefix: String,
     root: Option<String>,
@@ -82,6 +86,10 @@ struct ParentClaims {
     exp: usize,
     #[serde(default)]
     generation: i64,
+    #[serde(default)]
+    auth_protocol: i64,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 fn resource_claims(state: &AppState, token: &str) -> Result<ResourceClaims, String> {
@@ -108,7 +116,12 @@ pub(crate) fn authenticate_resource_token(
         return Err("Preview resource credentials are read-only".into());
     }
     let claims = resource_claims(state, token)?;
-    state.validate_auth_generation(&claims.sub, claims.generation)?;
+    state.validate_auth_claims(
+        &claims.sub,
+        claims.generation,
+        claims.auth_protocol,
+        claims.session_id.as_deref(),
+    )?;
     if !(path == claims.prefix
         || (claims.root.is_none()
             && !claims.prefix.ends_with("/api/preview")
@@ -167,6 +180,8 @@ pub(crate) fn resource_token_for_root(
                 .min((time::OffsetDateTime::now_utc().unix_timestamp() + 900) as usize),
             token_kind: "preview-resource".into(),
             generation: parent_claims.generation,
+            auth_protocol: parent_claims.auth_protocol,
+            session_id: parent_claims.session_id,
             jti: uuid::Uuid::new_v4().to_string(),
             prefix: prefix.into(),
             root: root.map(str::to_string),

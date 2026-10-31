@@ -275,9 +275,12 @@ Unattended tasks deny shell execution; they can use the bounded workspace file
 tools. The task worker retains its existing cancellation, process containment,
 scheduling, receipts and managed-worktree checkpoint behavior.
 
-The `ask_user` tool lets V4 ask one to four questions in an interactive
+The `ask_user` tool lets V4 ask one to five questions in an interactive
 structured conversation. Questions can include two to six choices; the user
-can also type an answer. The question is bound to its owner, session, turn and
+can also type an answer. Set `multiSelect: true` on a question with choices to
+allow multiple selections and one additional custom answer. Empty, duplicate,
+or more than one custom answer are rejected; questions without that flag retain
+the existing single-answer contract. The question is bound to its owner, session, turn and
 tool call, expires after five minutes, and is resolved if the turn is cancelled
 or the session restarts. Answers return to the provider as the matching tool
 result and are retained in conversation history; users should not enter secrets.
@@ -348,21 +351,55 @@ delivery and receipt reconciliation reject a missing or changed parent
 incarnation. Legacy outbox records without that identity remain staged for
 review; new sessions without an incarnation cannot start background delegation.
 
-By default, results enter the parent's follow-up queue held for review, including
-results created with a local credential. The default dispatcher does not use
-the new queue-authorization admission path. The experimental
-`queued-authority-preview` build can enable a new, empty queue for a locally
-authorized turn and attach a proof bound to the exact message, parent and
-credential; the credential must remain valid at delivery and dispatch.
+On Unix, a locally authorized turn can enable a new, empty follow-up queue and
+attach a proof bound to the exact message, parent and credential. The normal
+dispatcher uses the proof-bearing admission path for those items; the credential
+must remain valid at delivery and dispatch. Existing unproven queue items retain
+their legacy dispatch behavior. Editing a protected item after signing in locally
+renews its proof, while editing an unproven item does not silently upgrade it.
 Revocation, expiry or uncertain publication retains the result for review
-without an unproven retry. A turn without local authority, including a
-paired-origin turn, places its result in a held queue in either build. If the
+without an unproven retry. A turn without usable local or attested paired
+authority places its result in a held queue in either build. If the
 conversation is unavailable, review the retained task result. Existing manual
 and restart holds are never released by delegation. When launch fails, an unstarted
 child is recorded as interrupted; a task whose launch outcome is uncertain
 remains available for recovery rather than being retried. The tool is unavailable
 when the supervisor is unavailable, for unsupported providers, in unattended CLI
 turns, and inside read-only children.
+
+Isolated HTTP tests with a synthetic provider exercise automatic parent follow-up,
+manual holds, credential revocation and local reauthorization. A separate test
+uses two loopback APIs connected through the paired proxy; no live provider or
+physical device was used.
+
+On Unix, an eligible paired input captures a non-secret grant identity under the
+owner admission lock and carries it into a background delegation's reviewed binding.
+After approval, live paired-grant admission protects the exact reviewed binding
+with the queue installation key before a child is launched. A changed binding or
+key is rejected. The bearer token is not stored in the binding or attestation.
+This metadata and proof alone do not authorize delivery or dispatch of a result.
+If the identity cannot be captured, the existing held-result behavior applies;
+if the grant cannot be revalidated when creating an attestation, the child is not
+started. Paired authority is checked again under its admission guard at the
+child launch boundary. If a child has already started when a later confirmation
+fails, its process handle remains supervised rather than reporting that launch
+did not occur.
+Grant expiry, capability changes, revocation and the owner admission lock are
+covered by focused tests. A versioned, encrypted queue proof binds that identity
+to the exact session, queue and message; paired result publication creates it, and the
+V4 dispatcher rechecks the live paired grant at canonical message acceptance.
+An isolated loopback paired-client test covers automatic delivery, a manual hold,
+and revocation before dispatch using a synthetic provider and child. A two-server
+loopback test covers proxy delivery and explicitly resuming a completed, held result
+after graceful remote-server restart. It also kills the remote server while a
+synthetic child is active, confirms that child stopped, requires ownership review,
+and resumes the retained interruption explicitly without starting another child.
+Temporary owner-input contention is retried
+only when admission proves no message was accepted; exhaustion still holds the queue.
+These tests do not exercise a real provider, physical device, stopped supervisor,
+or escaped descendant. Tests show
+the prior strict proof decoder rejects the new format; they do not exercise an old binary. Older readers also
+reject delegation records containing the new binding field.
 
 Background delegation is read-only investigation only: there is no writable
 child, and a request cannot widen the reviewed ceiling because the tool accepts
@@ -383,15 +420,18 @@ without replaying an unproven attempt; a result whose delivery stays uncertain i
 kept for review. These tests use local synthetic providers and are not a
 substitute for a live-provider run.
 
-Known limits: the record ledger has no retention or pruning, so a data directory
-accepts at most 1,024 background delegations over its lifetime, shared by all
-accounts, before new requests are refused. Children are in their own process
-group and are stopped on Stop, logout, deletion and graceful shutdown, but there
-is no parent-death watchdog: after a crash or `kill -9` of the server a child may
-keep running until it finishes, and the owner must review and confirm that it
-stopped before cleanup completes. A result delivered to the parent queue is held
-for review by default and does not wake the parent unless the experimental
-`queued-authority-preview` build is used. A transient failure that is not
+Known limits: the ledger retains at most 1,024 full records across all accounts.
+When full, it prunes only delivered records with a verified queue receipt and
+retains their identities and binding digests as tombstones to prevent replay.
+Unfinished and undelivered records are retained; when there is insufficient room
+or the 262,144-tombstone limit is reached, new requests fail closed. Children run
+in their own process group and are stopped on Stop, logout, deletion and graceful
+shutdown. A pipe lifeline also causes the child to kill its process group when
+the supervisor process dies; it cannot detect a supervisor stopped with SIGSTOP,
+and an escaped descendant is outside that process-group mechanism. After an
+unclean shutdown the owner must still review and confirm that previous processes
+stopped before cleanup completes. An unproven result is held for review instead
+of automatically waking the parent. A transient failure that is not
 provably pre-queue (for example a storage fault after submission) leaves delivery
 uncertain until the owner reviews the retained task result.
 
@@ -494,6 +534,96 @@ and typed content hashes. History stores image references, then V4 hydrates them
 into each provider's image schema. Artifact reads reject tampering and symlinks;
 per-image, per-request and session disk quotas are bounded. Framing validation
 does not decode pixels. Visible transcript storage is separate from the bounded 2 MB active head and scoped image objects.
+
+On Unix, `TERMINAL_V4_IMAGE_INSPECTION=1` opts standard V4 conversations into
+the `inspect_workspace_image` tool when the selected model has confirmed image
+input. An exact approval shows the relative file, workspace, provider, model,
+size, format and SHA-256 digest before sending the image to that provider. The
+tool re-reads and verifies the reviewed content after approval, rejects protected
+paths and symlinks, and stores the result as a scoped image artifact. The model
+interprets the returned image; this is not a separate image-analysis service or
+an auxiliary-model fallback. It is not available to read-only child agents.
+The file boundary shares the documented workspace hard-link limitations.
+
+On Unix, `TERMINAL_V4_IMAGE_GENERATION=1` separately opts standard V4 turns
+whose selected model has a known image-input capability status into `generate_image`.
+For a confirmed text-only model, the artifact is shown in the structured UI
+but the model receives a text notice and no image bytes. Unknown model image
+capability remains unavailable. Each use requires an
+exact approval showing the prompt, OpenAI image model, size, quality and charge
+risk. An optional `image_path` edits one workspace image: the exact path,
+format, size and SHA-256 digest are reviewed, and the image is reread and
+verified before dispatch. Protected paths and symlinks are rejected; the same
+workspace hard-link limits as `inspect_workspace_image` apply. The account's
+configured OpenAI API key is read from its Vault and its reviewed configuration
+is checked again before the request. The tool sends one request to the fixed
+[generation](https://developers.openai.com/api/reference/resources/images/methods/generate)
+or [edit](https://developers.openai.com/api/reference/resources/images/methods/edit)
+endpoint with redirects and automatic retries disabled, retains one validated PNG as an owner/workspace/session-scoped
+artifact, and reports an unconfirmed outcome if the request or result is lost.
+Vault edits share an owner-scoped admission lock with image generation across
+cooperating current-version processes using the same intact local data directory.
+An edit returns a retryable busy error while a request holds the lock; different
+owners do not block each other. Older processes and external Vault or filesystem
+edits do not honor the lock. After cancellation releases it, a provider request
+already admitted may still be processed or charged; its outcome remains unknown.
+The lock protects all Vault writes even when image generation is disabled. A
+missing or replaced lock, or restoring a database to a different filesystem
+identity, can make an owner's Vault writes fail closed until offline recovery.
+Established lock identities are checked without a database write transaction;
+first registration and the Vault change itself still require SQLite writes. If
+another writer holds the database, the operation returns a retryable busy error.
+This path does not support masks, multiple source images, an auxiliary model, or
+read-only delegated children; real-provider availability has not been verified.
+
+### Recovering a Vault admission identity after a restore
+
+This is an offline operator procedure, not an automatic migration. First stop
+and prevent restarts of **every** Terminal V4 server using the original or the
+restored data, including old-version servers, and make sure no provider request
+is still in flight. A request accepted by a provider may continue after the
+server stops. Back up the restored database and lock files before proceeding.
+Do not run this on a shared filesystem while any other installation can access
+the same data. Identify the affected owner's exact internal user ID through the
+operator's existing account records; this is not necessarily a username.
+
+Set `V4_DATA_DIR` to the restored data directory and `V4_OWNER_ID` to that
+internal ID. The following command removes only that owner's stale admission
+identity and its lock file. It prompts for confirmation and does not change
+Vault keys. It cannot verify that every server is stopped; that is required
+before running it.
+
+```sh
+python3 - <<'PY'
+import hashlib, os, pathlib, sqlite3, stat
+root = pathlib.Path(os.environ['V4_DATA_DIR']).resolve(strict=True)
+owner = os.environ['V4_OWNER_ID']
+if not owner or input('Type RESET VAULT LOCK to continue: ') != 'RESET VAULT LOCK':
+    raise SystemExit('Cancelled')
+owner_hash = hashlib.sha256(owner.encode()).hexdigest()
+lock = root / ('vault-admission-' + owner_hash + '.lock')
+db = sqlite3.connect(root / 'terminal.db', timeout=1)
+db.execute('BEGIN IMMEDIATE')
+try:
+    try:
+        metadata = lock.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1:
+            raise RuntimeError('Unsafe lock file; inspect it before recovery')
+        lock.unlink()
+    db.execute('DELETE FROM vault_owner_fences WHERE owner_hash = ?', (owner_hash,))
+    db.commit()
+finally:
+    db.close()
+print('Identity reset; restart one current-version server.')
+PY
+```
+
+Restart one current-version server and verify the affected Vault operation.
+If recovery fails, keep all servers stopped and restore the backup before
+retrying; do not delete the entire table or reset unrelated owners.
 
 ## Verification and remaining scope
 

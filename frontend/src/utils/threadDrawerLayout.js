@@ -7,7 +7,7 @@ export const DEFAULT_DRAWER_HEIGHT = 260;
 export const MIN_DRAWER_HEIGHT = 180;
 const ID = /^[\w.:-]{1,128}$/;
 
-export const defaultDrawerLayout = () => ({ splitId: null, ratio: 0.5, height: DEFAULT_DRAWER_HEIGHT });
+export const defaultDrawerLayout = () => ({ splitId: null, direction: 'side-by-side', ratio: 0.5, height: DEFAULT_DRAWER_HEIGHT });
 
 export function clampSplitRatio(value) {
   const number = Number(value);
@@ -27,6 +27,7 @@ export function normalizeDrawerLayout(value) {
   if (!value || typeof value !== 'object') return base;
   return {
     splitId: typeof value.splitId === 'string' && ID.test(value.splitId) ? value.splitId : null,
+    direction: value.direction === 'stacked' ? 'stacked' : base.direction,
     ratio: clampSplitRatio(value.ratio ?? base.ratio),
     height: clampDrawerHeight(value.height ?? base.height),
   };

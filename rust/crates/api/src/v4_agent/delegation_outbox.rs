@@ -54,6 +54,13 @@ pub(super) struct Binding {
     pub operation_id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization: Option<DelegationAuthorization>,
+    #[cfg(unix)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Origin metadata only; delivery requires a separately protected proof.
+    pub paired_authorization: Option<crate::paired_environments::PairedGrantAuthority>,
+    #[cfg(unix)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired_attestation: Option<crate::followup_queue::PairedDelegationAttestation>,
 }
 
 /// The initiating credential's non-secret authority, bound to the parent
@@ -64,6 +71,49 @@ pub(super) struct DelegationAuthorization {
     pub session_incarnation: Uuid,
     pub generation: i64,
     pub expires_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_protocol: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_session_id: Option<String>,
+    #[cfg(unix)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_attestation: Option<crate::followup_queue::LocalDelegationAttestation>,
+}
+
+impl DelegationAuthorization {
+    fn valid_session_binding(&self) -> bool {
+        match (self.auth_protocol, self.auth_session_id.as_deref()) {
+            (None, None) => {
+                #[cfg(unix)]
+                if self.local_attestation.is_some() {
+                    return false;
+                }
+                true
+            }
+            (Some(1), Some(session)) => {
+                Uuid::parse_str(session).is_ok_and(|id| !id.is_nil() && id.to_string() == session)
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(unix)]
+    fn local_authority(&self, owner: &str) -> Result<crate::auth::LocalAuthority> {
+        match (self.auth_protocol, self.auth_session_id.as_deref()) {
+            (None, None) => crate::auth::LocalAuthority::from_persisted_queue_claims(
+                owner,
+                self.generation,
+                self.expires_at_ms,
+            ),
+            (Some(1), Some(session)) => crate::auth::LocalAuthority::from_persisted_session_claims(
+                owner,
+                self.generation,
+                self.expires_at_ms,
+                session,
+            ),
+            _ => Err("Invalid local delegation authority".into()),
+        }
+    }
 }
 
 impl Binding {
@@ -242,6 +292,7 @@ pub(crate) struct DelegationTurn {
     supervisor: Arc<DelegationSupervisor>,
     pub(super) scope: super::interaction::ActionScope,
     generation: u64,
+    paired_authority: Option<crate::paired_environments::PairedGrantAuthority>,
     #[cfg(test)]
     test_command: Mutex<Option<Box<dyn FnOnce(&mut tokio::process::Command) + Send>>>,
 }
@@ -276,9 +327,18 @@ impl DelegationTurn {
             supervisor,
             scope,
             generation,
+            paired_authority: None,
             #[cfg(test)]
             test_command: Mutex::new(None),
         })
+    }
+
+    pub(crate) fn with_paired_authority(
+        mut self,
+        grant: Option<crate::paired_environments::PairedGrantAuthority>,
+    ) -> Self {
+        self.paired_authority = grant;
+        self
     }
 
     #[cfg(test)]
@@ -311,6 +371,20 @@ impl DelegationTurn {
             return Err("Delegation turn scope changed".into());
         }
         cancellation.check()?;
+        if self
+            .paired_authority
+            .as_ref()
+            .is_some_and(|grant| !grant.valid_for(owner, super::interaction::now_ms()))
+        {
+            return Err("Paired delegation authority is unavailable or expired".into());
+        }
+        let local_authorization = authority
+            .map(|authority| {
+                authority
+                    .valid_for(owner, super::interaction::now_ms())
+                    .ok_or("Local delegation authority is unavailable or expired")
+            })
+            .transpose()?;
         let parent = self
             .manager
             .prepare_delegation_queue_binding(
@@ -326,15 +400,17 @@ impl DelegationTurn {
         let parent_incarnation = parent.incarnation.ok_or(
             "Background delegation requires a conversation with a durable session identity",
         )?;
-        let authorization = parent.incarnation.and_then(|session_incarnation| {
-            authority
-                .and_then(|authority| authority.valid_for(owner, super::interaction::now_ms()))
-                .map(|(generation, expires_at_ms)| DelegationAuthorization {
-                    session_incarnation,
-                    generation,
-                    expires_at_ms,
-                })
-        });
+        let authorization =
+            local_authorization.map(|(generation, expires_at_ms)| DelegationAuthorization {
+                session_incarnation: parent_incarnation,
+                generation,
+                expires_at_ms,
+                auth_protocol: authority
+                    .and_then(|a| (a.auth_protocol() != 0).then_some(a.auth_protocol())),
+                auth_session_id: authority.and_then(|a| a.session_id().map(str::to_owned)),
+                #[cfg(unix)]
+                local_attestation: None,
+            });
         cancellation.check()?;
         let approved = super::delegation_review::review_with_authorization(
             data,
@@ -344,6 +420,7 @@ impl DelegationTurn {
             identity,
             Some(parent_incarnation),
             authorization,
+            self.paired_authority.clone(),
             call_id,
             input,
             interaction,
@@ -352,41 +429,68 @@ impl DelegationTurn {
         .await?;
         let binding = approved.binding().clone();
         let turn = Arc::clone(self);
-        let worker_binding = binding.clone();
         let worker_data = data.to_path_buf();
         let worker_cancel = cancellation.clone();
         let started = tokio::spawn(async move {
+            let mut approved = approved;
             let _owner_permit = turn
                 .manager
-                .external_owner_admission(&worker_binding.owner)?;
-            #[cfg(feature = "queued-authority-preview")]
-            if let Some(claims) = &worker_binding.authorization {
-                let authority = crate::auth::LocalAuthority::from_persisted_queue_claims(
-                    &worker_binding.owner,
-                    claims.generation,
-                    claims.expires_at_ms,
-                )?;
+                .external_owner_admission(&approved.binding().owner)?;
+            if let Some(grant) = approved.binding().paired_authorization.clone() {
+                let reviewed_binding = paired_attestation_binding(approved.binding())?;
                 let queue = crate::followup_queue::QueueStore::new(
                     &worker_data,
                     crate::structured::queue::boot_id(),
                 ).fail_fast();
-                approved.admit_launch(|| {
-                    turn.manager.with_delegation_local_authority(
-                        &worker_binding.owner,
-                        &authority,
-                        "Queue authority initialization outcome is uncertain; retry the delegation. No child was started.",
-                        |check| {
-                            queue
-                                .initialize_authority_checked(&|| {
-                                    approved.check_expiry()?;
-                                    approved.check_directories()?;
-                                    check()
-                                })
-                                .map_err(|error| format!("{error:?}"))
-                        },
+                let proof = approved.admit_launch(|| {
+                    turn.manager.with_delegation_paired_authority(
+                        &approved.binding().owner,
+                        &grant,
+                        |check| queue.protect_paired_delegation_binding(
+                            &approved.binding().owner,
+                            &grant,
+                            &reviewed_binding,
+                            &|| {
+                                approved.check_expiry()?;
+                                approved.check_directories()?;
+                                check()
+                            },
+                        ).map_err(|error| format!("{error:?}")),
                     )
                 })?;
+                approved.attach_paired_attestation(proof)?;
             }
+            if let Some(claims) = approved.binding().authorization.clone() {
+                let owner = approved.binding().owner.clone();
+                let authority = claims.local_authority(&owner)?;
+                let queue = crate::followup_queue::QueueStore::new(
+                    &worker_data, crate::structured::queue::boot_id(),
+                ).fail_fast();
+                if claims.auth_protocol == Some(1) {
+                    let reviewed = local_attestation_binding(approved.binding())?;
+                    let proof = approved.admit_launch(|| {
+                        turn.manager.with_delegation_local_authority(
+                            &owner, &authority,
+                            "Queue authority initialization outcome is uncertain; retry the delegation. No child was started.",
+                            |check| queue.protect_local_delegation_binding(&owner, &authority, &reviewed, &|| {
+                                approved.check_expiry()?; approved.check_directories()?; check()
+                            }).map_err(|error| format!("{error:?}")),
+                        )
+                    })?;
+                    approved.attach_local_attestation(proof)?;
+                } else {
+                    approved.admit_launch(|| {
+                        turn.manager.with_delegation_local_authority(
+                            &owner, &authority,
+                            "Queue authority initialization outcome is uncertain; retry the delegation. No child was started.",
+                            |check| queue.initialize_authority_checked(&|| {
+                                approved.check_expiry()?; approved.check_directories()?; check()
+                            }).map_err(|error| format!("{error:?}")),
+                        )
+                    })?;
+                }
+            }
+            let worker_binding = approved.binding().clone();
             let prepared = turn
                 .supervisor
                 .outbox
@@ -440,8 +544,7 @@ impl DelegationTurn {
         let task = started
             .await
             .map_err(|_| "Delegation launch outcome is uncertain")??;
-        let delivery = if !cfg!(feature = "queued-authority-preview")
-            || binding.authorization.is_none()
+        let delivery = if binding.authorization.is_none() && binding.paired_authorization.is_none()
         {
             "If delivery can be completed, the result will enter the held follow-up queue for review. Otherwise, review the retained task result."
         } else {
@@ -625,6 +728,10 @@ impl DelegationSupervisor {
             permission: Permission::ReadOnlyChild,
             operation_id: Uuid::new_v4(),
             authorization: None,
+            #[cfg(unix)]
+            paired_authorization: None,
+            #[cfg(unix)]
+            paired_attestation: None,
         };
         self.outbox.admit(&binding).map(|_| ())
     }
@@ -1020,7 +1127,7 @@ struct AuthorizedHeldChild {
 }
 
 impl AuthorizedHeldChild {
-    fn launch(self) -> Result<tokio::process::Child> {
+    fn launch(self, check: &dyn Fn() -> Result<()>) -> Result<tokio::process::Child> {
         let Self {
             mut command,
             approved,
@@ -1037,6 +1144,7 @@ impl AuthorizedHeldChild {
                 return Err("Delegation scope changed".into());
             }
             approved.check_expiry()?;
+            check()?;
             command
                 .spawn()
                 .map_err(|_| "Cannot start delegated child".into())
@@ -1050,6 +1158,24 @@ fn valid_identity(s: &str) -> bool {
 }
 
 #[cfg(unix)]
+fn paired_attestation_binding(binding: &Binding) -> Result<Vec<u8>> {
+    let mut reviewed = binding.clone();
+    reviewed.paired_attestation = None;
+    serde_json::to_vec(&reviewed).map_err(|_| "Cannot encode reviewed delegation".into())
+}
+
+#[cfg(unix)]
+fn local_attestation_binding(binding: &Binding) -> Result<Vec<u8>> {
+    let mut reviewed = binding.clone();
+    reviewed
+        .authorization
+        .as_mut()
+        .ok_or("Local delegation authority unavailable")?
+        .local_attestation = None;
+    serde_json::to_vec(&reviewed).map_err(|_| "Cannot encode reviewed delegation".into())
+}
+
+#[cfg(unix)]
 fn submit_bound_delegation(
     manager: &crate::structured::StructuredSessionManager,
     binding: &Binding,
@@ -1058,6 +1184,30 @@ fn submit_bound_delegation(
     identity: Uuid,
     mutation: Mutation,
 ) -> Result<MutationReceipt> {
+    if let (Some(grant), Some(proof)) = (&binding.paired_authorization, &binding.paired_attestation)
+    {
+        let incarnation = binding
+            .parent_incarnation
+            .ok_or("Delegation parent identity is unavailable")?;
+        let reviewed_binding = paired_attestation_binding(binding)?;
+        return manager.with_delegation_paired_authority(&binding.owner, grant, |check| {
+            check()?;
+            queue
+                .verify_paired_delegation_binding(&binding.owner, grant, &reviewed_binding, proof)
+                .map_err(|error| format!("{error:?}"))?;
+            check()?;
+            queue
+                .mutate_existing_paired_with_identity(
+                    scope,
+                    identity,
+                    incarnation,
+                    mutation,
+                    grant,
+                    check,
+                )
+                .map_err(|error| format!("{error:?}"))
+        });
+    }
     let Some(claims) = &binding.authorization else {
         // Without a local credential, the queue stores no dispatch proof. The
         // queue dispatcher must hold this item for explicit review.
@@ -1065,16 +1215,28 @@ fn submit_bound_delegation(
             .mutate_existing_held_with_identity(scope, identity, mutation)
             .map_err(|error| format!("{error:?}"));
     };
-    let authority = crate::auth::LocalAuthority::from_persisted_queue_claims(
-        &binding.owner,
-        claims.generation,
-        claims.expires_at_ms,
-    )?;
+    let authority = claims.local_authority(&binding.owner)?;
     manager.with_delegation_local_authority(
         &binding.owner,
         &authority,
         "Queue publication outcome is uncertain; reconcile its operation receipt",
         |check| {
+            if claims.auth_protocol == Some(1) {
+                let proof = claims
+                    .local_attestation
+                    .as_ref()
+                    .ok_or("Local delegation authority is not protected")?;
+                check()?;
+                queue
+                    .verify_local_delegation_binding(
+                        &binding.owner,
+                        &authority,
+                        &local_attestation_binding(binding)?,
+                        proof,
+                    )
+                    .map_err(|error| format!("{error:?}"))?;
+                check()?;
+            }
             queue
                 .mutate_existing_authorized_with_identity(
                     scope,
@@ -1101,6 +1263,18 @@ fn submit_bound_delegation(
     Err("Delegated queue admission is unavailable on this platform".into())
 }
 pub(super) fn validate_binding(b: &Binding) -> Result<()> {
+    #[cfg(unix)]
+    if b.paired_authorization.as_ref().is_some_and(|grant| {
+        b.authorization.is_some()
+            || b.parent_incarnation.is_none()
+            || !grant.valid_binding_for(&b.owner)
+    }) {
+        return Err("Invalid delegation binding".into());
+    }
+    #[cfg(unix)]
+    if b.paired_attestation.is_some() && b.paired_authorization.is_none() {
+        return Err("Invalid delegation binding".into());
+    }
     if ![
         &b.owner,
         &b.parent_session,
@@ -1131,6 +1305,7 @@ pub(super) fn validate_binding(b: &Binding) -> Result<()> {
                 || b.parent_incarnation != Some(authorization.session_incarnation)
                 || authorization.generation < 0
                 || authorization.expires_at_ms <= 0
+                || !authorization.valid_session_binding()
         })
     {
         return Err("Invalid delegation binding".into());
@@ -1671,6 +1846,13 @@ impl Outbox {
 
     fn admit_checked(&self, b: &Binding, check: impl Fn() -> Result<()>) -> Result<Admission> {
         validate_binding(b)?;
+        #[cfg(unix)]
+        if b.authorization
+            .as_ref()
+            .is_some_and(|auth| auth.auth_protocol == Some(1) && auth.local_attestation.is_none())
+        {
+            return Err("Local delegation authority is not protected".into());
+        }
         let mut db = self.db.lock().map_err(|_| "Outbox lock unavailable")?;
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1731,6 +1913,50 @@ impl Outbox {
                 != self.data_root
         {
             return Err("Delegation data scope changed".into());
+        }
+        #[cfg(unix)]
+        if let Some(proof) = &b.paired_attestation {
+            let grant = b
+                .paired_authorization
+                .as_ref()
+                .ok_or("Paired grant is unavailable")?;
+            let queue = crate::followup_queue::QueueStore::new(
+                &self.data_root,
+                crate::structured::queue::boot_id(),
+            )
+            .fail_fast();
+            queue
+                .verify_paired_delegation_binding(
+                    &b.owner,
+                    grant,
+                    &paired_attestation_binding(b)?,
+                    proof,
+                )
+                .map_err(|error| format!("{error:?}"))?;
+        }
+        #[cfg(unix)]
+        if let Some(auth) = b
+            .authorization
+            .as_ref()
+            .filter(|auth| auth.auth_protocol == Some(1))
+        {
+            let proof = auth
+                .local_attestation
+                .as_ref()
+                .ok_or("Local delegation authority is not protected")?;
+            let authority = auth.local_authority(&b.owner)?;
+            crate::followup_queue::QueueStore::new(
+                &self.data_root,
+                crate::structured::queue::boot_id(),
+            )
+            .fail_fast()
+            .verify_local_delegation_binding(
+                &b.owner,
+                &authority,
+                &local_attestation_binding(b)?,
+                proof,
+            )
+            .map_err(|error| format!("{error:?}"))?;
         }
         let parent = b
             .parent_session
@@ -1861,6 +2087,7 @@ impl Outbox {
         binding: &Binding,
         mut child: AuthorizedHeldChild,
         shutdown: &super::interaction::Cancellation,
+        manager: Option<crate::structured::StructuredSessionManager>,
     ) -> Result<(crate::workspace_tasks::TaskRecord, tokio::process::Child)> {
         if child.approved.binding() != binding || Path::new(&binding.data_root) != self.data_root {
             return Err("Delegation binding changed".into());
@@ -1875,6 +2102,19 @@ impl Outbox {
         child.command.process_group(0);
         let runtime = tokio::runtime::Handle::current();
         let shutdown = shutdown.clone();
+        #[cfg(unix)]
+        let paired = binding.paired_authorization.clone();
+        #[cfg(unix)]
+        if paired.is_some() && binding.paired_attestation.is_none() {
+            return Err("Paired delegation authority is not protected".into());
+        }
+        #[cfg(unix)]
+        let local = binding
+            .authorization
+            .as_ref()
+            .map(|claims| claims.local_authority(&binding.owner))
+            .transpose()?;
+        let owner = binding.owner.clone();
         crate::workspace_tasks::launch_held_delegation(
             self.data_root.clone(),
             binding.owner.clone(),
@@ -1884,7 +2124,32 @@ impl Outbox {
             move || {
                 let _runtime = runtime.enter();
                 shutdown
-                    .admit(|| child.launch())
+                    .admit(|| {
+                        #[cfg(unix)]
+                        if let Some(grant) = &paired {
+                            let manager = manager
+                                .as_ref()
+                                .ok_or("Paired launch authority unavailable")?;
+                            return manager.launch_with_delegation_paired_authority(
+                                &owner,
+                                grant,
+                                |check| child.launch(check),
+                            );
+                        }
+                        #[cfg(unix)]
+                        if let Some(authority) = &local {
+                            let manager = manager
+                                .as_ref()
+                                .ok_or("Local launch authority unavailable")?;
+                            return manager.launch_with_delegation_local_authority(
+                                &owner,
+                                authority,
+                                |check| child.launch(check),
+                            );
+                        }
+                        let _ = (manager, owner);
+                        child.launch(&|| Ok(()))
+                    })
                     .map_err(crate::ApiError::internal)
             },
         )
@@ -1908,7 +2173,7 @@ impl Outbox {
         let (reply, receiver) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {
             let (task, child) = match self
-                .launch_prepared_held_child(&binding, child, &shutdown)
+                .launch_prepared_held_child(&binding, child, &shutdown, None)
                 .await
             {
                 Ok(result) => result,
@@ -1949,7 +2214,14 @@ impl Outbox {
                     binding.queue_identity,
                     binding.parent_incarnation,
                     &shutdown,
-                    || self.launch_prepared_held_child(&binding, child, &shutdown),
+                    || {
+                        self.launch_prepared_held_child(
+                            &binding,
+                            child,
+                            &shutdown,
+                            Some(manager.clone()),
+                        )
+                    },
                 )
                 .await
                 .map_err(|error| error.message)
@@ -2515,6 +2787,21 @@ impl Outbox {
                     if record.receipt.is_some() {
                         return Err("Recorded delivery receipt is no longer available".into());
                     }
+                    #[cfg(unix)]
+                    if let Some(claims) = binding.authorization.as_ref().filter(|claims| claims.auth_protocol == Some(1)) {
+                        let authority = claims.local_authority(&binding.owner)?;
+                        let proof = claims.local_attestation.as_ref().ok_or("Delegation authorization is unavailable; result retained for review")?;
+                        manager.with_delegation_local_authority(
+                            &binding.owner, &authority,
+                            "Delegation authorization is unavailable; result retained for review",
+                            |check| {
+                                check()?;
+                                queue.verify_local_delegation_binding(&binding.owner, &authority, &local_attestation_binding(&binding)?, proof)
+                                    .map_err(|_| "Delegation authorization is unavailable; result retained for review".to_string())?;
+                                check()
+                            },
+                        )?;
+                    }
                     let terminal = self.bind_first_delivery(owner, operation, snapshot.revision)?;
                     let receipt = match submit(
                         queue,
@@ -2922,7 +3209,7 @@ mod tests {
         fixture.arg(&marker).kill_on_drop(true);
         prepared.command = fixture;
         cancellation.cancel();
-        assert!(prepared.launch().is_err());
+        assert!(prepared.launch(&|| Ok(())).is_err());
         assert!(!marker.exists());
         assert_eq!(
             task.status,
@@ -2952,7 +3239,7 @@ mod tests {
         let moved = parent.path().join("moved-workspace");
         std::fs::rename(&workspace, &moved).unwrap();
         std::fs::create_dir(&workspace).unwrap();
-        assert!(prepared.launch().is_err());
+        assert!(prepared.launch(&|| Ok(())).is_err());
         assert!(!marker.exists());
         std::fs::remove_dir(&workspace).unwrap();
         std::fs::rename(&moved, &workspace).unwrap();
@@ -2980,10 +3267,35 @@ mod tests {
         let moved_data = data.path().with_extension("displaced");
         std::fs::rename(data.path(), &moved_data).unwrap();
         std::fs::create_dir(data.path()).unwrap();
-        assert!(prepared.launch().is_err());
+        assert!(prepared.launch(&|| Ok(())).is_err());
         assert!(!marker.exists());
         std::fs::remove_dir(data.path()).unwrap();
         std::fs::rename(&moved_data, data.path()).unwrap();
+
+        let approved = super::super::delegation_review::review(
+            data.path(),
+            "owner",
+            &session,
+            &scope,
+            Uuid::new_v4(),
+            "authority-test",
+            &serde_json::json!({"prompt":"Inspect"}),
+            &Allow,
+            &Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        let (_, mut prepared) = outbox
+            .prepare_authorized_held_child(data.path(), approved)
+            .await
+            .unwrap();
+        let mut fixture = tokio::process::Command::new("/usr/bin/touch");
+        fixture.arg(&marker).kill_on_drop(true);
+        prepared.command = fixture;
+        assert!(prepared
+            .launch(&|| Err("Credential revoked".into()))
+            .is_err());
+        assert!(!marker.exists());
     }
 
     #[cfg(unix)]
@@ -3134,7 +3446,7 @@ mod tests {
             .stderr(std::process::Stdio::piped());
         prepared.command = fixture;
         let (running_task, mut child) = outbox
-            .launch_prepared_held_child(&binding, prepared, &Cancellation::default())
+            .launch_prepared_held_child(&binding, prepared, &Cancellation::default(), None)
             .await
             .unwrap();
         let _lifeline = child.stdin.take();
@@ -3339,7 +3651,181 @@ mod tests {
             permission: Permission::ReadOnlyChild,
             operation_id: Uuid::new_v4(),
             authorization: None,
+            #[cfg(unix)]
+            paired_authorization: None,
+            #[cfg(unix)]
+            paired_attestation: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_binding_requires_matching_owner_and_exclusive_authority() {
+        let now = super::super::interaction::now_ms();
+        let mut b = binding();
+        let incarnation = Uuid::new_v4();
+        b.parent_incarnation = Some(incarnation);
+        let grant: crate::paired_environments::PairedGrantAuthority =
+            serde_json::from_value(serde_json::json!({
+                "owner": "owner",
+                "grant_id": Uuid::new_v4(),
+                "created": now / 1000 - 1,
+                "expires_at_ms": (now / 1000 + 60) * 1000,
+                "revision": "a".repeat(64),
+            }))
+            .unwrap();
+        b.paired_authorization = Some(grant.clone());
+        assert!(validate_binding(&b).is_ok());
+        b.owner = "other".into();
+        assert!(validate_binding(&b).is_err());
+        b.owner = "owner".into();
+        b.parent_incarnation = None;
+        assert!(validate_binding(&b).is_err());
+        b.parent_incarnation = Some(incarnation);
+        b.authorization = Some(DelegationAuthorization {
+            session_incarnation: incarnation,
+            generation: 0,
+            expires_at_ms: now + 60_000,
+            auth_protocol: None,
+            auth_session_id: None,
+            local_attestation: None,
+        });
+        assert!(validate_binding(&b).is_err());
+        b.authorization = None;
+        let encoded = serde_json::to_vec(&b).unwrap();
+        assert_eq!(serde_json::from_slice::<Binding>(&encoded).unwrap(), b);
+        let (_dir, outbox) = store();
+        outbox.admit(&b).unwrap();
+        assert_eq!(
+            outbox
+                .read("owner", b.operation_id)
+                .unwrap()
+                .unwrap()
+                .binding,
+            b
+        );
+        let mut changed = b.clone();
+        changed.paired_authorization = None;
+        assert!(outbox.admit(&changed).is_err());
+        let expired: crate::paired_environments::PairedGrantAuthority =
+            serde_json::from_value(serde_json::json!({
+                "owner": "owner",
+                "grant_id": Uuid::new_v4(),
+                "created": now / 1000 - 120,
+                "expires_at_ms": (now / 1000 - 60) * 1000,
+                "revision": "a".repeat(64),
+            }))
+            .unwrap();
+        assert!(!expired.valid_for("owner", now));
+        b.paired_authorization = Some(expired);
+        assert!(validate_binding(&b).is_ok());
+        let mut legacy = serde_json::to_value(&b).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("paired_authorization");
+        assert!(serde_json::from_value::<Binding>(legacy)
+            .unwrap()
+            .paired_authorization
+            .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upgraded_delegation_authority_requires_exact_login_session() {
+        let incarnation = Uuid::new_v4();
+        let login_session = "abcdef00-0000-4000-8000-000000000001";
+        let mut b = binding();
+        b.parent_incarnation = Some(incarnation);
+        let valid = serde_json::json!({"session_incarnation": incarnation, "generation": 7,
+            "expires_at_ms": super::super::interaction::now_ms() + 60_000,
+            "auth_protocol": 1, "auth_session_id": login_session});
+        b.authorization = Some(serde_json::from_value(valid.clone()).unwrap());
+        assert!(validate_binding(&b).is_ok());
+        let encoded = serde_json::to_string(&b).unwrap();
+        assert_eq!(serde_json::from_str::<Binding>(&encoded).unwrap(), b);
+        for invalid in [
+            serde_json::json!(null),
+            serde_json::json!(Uuid::nil().to_string()),
+            serde_json::json!(login_session.to_uppercase()),
+        ] {
+            let mut malformed = valid.clone();
+            malformed["auth_session_id"] = invalid;
+            b.authorization = Some(serde_json::from_value(malformed).unwrap());
+            assert!(validate_binding(&b).is_err());
+        }
+        let mut malformed = valid.clone();
+        malformed["auth_protocol"] = serde_json::json!(0);
+        b.authorization = Some(serde_json::from_value(malformed).unwrap());
+        assert!(validate_binding(&b).is_err());
+        let legacy = serde_json::json!({"session_incarnation":incarnation,"generation":7,
+            "expires_at_ms":super::super::interaction::now_ms()+60_000});
+        b.authorization = Some(serde_json::from_value(legacy).unwrap());
+        assert!(validate_binding(&b).is_ok());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn upgraded_delegation_requires_proof_before_durable_admission() {
+        let (data, outbox) = store();
+        let mut b = binding();
+        let incarnation = Uuid::new_v4();
+        let session = Uuid::new_v4().to_string();
+        b.data_root = data
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        b.parent_incarnation = Some(incarnation);
+        b.authorization = Some(DelegationAuthorization {
+            session_incarnation: incarnation,
+            generation: 1,
+            expires_at_ms: super::super::interaction::now_ms() + 60_000,
+            auth_protocol: Some(1),
+            auth_session_id: Some(session),
+            local_attestation: None,
+        });
+        assert!(outbox.admit(&b).is_err());
+        let queue = crate::followup_queue::QueueStore::new(
+            data.path(),
+            crate::structured::queue::boot_id(),
+        );
+        let auth = b
+            .authorization
+            .as_ref()
+            .unwrap()
+            .local_authority(&b.owner)
+            .unwrap();
+        let proof = queue
+            .protect_local_delegation_binding(
+                &b.owner,
+                &auth,
+                &local_attestation_binding(&b).unwrap(),
+                &|| Ok(()),
+            )
+            .unwrap();
+        b.authorization.as_mut().unwrap().local_attestation = Some(proof.clone());
+        outbox.admit(&b).unwrap();
+        let persisted = outbox.read(&b.owner, b.operation_id).unwrap().unwrap();
+        assert_eq!(persisted.binding, b);
+        assert!(queue
+            .verify_local_delegation_binding(
+                &b.owner,
+                &auth,
+                &local_attestation_binding(&persisted.binding).unwrap(),
+                &proof
+            )
+            .is_ok());
+        let mut tampered = persisted.binding;
+        tampered.prompt.push_str(" changed");
+        assert!(queue
+            .verify_local_delegation_binding(
+                &b.owner,
+                &auth,
+                &local_attestation_binding(&tampered).unwrap(),
+                &proof
+            )
+            .is_err());
     }
     fn terminal(b: &Binding) -> Terminal {
         Terminal {
@@ -5083,6 +5569,169 @@ mod tests {
             .is_none());
     }
 
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn revoked_login_cannot_publish_or_claim_delegation_for_a_newer_login() {
+        use crate::followup_queue::{QueueScope, QueueStore};
+        use crate::structured::StructuredSessionManager;
+        let (dir, outbox) = store();
+        let workspace = tempfile::tempdir().unwrap();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: dir.path().into(),
+            ..Default::default()
+        };
+        let app = crate::state::AppState::new(config.clone()).unwrap();
+        let old_session = Uuid::new_v4().to_string();
+        let new_session = Uuid::new_v4().to_string();
+        {
+            let db = app.lock_db().unwrap();
+            db.execute("INSERT INTO users(id,username,password_hash,created_at,updated_at,auth_protocol_min) VALUES('owner','fixture','x','now','now',1)", []).unwrap();
+            db.execute(
+                "INSERT INTO auth_generations(user_id,generation) VALUES('owner',1)",
+                [],
+            )
+            .unwrap();
+            for session in [&old_session, &new_session] {
+                db.execute("INSERT INTO auth_sessions(id,user_id,generation,logout_capability_hash,created_at) VALUES(?1,'owner',1,'x','now')", [session]).unwrap();
+            }
+        }
+        let manager = StructuredSessionManager::new(config);
+        manager.bind_live_ownership().unwrap();
+        manager
+            .bind_local_admission(app.local_admission().unwrap())
+            .unwrap();
+        let parent = manager
+            .create_session(
+                "owner",
+                workspace.path().to_str().unwrap(),
+                Some("deepseek"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let incarnation = manager
+            .session_incarnation_for_test("owner", &parent.id)
+            .await
+            .unwrap();
+        let scope = QueueScope::new("owner", workspace.path(), &parent.id).unwrap();
+        let queue = QueueStore::new(
+            dir.path(),
+            crate::structured::queue::manager_boot_id(&manager),
+        );
+        queue.load(&scope).unwrap();
+        let mut b = binding();
+        b.parent_session = parent.id;
+        b.parent_incarnation = Some(incarnation);
+        b.data_root = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        b.workspace = workspace
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        b.child_session = Uuid::new_v4().to_string();
+        b.task = Uuid::new_v4().to_string();
+        b.queue_identity = queue.ensure_existing_identity(&scope).unwrap().unwrap();
+        b.authorization = Some(DelegationAuthorization {
+            session_incarnation: incarnation,
+            generation: 1,
+            expires_at_ms: super::super::interaction::now_ms() + 60_000,
+            auth_protocol: Some(1),
+            auth_session_id: Some(old_session.clone()),
+            local_attestation: None,
+        });
+        let authority = b
+            .authorization
+            .as_ref()
+            .unwrap()
+            .local_authority(&b.owner)
+            .unwrap();
+        let proof = manager
+            .with_delegation_local_authority("owner", &authority, "uncertain", |check| {
+                queue
+                    .protect_local_delegation_binding(
+                        "owner",
+                        &authority,
+                        &local_attestation_binding(&b)?,
+                        check,
+                    )
+                    .map_err(|e| format!("{e:?}"))
+            })
+            .unwrap();
+        b.authorization.as_mut().unwrap().local_attestation = Some(proof);
+        outbox.admit(&b).unwrap();
+        let result = "No answer was returned.".to_string();
+        let t = Terminal {
+            outcome: Outcome::Cancelled,
+            result: result.clone(),
+            source_digest: None,
+            mutation: Mutation {
+                operation_id: b.operation_id,
+                expected_queue_revision: 0,
+                operation: QueueOperation::Enqueue {
+                    item_id: b.operation_id,
+                    text: format!("Delegated task {} (cancelled):\n{result}", b.task),
+                    run_when_idle: false,
+                },
+            },
+        };
+        outbox.finish("owner", b.operation_id, &t).unwrap();
+        app.lock_db()
+            .unwrap()
+            .execute(
+                "UPDATE auth_sessions SET revoked_at='now' WHERE id=?1",
+                [&old_session],
+            )
+            .unwrap();
+        assert!(outbox
+            .deliver_bound_parent(&manager, "owner", b.operation_id)
+            .await
+            .is_err());
+        assert!(queue.load(&scope).unwrap().items.is_empty());
+        assert!(outbox
+            .read("owner", b.operation_id)
+            .unwrap()
+            .unwrap()
+            .receipt
+            .is_none());
+        let attempt: i64 = outbox
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT delivery_attempted FROM records WHERE owner=?1 AND operation_id=?2",
+                rusqlite::params!["owner", b.operation_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            attempt, 0,
+            "definite rejection must retain the outcome without an uncertain claim"
+        );
+        drop(outbox);
+        let reopened = Outbox::open(&dir.path().join("outbox")).unwrap();
+        assert!(reopened
+            .deliver_bound_parent(&manager, "owner", b.operation_id)
+            .await
+            .is_err());
+        assert!(queue.load(&scope).unwrap().items.is_empty());
+        let newer = crate::auth::LocalAuthority::for_test_session(
+            "owner",
+            1,
+            super::super::interaction::now_ms() + 60_000,
+            &new_session,
+        );
+        assert!(manager
+            .with_delegation_local_authority("owner", &newer, "uncertain", |check| check())
+            .is_ok());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn delegated_delivery_binds_parent_incarnation_and_owner_authority() {
         use crate::followup_queue::{HoldReason, IdleBoundary, QueueMode, QueueScope, QueueStore};
@@ -5171,6 +5820,9 @@ mod tests {
                     generation: i64::from(case == "revoked"),
                     expires_at_ms: super::super::interaction::now_ms()
                         + if case == "expired" { -1 } else { 60_000 },
+                    auth_protocol: None,
+                    auth_session_id: None,
+                    local_attestation: None,
                 }),
                 _ => None,
             };

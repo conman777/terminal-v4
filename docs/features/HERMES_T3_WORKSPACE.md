@@ -237,14 +237,18 @@ servers safe. A delegated completion receipt must match the saved child and
 task scope; a mismatch leaves the stored data untouched and blocks recovery.
 
 Schedules start disabled unless explicitly enabled and run while the server runs.
-They support recurring intervals, selected weekdays in an IANA time zone, and
-one-time runs. Existing fixed-offset calendars retain their original meaning.
-Named-zone calendars skip nonexistent local times and use the earlier occurrence
-of a repeated time. Recurring runs coalesce missed intervals and avoid overlaps;
-a due one-time run stays due until it can be queued. Pause, enable, run now, and
-remove are explicit actions. Enabling a paused one-time schedule whose time has
-passed is rejected; use Run now to trigger it explicitly or create a new future
-schedule. These are Terminal V4 application schedules.
+They support recurring intervals, selected weekdays, five-field cron expressions
+in an IANA time zone, and one-time runs. Existing fixed-offset calendars retain
+their original meaning. Named-zone weekday calendars skip nonexistent local
+times and use the earlier occurrence of a repeated time. For cron schedules, a
+time in a daylight-saving gap instead runs when the clock advances; a repeated
+time uses the earlier occurrence. Overdue runs beyond a grace period are recorded
+as missed: recurring schedules advance, and a one-time schedule is disabled.
+The worker avoids overlapping runs. Pause, enable, run now, and remove are
+explicit actions. Enabling a paused one-time schedule whose time has passed is
+rejected; use Run now or create a future schedule instead. Results can optionally
+be sent to the owner's paired Telegram chat; an unconfirmed send is reported and
+is not automatically retried. These are Terminal V4 application schedules.
 
 On supported local filesystems, cooperating server versions take an OS-backed
 worker lease per data directory and serialize task-store transactions across
@@ -254,12 +258,12 @@ not honor these locks. Network filesystems with unreliable file locking are not
 supported for shared task storage.
 
 The panel checks the authenticated, no-store scheduling capability endpoint and
-rechecks immediately before creating a one-time or named-zone calendar schedule.
+rechecks immediately before creating a one-time, named-zone calendar, or cron schedule.
 Without protocol version 1, it disables those creations; interval schedules remain
-available. Both requests must reach the same compatible backend: a rolling upgrade,
-downgrade, or load balancer that switches backends between the check and submission
-can still expose an older server to an advanced payload. Agent-reviewed scheduling
-executes on the new server directly and does not use this frontend handshake.
+available. Advanced requests also use a zero interval that older interval-only
+servers reject; a server with calendar support but no cron support rejects cron
+payloads without their required calendar fields. Agent-reviewed scheduling executes
+on the new server directly and does not use this frontend handshake.
 
 Advanced schedules use a storage marker that makes the previous version reject
 the entire owner store instead of treating them as intervals. This is not a
@@ -369,7 +373,8 @@ The workspace follows T3 Code's layout and palette: near-black canvas (#0a0a0a),
 
 - Installed skills appear as `/skill-name` slash commands; choosing one inserts an instruction to follow that skill's file. `@` lists matching project files (`GET /api/workspace/files`).
 - The Files panel can search text within the selected thread's project. On Unix, searches skip symlinks, binary files, dependency directories and files over 256 KiB, returning up to 100 matches under a 32 MiB, 20,000-entry and two-second soft budget. Results can be truncated, and cancellation takes effect between filesystem operations. Selecting a result preserves the search snapshot; **Open current file at line** reads and highlights up to 15 current lines in a bounded preview. If the workspace or file changes, the preview can fail and the snapshot remains available. This is a read-only preview, not an editor, and files can change again after it loads. Changing accounts or servers clears the panel; reopen Files to load the new workspace. Paired environments require file-transfer permission. Non-Unix hosts currently report that search and preview are unavailable.
-- Any file can be attached in Claude and Codex chats (`POST /api/files/attachment`); attachments reach every agent as an "Attached files" list of paths.
+- Files can be attached in Claude and Codex chats (`POST /api/files/attachment`); attachments reach the agent as an "Attached files" list of paths. The picker, drop and file paste accept ordered batches of up to 100 files, and sending waits for the batch to finish. Ordinary files have a 25 MiB limit; recognized screenshot MIME types use the 10 MiB screenshot route, while other image formats such as SVG are attached as ordinary files. A failed batch stops at the first failure, reports any files already attached and requires acknowledging the incomplete selection before sending. Before an upload or V4 image selection begins, the composer saves a review marker scoped to the account, environment and thread. An interrupted selection remains held for review after reload if browser storage is intact; each outstanding marker needs a separate acknowledgement. Markers contain no filenames or file contents, and at most 100 can be stored per scope. A successful native file batch clears its marker only after the selection is saved and checked. If the marker cannot be saved, the upload does not start; if review records cannot be read, sending is held until storage is available. Acknowledging a marker in another tab does not atomically exclude an upload or send already in progress; check other tabs before continuing. Clearing browser data or using an older client can lose or bypass the hold. The upload route does not deduplicate retries: an interrupted or failed response can leave an extra server copy, even if the file did not appear in the draft. Detected folder drops or pastes are rejected with guidance to choose individual files; the browser does not provide the local folder path used by T3's desktop bridge.
+- In supported Codex and Claude composers, a text-only paste of at least 32 KiB in UTF-8 is uploaded as a text attachment. Smaller pastes first stay in the draft and are removed only after the attachment and unchanged draft are saved. For authenticated users, larger pastes that approach the normal 1,000,000-byte draft-record limit are saved as a browser-local recovery source before upload, without filling the editor with the full text. If the draft changes, the existing draft and saved paste are held for review. The desktop paste-as-text shortcut bypasses conversion, and phones offer **Paste next as text** in the composer menu. Recovery stores the original draft and pasted text locally, scoped to the account, home server, environment and thread; it allows one saved paste per thread and up to eight records or 64 MiB per account and home server. Files are limited to 25 MiB. When IndexedDB is available, opening an authenticated thread checks for saved sources even if the review marker is missing, and recreates the marker when possible. Send is held while the check runs or if previously used recovery storage cannot be read. A small scoped browser-local history indicator is recorded before a save attempt, remains afterward and contains no pasted text; it helps detect when IndexedDB later becomes unavailable, even if that attempt failed. If IndexedDB is unavailable and the indicator was never recorded or was removed, an older hidden source cannot be detected. A reload can expose actions to restore the text, review an interrupted upload, retry it, or discard its saved source. Retrying may leave an extra server copy because uploads are not deduplicated. If device storage is unavailable or full, the upload does not start and the text remains in the open tab; pasted text beyond 25 MiB also stays inline. A tab closed before the recovery storage transaction commits may leave only a warning, with no recoverable text. Browser data removal, older clients, and cross-tab changes can bypass or erase browser-local recovery; upload checks and draft writes are not one atomic cross-tab transaction. V4 image-only conversations keep text inline.
 - Unsent file selections are saved on this device by account, environment and thread, and return after a reload. Only names and paths are saved in the browser; the files remain on the server and can be changed or removed, so check restored files before sending. If device storage cannot save the selection, the composer reports the problem and blocks sending until saving succeeds. Concurrent edits in separate tabs are detected on a best-effort basis, not as an atomic cross-tab transaction; review the other tab when a conflict is reported.
 - A context meter shows how full the context window is, from the usage Claude and Codex report. Settings → Usage totals tokens and cost per thread.
 - ⌘K opens the command palette; ⌘F finds within the current thread; both are rebindable in Settings → Keyboard shortcuts. On phones, use More → Find in thread. Search can open collapsed completed work to show matching messages, reasoning, plans and visible tool output. In-progress tool output, rendered edit diffs and images are not indexed.
@@ -384,7 +389,11 @@ The workspace follows T3 Code's layout and palette: near-black canvas (#0a0a0a),
 - Schedules can run on an interval or at a time on chosen weekdays.
 - After a few turns, a thread offers *Review what to remember*, which opens the Learning tool; nothing is saved without review.
 - Settings → Messaging connects a Telegram bot. Pair one chat with `/pair CODE`; then `/threads`, `/use N`, and messages go to that thread with replies sent back.
-- Settings → Setup check (and a start-screen card when something is missing) lists required and optional tools with fixes.
+  Incoming updates are handled at most once: the polling cursor is saved before
+  the update is dispatched, so a crash in between can lose that message rather
+  than replay it.
+  Voice captions are included with the locally transcribed voice message. Settings changes require a current local credential and are available on Unix; other platforms reject those changes. If an in-flight send or transcription holds the gateway, a settings change waits up to three seconds, then reports that the gateway is busy and can be retried. Authentication admission also reports a busy or unavailable result without waiting for its lock; filesystem work can still delay a settings change. A send whose delivery cannot be confirmed is not automatically repeated. Polling positions are tied to the bot, so switching bots starts a separate cursor and replacing the token for the currently configured bot retains its cursor; existing numeric cursors remain readable. Disconnect removes the cursor. Cursor files are synced before replacement, but recovery from disk rollback or power loss has not been established. If a cursor is corrupt or cannot be written, polling stops processing messages until storage is available. Older binaries do not understand the new cursor format and may replay updates after a downgrade. The gateway admission and revocation locks are process-local: do not run multiple API processes against the same data directory for Telegram, since a second process can race a settings change. These paths have only been tested with local synthetic Telegram and transcription services, not a real bot.
+- Settings → Setup check lists required and optional tools with fixes. When a check needs attention, the start screen shows a compact, expandable notice; dismissing it is scoped to the current account and environment. The current doctor considers Codex and Claude as native agents, so their absence does not establish that configured V4 agents cannot run. On phone-sized or coarse-pointer screens, selecting a project does not automatically focus the composer or open the keyboard.
 
 Turn changes are recorded by snapshotting the working tree into a private Git index when a turn is accepted (Claude: when the user message is sent) and again when it completes (Claude: when the CLI run ends). Trees are diffed with `git diff --numstat`, and summaries are kept per session under `structured-turn-changes/` in the data directory (last 200 turns). Turns outside a Git repository, without changes, or over the checkpoint size limits (5000 files, 100 MB) record nothing.
 

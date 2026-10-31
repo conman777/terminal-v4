@@ -66,12 +66,16 @@ async fn pipe_fixture_state(state: Value) -> Entry {
     command.env("V4_PIPE_FIXTURE_STATE", state.to_string());
     command.arg("-e").arg(r#"
       const readline=require('node:readline');
-      const send=(id,value)=>process.stdout.write(JSON.stringify({id,ok:true,value,state:{tabs:[],activeTabId:null}})+'\n');
+      let keyboardRelease=null;
+      const fixture=JSON.parse(process.env.V4_PIPE_FIXTURE_STATE);
+      const send=(id,value)=>process.stdout.write(JSON.stringify({id,ok:true,value,state:{tabs:[],activeTabId:null,keyboardRelease}})+'\n');
       send(0,{}); let queue=Promise.resolve(), pressCompleted=false;
       readline.createInterface({input:process.stdin}).on('line',line=>{queue=queue.then(async()=>{
         const {id,command}=JSON.parse(line);
         if(command.type==='slow') await new Promise(r=>setTimeout(r,150));
-        if(command.name==='browser_press') { await new Promise(r=>setTimeout(r,150)); pressCompleted=true; }
+        if(command.name==='browser_press') { await new Promise(r=>setTimeout(r,150)); pressCompleted=true; keyboardRelease=fixture.keyboardRelease || null; }
+        if(command.name==='browser_press' && fixture.missingState) { process.stdout.write(JSON.stringify({id,ok:false,error:'fixture response',state:null})+'\n'); return; }
+        if(command.type==='settle') keyboardRelease=null;
         send(id,command.type==='slow'?{marker:'cancelled-result'}:command.type==='control'?{pressCompleted}:JSON.parse(process.env.V4_PIPE_FIXTURE_STATE));
       });});
     "#).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
@@ -101,6 +105,7 @@ async fn pipe_fixture_state(state: Value) -> Entry {
         last_state: Arc::new(StdMutex::new(json!({"tabs":[],"activeTabId":null}))),
         generation: Arc::new(AtomicU64::new(0)),
         keyboard_inflight: Arc::new(AtomicBool::new(false)),
+        keyboard_lease: Arc::new(StdMutex::new(None)),
     }
 }
 
@@ -444,6 +449,126 @@ async fn settings_changed_while_approved_action_is_queued_prevent_execution() {
         .contains("settings changed"));
     assert_eq!(entry.worker.lock().await.sequence, 0);
     entry.worker.lock().await.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn pending_keyboard_release_keeps_reviewed_settings_locked_until_settled() {
+    let directory = tempfile::tempdir().unwrap();
+    let owner = (directory.path().to_path_buf(), "pending-key".to_owned());
+    let config = crate::v4_agent::browser::BrowserConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    crate::v4_agent::browser::save_config(&owner.0, &owner.1, &config).unwrap();
+    let entry = pipe_fixture_state(json!({"keyboardRelease":"pending"})).await;
+    let caller = Caller::Agent {
+        label: "key-fixture".into(),
+        read: false,
+        generation: 0,
+        permit: ActionPermit::default(),
+        configuration: Some((owner.clone(), serde_json::to_vec(&config).unwrap())),
+    };
+    entry
+        .call_press(
+            json!({"type":"agent","name":"browser_press"}),
+            caller,
+            crate::v4_agent::interaction::Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        crate::v4_agent::browser::save_config(&owner.0, &owner.1, &Default::default()).is_err()
+    );
+    crate::v4_agent::browser::save_config(&owner.0, "other-owner", &Default::default()).unwrap();
+    entry
+        .call(json!({"type":"settle"}), Caller::Observer)
+        .await
+        .unwrap();
+    crate::v4_agent::browser::save_config(&owner.0, &owner.1, &Default::default()).unwrap();
+    entry.worker.lock().await.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_keyboard_caller_keeps_settings_locked_until_release() {
+    let directory = tempfile::tempdir().unwrap();
+    let owner = (directory.path().to_path_buf(), "cancelled-key".to_owned());
+    let config = crate::v4_agent::browser::BrowserConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    crate::v4_agent::browser::save_config(&owner.0, &owner.1, &config).unwrap();
+    let entry = pipe_fixture_state(json!({"keyboardRelease":"pending"})).await;
+    let caller = Caller::Agent {
+        label: "key-fixture".into(),
+        read: false,
+        generation: 0,
+        permit: ActionPermit::default(),
+        configuration: Some((owner.clone(), serde_json::to_vec(&config).unwrap())),
+    };
+    let cancellation = crate::v4_agent::interaction::Cancellation::default();
+    let operation = {
+        let entry = entry.clone();
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move {
+            entry
+                .call_press(
+                    json!({"type":"agent","name":"browser_press"}),
+                    caller,
+                    cancellation,
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !entry.keyboard_inflight.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    cancellation.cancel();
+    assert!(operation.await.unwrap().is_err());
+    assert!(
+        crate::v4_agent::browser::save_config(&owner.0, &owner.1, &Default::default()).is_err()
+    );
+    entry
+        .call(json!({"type":"settle"}), Caller::Observer)
+        .await
+        .unwrap();
+    crate::v4_agent::browser::save_config(&owner.0, &owner.1, &Default::default()).unwrap();
+    entry.worker.lock().await.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn missing_keyboard_state_keeps_settings_locked_until_browser_close() {
+    let directory = tempfile::tempdir().unwrap();
+    let owner = (directory.path().to_path_buf(), "unknown-key".to_owned());
+    let config = crate::v4_agent::browser::BrowserConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    crate::v4_agent::browser::save_config(&owner.0, &owner.1, &config).unwrap();
+    let entry = pipe_fixture_state(json!({"missingState":true})).await;
+    let caller = Caller::Agent {
+        label: "key-fixture".into(),
+        read: false,
+        generation: 0,
+        permit: ActionPermit::default(),
+        configuration: Some((owner.clone(), serde_json::to_vec(&config).unwrap())),
+    };
+    assert!(entry
+        .call_press(
+            json!({"type":"agent","name":"browser_press"}),
+            caller,
+            Default::default()
+        )
+        .await
+        .is_err());
+    assert!(
+        crate::v4_agent::browser::save_config(&owner.0, &owner.1, &Default::default()).is_err()
+    );
+    close_selected(&owner, entry).await.unwrap();
+    crate::v4_agent::browser::save_config(&owner.0, &owner.1, &Default::default()).unwrap();
 }
 
 #[tokio::test]

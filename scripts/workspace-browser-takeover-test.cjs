@@ -16,8 +16,20 @@ const manifest = require(path.join(runtime, 'runtime.json'));
     await address.fill(process.env.TERMINAL_V4_BROWSER_TEST_SITE);
     await page.getByRole('button', { name: 'Go', exact: true }).click();
     await page.getByRole('tab', { name: 'Takeover target' }).waitFor();
+    const settings = await page.evaluate(async token => {
+      const response = await fetch('/api/agent/browser', { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error(`Settings read failed: ${response.status}`);
+      return response.json();
+    }, process.env.TERMINAL_V4_BROWSER_TEST_APP_TOKEN);
+    const saveSettings = () => page.evaluate(async ({ token, settings }) => {
+      const response = await fetch('/api/agent/browser', {
+        method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(settings),
+      });
+      return response.status;
+    }, { token: process.env.TERMINAL_V4_BROWSER_TEST_APP_TOKEN, settings });
     const press = page.evaluate(() => fetch('/api/__test_browser_press', { method: 'POST' }).then(response => response.json()));
     await page.getByText('Synthetic keyboard modal').waitFor();
+    assert.equal(await saveSettings(), 503);
     await page.getByRole('button', { name: 'Take control', exact: true }).click();
     await page.getByText('Finishing the agent’s keyboard action').waitFor();
     assert.equal(await page.getByRole('button', { name: 'New browser tab' }).isDisabled(), true);
@@ -26,6 +38,7 @@ const manifest = require(path.join(runtime, 'runtime.json'));
     await page.getByRole('button', { name: 'Let agents control' }).waitFor();
     await page.getByRole('tab', { name: 'KEY_RELEASED' }).waitFor();
     assert.match((await press).error, /dialog/i);
+    assert.equal(await saveSettings(), 200);
 
     await page.getByRole('button', { name: 'Let agents control' }).click();
     await address.fill(process.env.TERMINAL_V4_BROWSER_TEST_SITE + '?focus=1');

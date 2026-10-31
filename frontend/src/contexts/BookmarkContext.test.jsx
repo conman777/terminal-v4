@@ -66,6 +66,18 @@ describe('BookmarkProvider execution', () => {
 describe('BookmarkProvider load health and scope', () => {
   const row = { id: 'synthetic-row', name: 'Synthetic bookmark', command: 'echo synthetic', category: 'Fixture' };
   const response = rows => ({ ok: true, json: async () => ({ bookmarks: rows }) });
+  it('hides previously loaded bookmarks after an ownership conflict and restores them only after a successful retry', async () => {
+    const conflict = { ok: false, status: 409, json: async () => ({ error: 'Bookmark storage ownership is ambiguous. Administrator review is required.' }) };
+    apiFetch.mockReset().mockResolvedValueOnce(response([row])).mockResolvedValueOnce(conflict).mockResolvedValueOnce(response([row]));
+    const { result } = renderHook(useBookmarks, { wrapper: BookmarkProvider });
+    await waitFor(() => expect(result.current.bookmarksLoadStatus).toBe('ready'));
+    await act(async () => result.current.reloadBookmarks());
+    expect([result.current.bookmarksScopeHeld, result.current.bookmarks, result.current.bookmarksLoadError]).toEqual([
+      true, [], 'Bookmark storage ownership is ambiguous. Administrator review is required.',
+    ]);
+    await act(async () => result.current.reloadBookmarks());
+    expect([result.current.bookmarksScopeHeld, result.current.bookmarks]).toEqual([false, [row]]);
+  });
   it('distinguishes initial failure from confirmed empty and retries with reads only', async () => {
     apiFetch.mockReset().mockRejectedValueOnce(new Error('Synthetic read offline')).mockResolvedValue(response([]));
     const { result } = renderHook(useBookmarks, { wrapper: BookmarkProvider });
@@ -200,6 +212,41 @@ it('keeps an unsent bookmark draft when refresh returns the same account identit
  act(()=>scope.authListeners.forEach(listener=>listener('identity')));
  expect(screen.getByLabelText('Name')).toHaveValue('Keep same-account bookmark draft');
  expect(apiFetch).toHaveBeenCalledOnce();
+});
+
+it('holds a draft after a rejected ownership conflict and restores it on read-only retry', async () => {
+  const conflict = { ok: false, status: 409, json: async () => ({ error: 'Bookmark storage ownership is ambiguous. Administrator review is required.' }) };
+  apiFetch.mockReset().mockResolvedValueOnce({ ok: true, json: async () => ({ bookmarks: [] }) })
+    .mockResolvedValueOnce(conflict).mockResolvedValueOnce({ ok: true, json: async () => ({ bookmarks: [] }) });
+  function Fixture() {
+    const v = useBookmarks();
+    return <BookmarkModal isOpen bookmarks={v.bookmarks} onClose={vi.fn()} onAdd={v.addBookmark}
+      loadStatus={v.bookmarksLoadStatus} loadError={v.bookmarksLoadError} onRetryLoad={v.reloadBookmarks}
+      scopeKey={v.bookmarksScopeKey} scopeHeld={v.bookmarksScopeHeld} scopeHoldMessage={v.bookmarksScopeHoldMessage} />;
+  }
+  render(<BookmarkProvider><Fixture /></BookmarkProvider>);
+  await screen.findByText(/No bookmarks yet/);
+  fireEvent.click(screen.getByTitle('Add bookmark'));
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Retained draft' } });
+  fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'echo retained' } });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save' })));
+  expect(screen.getByRole('alert')).toHaveTextContent('Administrator review is required');
+  expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry loading bookmarks' })));
+  expect(screen.getByLabelText('Name')).toHaveValue('Retained draft');
+  expect(screen.getByLabelText('Command')).toHaveValue('echo retained');
+  expect(apiFetch.mock.calls.map(([, options]) => options?.method || 'GET')).toEqual(['GET', 'POST', 'GET']);
+});
+
+it('reports an unconfirmed result when ownership becomes ambiguous after a successful write', async () => {
+  const conflict = { ok: false, status: 409, json: async () => ({ error: 'Bookmark storage ownership is ambiguous. Administrator review is required.' }) };
+  apiFetch.mockReset().mockResolvedValueOnce({ ok: true, json: async () => ({ bookmarks: [] }) })
+    .mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce(conflict);
+  const { result } = renderHook(useBookmarks, { wrapper: BookmarkProvider });
+  await waitFor(() => expect(result.current.bookmarksLoadStatus).toBe('ready'));
+  let outcome;
+  await act(async () => { outcome = await result.current.addBookmark('draft', 'echo draft', 'General').catch(error => error); });
+  expect([outcome.outcomeUncertain, result.current.bookmarksScopeHeld]).toEqual([true, true]);
 });
 
 it('rejects a bookmark write if authentication changed before its notification is delivered',async()=>{

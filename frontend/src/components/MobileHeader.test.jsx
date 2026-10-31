@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { MobileHeader } from './MobileHeader';
 import { setActiveEnvironment } from '../utils/remoteEnvironments';
+import { setUser } from '../utils/auth';
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -49,6 +50,22 @@ function buildProps(overrides = {}) {
 }
 
 describe('MobileHeader', () => {
+  it.each(['account', 'environment'])('closes the old action menu when the %s changes', scope => {
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const view = render(<MobileHeader {...buildProps()} />);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'More actions', exact: true }));
+      expect(screen.getByRole('group', { name: 'More actions' })).toBeInTheDocument();
+      act(() => {
+        if (scope === 'account') setUser({ id: 'mobile-header-owner-b' });
+        else setActiveEnvironment({ id: 'mobile-header-other-server' });
+      });
+      expect(screen.queryByRole('group', { name: 'More actions' })).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      act(() => { setUser(null); setActiveEnvironment(null); });
+    }
+  });
   it('settles an eligible V4 thread without changing the open conversation', async () => {
     const onUpdateThreadMetadata = vi.fn().mockResolvedValue({});
     const lifecycle = { supported: true, settlementSupported: true, settled: false, canSettle: true, requiresAttention: false };
@@ -150,6 +167,65 @@ describe('MobileHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     fireEvent.click(screen.getByRole('button', { name: 'Unpin thread' }));
     await waitFor(() => expect(onUnpinSession).toHaveBeenCalledWith('session-1'));
+  });
+
+  it.each(['account', 'environment'])('clears pending pin feedback when the %s changes', async scope => {
+    let finish;
+    const onPinSession = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const view = render(<MobileHeader {...buildProps({ onPinSession, onUnpinSession: vi.fn() })} />);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Pin thread' }));
+      expect(screen.getByRole('status')).toHaveTextContent('Pinning');
+      act(() => {
+        if (scope === 'account') setUser({ id: 'mobile-header-owner-b' });
+        else setActiveEnvironment({ id: 'mobile-header-other-server' });
+      });
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      expect(screen.getByRole('button', { name: 'Pin thread' })).toBeEnabled();
+      await act(async () => finish({ ok: false, error: new Error('Previous scope failure') }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      act(() => { setUser(null); setActiveEnvironment(null); });
+    }
+  });
+
+  it.each(['account', 'environment'])('clears an earlier pin error when the %s changes', async scope => {
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const view = render(<MobileHeader {...buildProps({ onPinSession: vi.fn().mockResolvedValue({ ok: false, error: new Error('Previous scope failure') }), onUnpinSession: vi.fn() })} />);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Pin thread' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Previous scope failure');
+      act(() => {
+        if (scope === 'account') setUser({ id: 'mobile-header-owner-b' });
+        else setActiveEnvironment({ id: 'mobile-header-other-server' });
+      });
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      act(() => { setUser(null); setActiveEnvironment(null); });
+    }
+  });
+
+  it('keeps a pending pin when the same account is refreshed', async () => {
+    let finish;
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const view = render(<MobileHeader {...buildProps({ onPinSession: vi.fn(() => new Promise(resolve => { finish = resolve; })), onUnpinSession: vi.fn() })} />);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Pin thread' }));
+      act(() => setUser({ id: 'mobile-header-owner-a', displayName: 'Updated' }));
+      expect(screen.getByRole('status')).toHaveTextContent('Pinning');
+      await act(async () => finish({ ok: false, error: new Error('Current scope failure') }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Current scope failure');
+    } finally {
+      view.unmount();
+      act(() => setUser(null));
+    }
   });
 
   it('prevents duplicate pinning and hides a stale failure after switching threads', async () => {
@@ -579,6 +655,32 @@ describe('MobileHeader rename recovery', () => {
     expect(screen.getByRole('button', {name: 'Save'})).toBeEnabled();
   });
 
+  it.each(['account', 'environment'])('closes a pending rename when the %s changes and ignores its later result', async scope => {
+    let finish;
+    const onRenameSession = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const view = render(<MobileHeader {...buildProps({ onRenameSession })} />);
+    try {
+      const dialog = openRename();
+      fireEvent.change(within(dialog).getByRole('textbox', { name: 'Thread title' }), { target: { value: 'Old scope title' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+      expect(within(dialog).getByRole('button', { name: 'Saving…' })).toBeDisabled();
+      act(() => {
+        if (scope === 'account') setUser({ id: 'mobile-header-owner-b' });
+        else setActiveEnvironment({ id: 'mobile-header-other-server' });
+      });
+      expect(screen.queryByRole('dialog', { name: 'Rename thread' })).not.toBeInTheDocument();
+      const newDialog = openRename();
+      expect(within(newDialog).getByRole('button', { name: 'Save' })).toBeEnabled();
+      await act(async () => finish({ ok: false, error: new Error('Previous scope failure') }));
+      expect(screen.getByRole('dialog', { name: 'Rename thread' })).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      act(() => { setUser(null); setActiveEnvironment(null); });
+    }
+  });
+
   it.each(['selection', 'removed', 'archived', 'preview', 'start view'])('fences a pending rename after %s changes', async change => {
     let finish;
     const onRenameSession = vi.fn(() => new Promise(resolve => { finish = resolve; }));
@@ -637,6 +739,63 @@ describe('MobileHeader close recovery', () => {
     fireEvent.click(screen.getByRole('button', {name: 'More actions', exact: true}));
     fireEvent.click(screen.getByRole('button', {name: 'Close thread', exact: true}));
   }
+
+  it.each(['account', 'environment'])('clears pending close feedback when the %s changes', async scope => {
+    let finish;
+    const onCloseSession = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const view = render(<MobileHeader {...buildProps({ onCloseSession })} />);
+    try {
+      closeFromMenu();
+      expect(screen.getByRole('status')).toHaveTextContent('Closing Terminal 1');
+      act(() => {
+        if (scope === 'account') setUser({ id: 'mobile-header-owner-b' });
+        else setActiveEnvironment({ id: 'mobile-header-other-server' });
+      });
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'More actions', exact: true }));
+      expect(screen.getByRole('button', { name: 'Close thread', exact: true })).toBeEnabled();
+      await act(async () => finish({ ok: false, error: new Error('Previous scope failure') }));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      act(() => { setUser(null); setActiveEnvironment(null); });
+    }
+  });
+
+  it.each(['account', 'environment'])('clears an earlier close error when the %s changes', async scope => {
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const onCloseSession = vi.fn().mockResolvedValue({ ok: false, error: new Error('Previous scope failure') });
+    const view = render(<MobileHeader {...buildProps({ onCloseSession })} />);
+    try {
+      closeFromMenu();
+      expect(await screen.findByRole('alert')).toHaveTextContent('Previous scope failure');
+      act(() => {
+        if (scope === 'account') setUser({ id: 'mobile-header-owner-b' });
+        else setActiveEnvironment({ id: 'mobile-header-other-server' });
+      });
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      view.unmount();
+      act(() => { setUser(null); setActiveEnvironment(null); });
+    }
+  });
+
+  it('keeps a pending close when the same account is refreshed', async () => {
+    let finish;
+    act(() => setUser({ id: 'mobile-header-owner-a' }));
+    const view = render(<MobileHeader {...buildProps({ onCloseSession: vi.fn(() => new Promise(resolve => { finish = resolve; })) })} />);
+    try {
+      closeFromMenu();
+      act(() => setUser({ id: 'mobile-header-owner-a', displayName: 'Updated' }));
+      expect(screen.getByRole('status')).toHaveTextContent('Closing');
+      await act(async () => finish({ ok: false, error: new Error('Current scope failure') }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Current scope failure');
+    } finally {
+      view.unmount();
+      act(() => setUser(null));
+    }
+  });
 
   it('reports a failed close after the menu unmounts and retries the original session', async () => {
     const onCloseSession = vi.fn()

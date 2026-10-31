@@ -1,7 +1,7 @@
 import { environmentAllows } from '../utils/runtimePermissions';
 import { getActiveEnvironment, getEnvironmentCacheScope, getEnvironmentSignal, getEnvironmentStorage, subscribeEnvironment } from '../utils/remoteEnvironments';
 import { createTerminalReconnectController, isPermanentSocketClose } from '../utils/terminalSocketReconnect';
-import { resolveWebSocketUrl } from '../utils/apiBase';
+import { resolveHomeApiUrl, resolveWebSocketUrl } from '../utils/apiBase';
 import { useState, useEffect, useCallback, useRef, useMemo, useSyncExternalStore } from 'react';
 import { apiFetch } from '../utils/api';
 import { useComposerDraft } from './useComposerDraft';
@@ -61,6 +61,7 @@ const WORK_MESSAGE_ROLES = new Set(['reasoning', 'plan']);
 const MAX_CONTROL_EVENTS = 64;
 const MAX_CONTROL_BYTES = 256000;
 const MAX_CONTROL_EVENT_BYTES = 64000;
+const STRICT_ACTION_UNAVAILABLE = 'This action is unavailable while secure session support is being completed. Your conversation and draft were kept.';
 
 function emptyControls(scope, generation = scope.generation) {
   return { scope, generation, latestSeq: 0, entries: [], bytes: 0, truncated: false };
@@ -87,14 +88,19 @@ function appendControl(previous, scope, event) {
   return { ...next, latestSeq: event.seq, entries, bytes, truncated };
 }
 
-export function useStructuredSession({ sessionId, active = true, runtime, status, statusSeq = 0, aiType, model }) {
+export function useStructuredSession(options) {
+  const { sessionId, active = true, runtime, status, statusSeq = 0, aiType, model, authLifecycle, strictReady } = options;
+  const strictAuth = Object.hasOwn(options, 'authLifecycle');
+  const strictReadyRef = useRef(strictReady);
+  strictReadyRef.current = strictReady;
   const isV4 = runtime === 'v4';
   const hasReceipts = isV4 || runtime === 'codex';
   const environmentSignal = useSyncExternalStore(subscribeEnvironment, getEnvironmentSignal);
   const controlGenerationRef = useRef(0);
-  const controlScope = useMemo(() => ({ sessionId, runtime, signal: environmentSignal, generation: ++controlGenerationRef.current }), [sessionId, runtime, environmentSignal]);
+  const controlScope = useMemo(() => ({ sessionId, runtime, signal: environmentSignal, generation: ++controlGenerationRef.current }), [sessionId, runtime, environmentSignal, strictAuth, authLifecycle]);
   const controlScopeRef = useRef(controlScope);
   controlScopeRef.current = controlScope;
+  const strictSessionScope = useMemo(() => ({ identity: null, environment: JSON.stringify(getActiveEnvironment()) }), [controlScope, authLifecycle]);
   // Image selection has its own render-time epoch. Model ABA retires an action
   // without resetting the conversation, shared socket or canonical transcript.
   const imageSelectionGenerationRef = useRef(0);
@@ -143,7 +149,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
     return createApprovalIntentStore(getEnvironmentStorage(), supervisedInputTransaction, current, sessionId);
   }, [sessionId, controlScope]);
   useEffect(() => {
-    if (runtime !== 'codex' || !sessionId) return undefined;
+    if (strictAuth || runtime !== 'codex' || !sessionId) return undefined;
     const changed = event => {
       if (!event.key?.endsWith(`approvalDecision:v1:${encodeURIComponent(sessionId)}`)) return;
       try {
@@ -160,7 +166,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
     };
     window.addEventListener('storage', changed);
     return () => window.removeEventListener('storage', changed);
-  }, [runtime, sessionId, approvalStore]);
+  }, [runtime, sessionId, approvalStore, strictAuth]);
   const currentToolCallsRef = useRef([]);
   const activeTurnRef = useRef(null);
   const legacySessionRunningRef = useRef(false);
@@ -210,7 +216,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
       interruptRequestRef.current?.controller.abort();
       sendRequestRef.current = null; approvalRequestRef.current = null; interruptRequestRef.current = null;
     };
-  }, [sessionId, runtime, environmentSignal]);
+  }, [sessionId, runtime, environmentSignal, strictAuth, authLifecycle, strictReady]);
 
   useEffect(() => {
     if (!hasReceipts || !status) return;
@@ -223,7 +229,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
 
   const processEvent = useCallback((event) => {
     if (controlScopeRef.current !== controlScope || controlScope.signal.aborted) return;
-    if (event.type === 'context_usage' && event.usage && typeof event.usage === 'object') setContextUsage({ sessionId, usage: event.usage });
+    if (event.type === 'context_usage' && event.usage && typeof event.usage === 'object') setContextUsage({ scope: controlScope, usage: event.usage });
     if (isV4 && Number.isSafeInteger(event.seq) && event.seq > 0) {
       setControlProjection(previous => controlScopeRef.current === controlScope && !controlScope.signal.aborted
         ? appendControl(previous, controlScope, event) : previous);
@@ -373,7 +379,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
           : { toolName: event.toolName, toolInput: event.toolInput, description: event.description,
             ts: event.ts, seq: event.seq, approvalId: event.approvalId, turnId: event.turnId,
             toolCallId: event.toolCallId, expiresAt: event.expiresAt };
-        if (runtime === 'codex' && approval.approvalId) {
+        if (!strictAuth && runtime === 'codex' && approval.approvalId) {
           try {
             const saved = approvalStore().read();
             if (saved && saved.approvalId !== approval.approvalId) {
@@ -417,7 +423,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
       }
       case 'approval_decision_reviewed':
       case 'approval_resolved':
-        if (runtime === 'codex' && event.approvalId) {
+        if (!strictAuth && runtime === 'codex' && event.approvalId) {
           try { void approvalStore().clear(event.approvalId).catch(() => setApprovalError('Approval recovery could not be cleared. Reopen the conversation to check it.')); }
           catch { setApprovalError('Approval recovery could not be cleared. Reopen the conversation to check it.'); }
         }
@@ -436,17 +442,19 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
       default:
         break;
     }
-  }, [isV4, hasReceipts, runtime, controlScope, sessionId, approvalStore]);
+  }, [isV4, hasReceipts, runtime, controlScope, sessionId, approvalStore, strictAuth]);
 
   useEffect(() => {
     if (!sessionId || !active) return;
     let disposed = false;
     let historyRecovery = null;
+    const initialEnvironment = strictSessionScope.environment;
     const environmentSignal = environmentSignalRef.current;
     if (environmentSignal.aborted) return;
     const remote = Boolean(getActiveEnvironment());
     const resetModel = () => {
       resetControls();
+      setContextUsage(null);
       lastSeqRef.current = 0;
       isReconnectRef.current = false;
       setMessages([]);
@@ -479,9 +487,35 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
       socket?.close();
       if (!disposed) setConnectionState('unavailable');
     };
+    const stopStrict = () => {
+      if (!disposed) {
+        resetModel();
+        setTransportError('Authentication changed or is unavailable. Reopen the conversation after signing in.');
+      }
+      stop();
+    };
+    async function readStrictScope() {
+      if (strictReadyRef.current !== true || typeof authLifecycle?.read !== 'function') throw new Error('Authentication unavailable');
+      const snapshot = await authLifecycle.read();
+      const pair = snapshot?.pair;
+      const home = new URL(resolveHomeApiUrl('/'), window.location.origin).href;
+      if (disposed || environmentSignal.aborted || JSON.stringify(getActiveEnvironment()) !== initialEnvironment
+        || strictReadyRef.current !== true || snapshot?.status !== 'active' || snapshot.refreshReserved
+        || typeof snapshot.incarnation !== 'string' || !snapshot.incarnation || typeof pair?.owner !== 'string' || !pair.owner
+        || snapshot.user?.id !== pair.owner || typeof pair.session !== 'string' || !pair.session
+        || typeof pair.accessToken !== 'string' || !pair.accessToken || typeof pair.home !== 'string'
+        || new URL(pair.home).href !== home) throw new Error('Authentication unavailable');
+      const next = { incarnation: snapshot.incarnation, owner: pair.owner, session: pair.session, home, accessToken: pair.accessToken };
+      const original = strictSessionScope.identity;
+      if (original && (original.incarnation !== next.incarnation || original.owner !== next.owner
+        || original.session !== next.session || original.home !== next.home)) throw new Error('Authentication changed');
+      strictSessionScope.identity ||= next;
+      return next;
+    }
     environmentSignal.addEventListener('abort', stop, { once: true });
 
     async function recoverHistory() {
+      if (strictAuth) { stopStrict(); return; }
       historyOnlyRef.current = controlScope;
       setHistoryOnlyScope(controlScope);
       controller.stop();
@@ -559,15 +593,35 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
       }
       const attempt = controller.beginAttempt();
       isConnectingRef.current = true;
-      let accessToken = getAccessToken();
+      let accessToken;
       try {
-        if (accessToken && isAccessTokenExpired(accessToken)) {
-          accessToken = (await refreshTokens()).accessToken;
+        if (strictAuth) {
+          let scope = await readStrictScope();
+          if (isAccessTokenExpired(scope.accessToken)) {
+            if (typeof authLifecycle?.refresh !== 'function') throw new Error('Authentication unavailable');
+            const { incarnation, owner, session, home } = scope;
+            const refreshed = await authLifecycle.refresh({ incarnation, owner, session, home }, { signal: environmentSignal });
+            if (refreshed?.status !== 'active') throw new Error('Authentication unavailable');
+          }
+          scope = await readStrictScope();
+          if (isAccessTokenExpired(scope.accessToken)) throw new Error('Authentication unavailable');
+          accessToken = scope.accessToken;
+        } else {
+          accessToken = getAccessToken();
+          if (accessToken && isAccessTokenExpired(accessToken)) accessToken = (await refreshTokens()).accessToken;
         }
       } catch (error) {
         if (!disposed && controller.isCurrentAttempt(attempt)) {
           isConnectingRef.current = false;
-          if (['Token refresh failed', 'No refresh token', 'Invalid token response'].includes(error?.message)) stop();
+          if (strictAuth) { stopStrict(); return; }
+          if ([
+            'Token refresh failed',
+            'No refresh token',
+            'Invalid token response',
+            'Local sign-in history is damaged; contact your administrator',
+            'Token refresh outcome uncertain; sign in again',
+            'Token refresh temporarily unavailable',
+          ].includes(error?.message)) stop();
           else controller.scheduleReconnect();
         }
         return;
@@ -580,11 +634,28 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
       const params = new URLSearchParams();
       if (accessToken) params.set('token', accessToken);
       if (isReconnectRef.current && lastSeqRef.current > 0) params.set('last_seq', String(lastSeqRef.current));
-      const ws = new WebSocket(resolveWebSocketUrl('/api/structured/sessions/' + encodeURIComponent(sessionId) + '/ws') + '?' + params.toString());
+      const socketUrl = resolveWebSocketUrl('/api/structured/sessions/' + encodeURIComponent(sessionId) + '/ws');
+      if (strictAuth) {
+        const target = new URL(socketUrl);
+        target.protocol = target.protocol === 'wss:' ? 'https:' : 'http:';
+        if (target.origin !== new URL(strictSessionScope.identity.home).origin) { stopStrict(); return; }
+      }
+      const ws = new WebSocket(socketUrl + '?' + params.toString());
       wsRef.current = ws;
       isConnectingRef.current = false;
       const current = () => !disposed && controlScopeRef.current === controlScope && !environmentSignal.aborted && wsRef.current === ws && controller.isCurrentAttempt(attempt);
-      ws.onopen = () => {
+      let pendingEvents = 0;
+      let pendingBytes = 0;
+      let eventChain = Promise.resolve();
+      const enqueueStrict = (action, size = 0) => {
+        if (++pendingEvents > 128 || (pendingBytes += size) > 1024 * 1024) { stopStrict(); return; }
+        eventChain = eventChain.then(async () => {
+          if (!current()) return;
+          await readStrictScope();
+          if (current()) action();
+        }).catch(() => { if (current()) stopStrict(); }).finally(() => { pendingEvents -= 1; pendingBytes -= size; });
+      };
+      const applyOpen = () => {
         if (!current()) return;
         controller.markConnected();
         setConnectionState('online');
@@ -592,7 +663,8 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
         setHistoryOnlyScope(null);
         setTransportError('');
       };
-      ws.onmessage = event => {
+      ws.onopen = () => { if (strictAuth) enqueueStrict(applyOpen); else applyOpen(); };
+      const applyMessage = event => {
         if (!current()) return;
         try {
           const data = JSON.parse(event.data);
@@ -616,11 +688,18 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
           }
         } catch { /* Ignore malformed transport events. */ }
       };
+      ws.onmessage = event => {
+        if (!current()) return;
+        if (!strictAuth) { applyMessage(event); return; }
+        if (typeof event.data !== 'string') { stopStrict(); return; }
+        enqueueStrict(() => applyMessage(event), event.data.length * 2);
+      };
       ws.onclose = (event = {}) => {
         if (!current()) return;
         wsRef.current = null;
         isConnectingRef.current = false;
         if (event.code === 1009) {
+          if (strictAuth) { stopStrict(); return; }
           void recoverHistory();
           return;
         }
@@ -653,13 +732,14 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
       wsRef.current = null;
       socket?.close();
     };
-  }, [sessionId, active, processEvent, resetControls, controlScope, environmentSignal, reconnectRevision]);
+  }, [sessionId, active, processEvent, resetControls, controlScope, environmentSignal, reconnectRevision, strictAuth, authLifecycle, strictReady, strictSessionScope]);
 
   useEffect(() => {
     if (windowActive && active && sessionId) void connectRef.current?.();
   }, [active, sessionId, windowActive]);
 
   const nativeMessage = useCallback(async (mode, text, attachments) => {
+    if (strictAuth) { setSendError(STRICT_ACTION_UNAVAILABLE); throw new Error(STRICT_ACTION_UNAVAILABLE); }
     if (!isV4 || imageSelectionRef.current !== imageSelection || controlScopeRef.current !== controlScope || !sessionId || environmentSignalRef.current.aborted
       || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return { accepted: false };
     if (mode !== 'check' && historyOnlyRef.current === controlScope) return { accepted: false, historyOnly: true };
@@ -694,12 +774,13 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
     } finally {
       if (sendRequestRef.current === request) { sendRequestRef.current = null; composerStore.releaseSend(lease); if (sameFlightScope()) setIsSending(false); }
     }
-  }, [isV4, sessionId, composerStore, controlScope, imageSelection, requiresCleanup]);
+  }, [isV4, sessionId, composerStore, controlScope, imageSelection, requiresCleanup, strictAuth]);
   const checkPendingMessage = useCallback(() => nativeMessage('check'), [nativeMessage]);
   const retryPendingMessage = useCallback(() => nativeMessage('retry'), [nativeMessage]);
 
   const sendMessage = useCallback(
     async (text, attachments) => {
+      if (strictAuth) { setSendError(STRICT_ACTION_UNAVAILABLE); throw new Error(STRICT_ACTION_UNAVAILABLE); }
       if (controlScopeRef.current !== controlScope || !sessionId || environmentSignalRef.current.aborted || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return { accepted: false };
       if (historyOnlyRef.current === controlScope) return { accepted: false, historyOnly: true };
       const hasImages = attachments !== undefined && !(Array.isArray(attachments) && attachments.length === 0);
@@ -791,10 +872,11 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
           if (current()) setIsSending(false);
         }
       }
-    }, [sessionId, hasReceipts, runtime, requiresCleanup, composerStore, controlScope, nativeMessage]
+    }, [sessionId, hasReceipts, runtime, requiresCleanup, composerStore, controlScope, nativeMessage, strictAuth]
   );
 
   const interrupt = useCallback(async () => {
+    if (strictAuth) { setControlError(STRICT_ACTION_UNAVAILABLE); return { accepted: false }; }
     if (controlScopeRef.current !== controlScope || !sessionId || environmentSignalRef.current.aborted || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return { accepted: false };
     if (interruptRequestRef.current) return { accepted: false, pending: true };
     const request = { controller: new AbortController(), generation: actionGenerationRef.current, cleanupSeq: cleanupSeqRef.current };
@@ -824,10 +906,11 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
     } finally {
       if (interruptRequestRef.current === request) { interruptRequestRef.current = null; if (current()) setIsInterrupting(false); }
     }
-  }, [sessionId, hasReceipts, controlScope]);
+  }, [sessionId, hasReceipts, controlScope, strictAuth]);
 
   const approve = useCallback(
     async (approved, expectedApproval, answers, { forSession = false } = {}) => {
+      if (strictAuth) { setApprovalError(STRICT_ACTION_UNAVAILABLE); return { accepted: false }; }
       if (controlScopeRef.current !== controlScope || !sessionId || environmentSignalRef.current.aborted || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return { accepted: false };
       const approval = pendingApprovalRef.current;
       if (!approval || (expectedApproval && expectedApproval !== approval)) return { accepted: false, stale: true };
@@ -925,10 +1008,11 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
         }
       }
     },
-    [sessionId, hasReceipts, runtime, controlScope, approvalStore]
+    [sessionId, hasReceipts, runtime, controlScope, approvalStore, strictAuth]
   );
 
   const reviewApproval = useCallback(async expectedApproval => {
+    if (strictAuth) { setApprovalError(STRICT_ACTION_UNAVAILABLE); return { accepted: false }; }
     if (runtime !== 'codex' || controlScopeRef.current !== controlScope || !sessionId || environmentSignalRef.current.aborted || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return { accepted: false };
     const approval = pendingApprovalRef.current;
     if (!(approval?.decisionUncertain || approval?.decisionUnconfirmed) || approval.reviewUnavailable || !approval.approvalId || (expectedApproval && expectedApproval !== approval)) return { accepted: false, stale: true };
@@ -964,11 +1048,11 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
         if (current()) setIsApproving(false);
       }
     }
-  }, [sessionId, runtime, controlScope, approvalStore]);
+  }, [sessionId, runtime, controlScope, approvalStore, strictAuth]);
 
   return {
     messages,
-    contextUsage: contextUsage?.sessionId === sessionId ? contextUsage.usage : null,
+    contextUsage: contextUsage?.scope === controlScope && !environmentSignal.aborted ? contextUsage.usage : null,
     controlState, controlError,
     currentToolCalls,
     pendingApproval,

@@ -56,6 +56,8 @@ struct Lifetime {
     thread: Mutex<Option<JoinHandle<()>>>,
     queued_input_bytes: Arc<AtomicUsize>,
     draining: Arc<AtomicBool>,
+    #[cfg(test)]
+    profile_enqueued: Mutex<Option<mpsc::Sender<()>>>,
 }
 enum Operation {
     Inference(inference::Operation),
@@ -140,6 +142,8 @@ impl ProviderConnectionManager {
                 thread: Mutex::new(Some(thread)),
                 queued_input_bytes: Arc::new(AtomicUsize::new(0)),
                 draining,
+                #[cfg(test)]
+                profile_enqueued: Mutex::new(None),
             }),
         })
     }
@@ -167,6 +171,8 @@ impl ProviderConnectionManager {
         owner: &str,
         operation: Operation,
     ) -> Result<oneshot::Receiver<Result<Reply, ConnectionError>>, ConnectionError> {
+        #[cfg(test)]
+        let profile_lookup = matches!(operation, Operation::ProfilesWithPublishedInventory);
         if !self.lifetime.accepting.load(Ordering::Acquire) {
             return Err(ConnectionError::StorageUnavailable);
         }
@@ -182,7 +188,30 @@ impl ProviderConnectionManager {
                 mpsc::TrySendError::Full(_) => ConnectionError::CapacityReached,
                 mpsc::TrySendError::Disconnected(_) => ConnectionError::StorageUnavailable,
             })?;
+        #[cfg(test)]
+        if profile_lookup {
+            if let Some(sender) = self.lifetime.profile_enqueued.lock().unwrap().take() {
+                let _ = sender.send(());
+            }
+        }
         Ok(received)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_profile_lookup_for_test(&self) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let (enqueued_tx, enqueued) = mpsc::channel();
+        *self.lifetime.profile_enqueued.lock().unwrap() = Some(enqueued_tx);
+        self.lifetime
+            .sender
+            .try_send(Message::Pause {
+                entered: entered_tx,
+                release: release_rx,
+            })
+            .unwrap();
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        (release, enqueued)
     }
     pub async fn shutdown(&self) -> bool {
         self.lifetime.accepting.store(false, Ordering::Release);

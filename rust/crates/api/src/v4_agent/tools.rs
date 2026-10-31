@@ -25,7 +25,7 @@ pub(super) fn definitions() -> Vec<Value> {
         ("apply_patch", file_patch::DESCRIPTION, file_patch::properties(), vec!["path","hunks"]),
     ].into_iter().map(|(name,description,properties,required)| json!({"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
 }
-fn protected(name: &str) -> bool {
+pub(super) fn protected(name: &str) -> bool {
     // Lower first so capital sharp S expands through ß -> SS; long s and
     // Kelvin sign also fold to their ASCII filesystem-equivalent spellings.
     let name: String = name
@@ -372,6 +372,7 @@ struct OwnedCommand {
     child: tokio::process::Child,
     stdout: Option<tokio::process::ChildStdout>,
     stderr: Option<tokio::process::ChildStderr>,
+    cleanup: Option<std::sync::Arc<std::sync::Mutex<super::execution_backend::ContainerCleanup>>>,
 }
 impl OwnedCommand {
     async fn stop(&mut self) -> Result<(), String> {
@@ -380,6 +381,7 @@ impl OwnedCommand {
             child,
             stdout,
             stderr,
+            cleanup,
         } = self;
         if tree.is_none() {
             let _ = child.start_kill();
@@ -403,6 +405,19 @@ impl OwnedCommand {
             let _ = child.start_kill();
             let _ = tokio::time::timeout(std::time::Duration::from_millis(300), child.wait()).await;
         }
+        let cleanup_result = if let Some(cleanup) = cleanup {
+            let cleanup = std::sync::Arc::clone(cleanup);
+            tokio::task::spawn_blocking(move || {
+                cleanup
+                    .lock()
+                    .map_err(|_| "Docker container cleanup is unconfirmed".to_owned())?
+                    .force_remove()
+            })
+            .await
+            .map_err(|_| "Docker container cleanup is unconfirmed".to_owned())?
+        } else {
+            Ok(())
+        };
         stopped.map_err(str::to_owned)?;
         if !matches!(waited, Ok(Ok(_))) {
             return Err("Command process exit could not be confirmed".into());
@@ -410,6 +425,7 @@ impl OwnedCommand {
         if !matches!(drained, Ok(Ok(_))) {
             return Err("Command output pipes did not close after cleanup".into());
         }
+        cleanup_result?;
         Ok(())
     }
 }
@@ -649,6 +665,27 @@ pub(super) async fn run_command_with_backend_controls(
     .await
 }
 
+#[cfg(test)]
+pub(super) async fn run_command_with_resources_for_test(
+    root: &Path,
+    input: &Value,
+    backend: &dyn super::execution_backend::ExecutionBackend,
+    timeout: std::time::Duration,
+    resources: &CommandResources,
+) -> Result<String, String> {
+    run_command_inner(
+        root,
+        input,
+        true,
+        timeout,
+        &super::interaction::Cancellation::default(),
+        resources,
+        None,
+        backend,
+    )
+    .await
+}
+
 async fn run_command_inner(
     root: &Path,
     input: &Value,
@@ -685,7 +722,9 @@ async fn run_command_inner(
         );
     }
     let prepared = backend.prepare(root, command)?;
-    let mut cleanup = prepared.cleanup;
+    let cleanup = prepared
+        .cleanup
+        .map(|value| std::sync::Arc::new(std::sync::Mutex::new(value)));
     let mut process = prepared.command;
     process
         .stdin(std::process::Stdio::null())
@@ -704,6 +743,7 @@ async fn run_command_inner(
         child,
         stdout,
         stderr,
+        cleanup,
     });
     resources
         .confirmed
@@ -748,15 +788,7 @@ async fn run_command_inner(
     };
     // The execution future only borrowed the owned pipes. Cleanup can therefore
     // freeze/discover before any handle closes, and drains without a failed sink.
-    let closed = resources.close_locked(&mut current).await;
-    if let Some(mut cleanup) = cleanup.take() {
-        if result.as_ref().is_ok_and(|(status, _, _)| status.success()) {
-            cleanup.disarm();
-        } else {
-            let _ = tokio::task::spawn_blocking(move || cleanup.force_remove()).await;
-        }
-    }
-    closed?;
+    resources.close_locked(&mut current).await?;
     cancel.check()?;
     let (status, (out, out_truncated), (err, err_truncated)) = result?;
     Ok(json!({"exitCode":status.code(),"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err),"truncated":out_truncated || err_truncated}).to_string())

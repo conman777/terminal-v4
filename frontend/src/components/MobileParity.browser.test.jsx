@@ -106,6 +106,48 @@ const tall = async locator => (await locator.boundingBox()).height >= 43.5;
 const mobileContext = width => browser.newContext({ viewport: { width, height: 800 }, hasTouch: true, isMobile: true });
 
 describe.each([320, 390])('mobile parity in a real browser at %ipx', width => {
+  it('keeps a new draft and the unreadable saved data when browser storage is damaged', async () => {
+    const context = await mobileContext(width);
+    try {
+      const page = await context.newPage();
+      await page.addInitScript(() => {
+        const key = `identity:${encodeURIComponent(location.origin)}:fixture-user:tv4StashedDrafts:v2`;
+        localStorage.setItem(key, '{damaged saved data');
+      });
+      await page.goto(`${origin}/#shell`);
+      const composer = page.locator('textarea').first();
+      await composer.fill('Keep this draft');
+      await page.locator('summary[aria-label="More composer actions"]').tap();
+      await page.getByRole('button', { name: 'Stash', exact: true }).tap();
+      await page.getByRole('button', { name: 'Stash this draft', exact: true }).tap();
+      await page.getByRole('alert').getByText(/saved drafts could not be read/i).waitFor();
+      expect(await composer.inputValue()).toBe('Keep this draft');
+      expect(await page.evaluate(() => localStorage.getItem(`identity:${encodeURIComponent(location.origin)}:fixture-user:tv4StashedDrafts:v2`))).toBe('{damaged saved data');
+      expect(await noOverflow(page)).toBe(true);
+    } finally { await context.close(); }
+  }, 90000);
+
+  it('keeps an unsaved draft and explains the stash limit on a phone', async () => {
+    const context = await mobileContext(width);
+    try {
+      const page = await context.newPage();
+      await page.addInitScript(() => {
+        const key = `identity:${encodeURIComponent(location.origin)}:fixture-user:tv4StashedDrafts:v2`;
+        localStorage.setItem(key, JSON.stringify(Array.from({ length: 20 }, (_, index) => ({ id: `saved-${index}`, text: `Saved draft ${index}`, at: index + 1 }))));
+      });
+      await page.goto(`${origin}/#shell`);
+      const composer = page.locator('textarea').first();
+      await composer.fill('This draft must stay here');
+      await page.locator('summary[aria-label="More composer actions"]').tap();
+      await page.getByRole('button', { name: 'Stash (20)', exact: true }).tap();
+      await page.getByRole('button', { name: 'Stash this draft', exact: true }).tap();
+      await page.getByRole('alert').getByText(/stash is full.*restore/i).waitFor();
+      expect(await composer.inputValue()).toBe('This draft must stay here');
+      expect(await page.getByRole('button', { name: /^Restore draft: Saved draft/ }).count()).toBe(20);
+      expect(await noOverflow(page)).toBe(true);
+    } finally { await context.close(); }
+  }, 90000);
+
   it('stashes and restores a draft from the composer actions with 44px targets', async () => {
     const context = await mobileContext(width);
     try {
@@ -183,7 +225,8 @@ describe.each([320, 390])('mobile parity in a real browser at %ipx', width => {
       const search = page.getByRole('searchbox', { name: 'Search threads' });
       await search.fill('Alpha');
       await page.keyboard.press('Escape');
-      await page.getByRole('dialog').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+      await page.waitForFunction(() => document.querySelector('.mobile-drawer-modern')?.getAttribute('aria-hidden') === 'true', null, { timeout: 5000 });
+      expect(await page.locator('.md-thread-search input').inputValue()).toBe('');
       await page.getByRole('button', { name: 'Open menu' }).click({ force: true });
       await page.waitForFunction(() => document.querySelector('.mobile-drawer-modern.open'));
       expect(await search.inputValue()).toBe('');

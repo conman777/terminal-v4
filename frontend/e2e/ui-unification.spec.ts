@@ -349,12 +349,14 @@ for (const profile of [
         await fixture.login();
         const composer = page.getByRole('textbox', { name: 'Command composer', exact: true });
         await composer.fill(fixtureDraft);
+        if (profile.viewport.width <= 768) await page.getByRole('button', { name: 'Menu', exact: true }).click();
         await page.getByRole('button', { name: 'Switch server, This server', exact: true }).click();
         const environments = page.getByRole('dialog', { name: 'Switch server', exact: true });
         await expect(environments.getByText('No other servers connected.', { exact: true })).toBeVisible();
         await expectFits(page, environments);
         await fixture.screenshot('environments-and-remote-tools');
         await environments.getByRole('button', { name: 'Close server chooser', exact: true }).click();
+        if (profile.viewport.width <= 768) await page.getByRole('dialog', { name: 'Mobile menu', exact: true }).getByRole('button', { name: 'Close menu', exact: true }).click();
         await expect(composer).toHaveValue(fixtureDraft);
 
         await openUtility(page, 'Settings');

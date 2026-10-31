@@ -299,6 +299,8 @@ async fn saved_profile_structured_turn_runs_own_tool_cycle_and_preserves_canonic
             attachments: vec![],
             recovery_events: vec![],
             local_authority: None,
+            #[cfg(unix)]
+            paired_authority: None,
         },
         events.clone(),
         Cancellation::default(),

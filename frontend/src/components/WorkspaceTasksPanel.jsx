@@ -5,7 +5,7 @@ import './WorkspaceTasksPanel.css';
 const nativeAgents = [{ id: 'claude', label: 'Claude Code' }, { id: 'codex', label: 'Codex' }];
 const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 
-const advancedUnavailable = 'Advanced scheduling is unavailable on this server. Update the server to create one-time or calendar schedules. Interval schedules are still available.';
+const advancedUnavailable = 'Advanced scheduling is unavailable on this server. Update the server to create one-time, calendar or cron schedules. Interval schedules are still available.';
 
 const workerUnavailableMessage = 'Scheduled tasks are unavailable: this data directory was written by a newer version. See the upgrade guide.';
 
@@ -33,8 +33,9 @@ export function describeSchedule(schedule, showZone = false) {
   if (schedule.runOnceAt != null) return `Once at ${new Date(schedule.runOnceAt).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
   if (!schedule.at) return `Every ${Math.round(schedule.intervalSeconds / 60)} minutes`;
   const { hour, minute, weekdays } = schedule.at;
-  const days = weekdays.join(',') === '1,2,3,4,5' ? 'Weekdays' : weekdays.length === 7 ? 'Every day' : weekdays.map(day => WEEKDAYS[day]).join(', ');
   const zone = schedule.at.timeZone || `UTC${schedule.at.utcOffsetMinutes >= 0 ? '+' : '-'}${Math.floor(Math.abs(schedule.at.utcOffsetMinutes) / 60)}:${String(Math.abs(schedule.at.utcOffsetMinutes) % 60).padStart(2, '0')} (fixed offset)`;
+  if (schedule.at.cron) return `Cron ${schedule.at.cron}${showZone ? ` · ${zone}` : ''}`;
+  const days = weekdays.join(',') === '1,2,3,4,5' ? 'Weekdays' : weekdays.length === 7 ? 'Every day' : weekdays.map(day => WEEKDAYS[day]).join(', ');
   return `${days} at ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}${showZone ? ` ${zone}` : ''}`;
 }
 
@@ -42,6 +43,7 @@ export function describeLastRun(schedule, tasks) {
   if (!schedule.lastRunAt) return { text: 'Never run', error: '' };
   const when = new Date(schedule.lastRunAt).toLocaleString();
   const task = schedule.lastTaskId ? tasks.find(item => item.id === schedule.lastTaskId) : null;
+  if (!task && schedule.lastStatus) return { text: `Last run ${when} · ${schedule.lastStatus}`, error: schedule.lastStatus === 'completed' ? '' : schedule.lastError || '' };
   if (!task) return { text: `Last run ${when} · result unavailable (the task was removed or is not listed)`, error: '' };
   return { text: `Last run ${when} · ${task.status}`, error: task.status === 'completed' ? '' : task.error || '' };
 }
@@ -62,6 +64,7 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
   const [scheduleName, setScheduleName] = useState('');
   const [intervalSeconds, setIntervalSeconds] = useState('3600');
   const [timing, setTiming] = useState('interval');
+  const [cronExpression, setCronExpression] = useState('0 9 * * *');
   const [runTime, setRunTime] = useState('09:00');
   const [timeZone, setTimeZone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   const [onceAt, setOnceAt] = useState('');
@@ -184,9 +187,15 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
         <details className="workspace-schedule-editor"><summary>Make a schedule</summary>
           <label>Schedule name<input value={scheduleName} maxLength={80} onChange={(event) => setScheduleName(event.target.value)} /></label>
           {advancedTiming === false && <p role="status">{advancedUnavailable} <button type="button" onClick={() => setCapabilityRefresh(value => value + 1)}>Recheck scheduling support</button></p>}
-          <label>Runs<select value={timing} onChange={(event) => setTiming(event.target.value)}><option value="interval">On a repeating interval</option><option value="calendar">At a time on chosen days</option><option value="once">Once</option></select></label>
+          <label>Runs<select value={timing} onChange={(event) => setTiming(event.target.value)}><option value="interval">On a repeating interval</option><option value="calendar">At a time on chosen days</option><option value="cron">Cron expression</option><option value="once">Once</option></select></label>
           {timing === 'interval' ? <label>Repeat every<select value={intervalSeconds} onChange={(event) => setIntervalSeconds(event.target.value)}><option value="300">5 minutes</option><option value="3600">Hour</option><option value="86400">Day</option><option value="604800">Week</option></select></label>
             : timing === 'once' ? <label>Date and time (UTC)<input type="datetime-local" value={onceAt} onChange={(event) => setOnceAt(event.target.value)} /></label>
+            : timing === 'cron' ? <>
+              <label>Cron expression<input value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} placeholder="0 9 * * MON-FRI" /></label>
+              <p>Five fields: minute, hour, day of month, month and day of week.</p>
+              <label>Time zone (IANA)<input value={timeZone} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" /></label>
+              <p>Times in a daylight-saving gap run when the clock advances; repeated times run once at the earlier occurrence.</p>
+            </>
             : <>
               <label>Time<input type="time" value={runTime} onChange={(event) => setRunTime(event.target.value)} /></label>
               <label>Time zone (IANA)<input value={timeZone} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" /></label>
@@ -198,12 +207,13 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
             </>}
           <label className="workspace-schedule-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />Enable this schedule</label>
           <label className="workspace-schedule-checkbox"><input type="checkbox" checked={deliverTelegram} onChange={(event) => setDeliverTelegram(event.target.checked)} />Send each result to my paired Telegram chat</label>
-          <button type="button" disabled={!canQueue || !scheduleName.trim() || (timing !== 'interval' && advancedTiming !== true) || (timing === 'calendar' && (!weekdays.length || !runTime || !validTimeZone(timeZone))) || (timing === 'once' && !validOnce)} onClick={() => mutate('/api/workspace/schedules', { method: 'POST', body: { ...input, name: scheduleName.trim(), enabled,
+          <button type="button" disabled={!canQueue || !scheduleName.trim() || (timing !== 'interval' && advancedTiming !== true) || (timing === 'calendar' && (!weekdays.length || !runTime || !validTimeZone(timeZone))) || (timing === 'cron' && (cronExpression.trim().split(/\s+/).length !== 5 || !validTimeZone(timeZone))) || (timing === 'once' && !validOnce)} onClick={() => mutate('/api/workspace/schedules', { method: 'POST', body: { ...input, name: scheduleName.trim(), enabled,
             intervalSeconds: timing === 'interval' ? Number(intervalSeconds) : 0,
             ...(deliverTelegram ? { deliverTo: 'telegram' } : {}),
             ...(timing === 'calendar' ? { at: calendarTime(runTime, weekdays, timeZone) } : {}),
+            ...(timing === 'cron' ? { at: { cron: cronExpression.trim(), timeZone } } : {}),
             ...(timing === 'once' ? { runOnceAt: onceTimestamp } : {}) } }, false, timing !== 'interval')}>Create schedule</button>
-          <p>Enabled schedules run while the app server is running. Missed intervals are combined into one run.</p>
+          <p>Enabled schedules run while the app server is running. Overdue runs beyond the grace window are recorded as missed.</p>
         </details>
       </form>
       <div className="workspace-task-list">

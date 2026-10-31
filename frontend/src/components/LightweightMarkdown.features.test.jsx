@@ -125,16 +125,37 @@ describe('image lightbox', () => {
     expect(original).toHaveAttribute('rel', 'noopener noreferrer');
     const close = within(dialog).getByRole('button', { name: 'Close' });
     expect(close).toHaveFocus();
-    await userEvent.tab();
+    await userEvent.tab({ shift: true });
     expect(original).toHaveFocus();
     await userEvent.tab({ shift: true });
-    expect(close).toHaveFocus();
+    expect(within(dialog).getByRole('button', { name: 'Zoom in' })).toHaveFocus();
     await userEvent.tab();
     await userEvent.tab();
     expect(dialog).toContainElement(document.activeElement);
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(opener).toHaveFocus();
+  });
+
+  it('navigates only safe images in this message, resets zoom, and closes on content change', async () => {
+    const first = '![First](https://example.test/first.png)\n\n![Bad](data:image/png;base64,AAAA)\n\n![Second](/second.png)';
+    const view = render(<><LightweightMarkdown content={first} /><LightweightMarkdown content="![Other](/other.png)" /></>);
+    const opener = screen.getByRole('button', { name: 'View larger: First' });
+    await userEvent.click(opener);
+    let dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('1 of 2')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Zoom in' }));
+    expect(within(dialog).getByText('150%')).toBeInTheDocument();
+    await userEvent.keyboard('{ArrowRight}');
+    dialog = screen.getByRole('dialog', { name: 'Image: Second' });
+    expect(within(dialog).getByText('100%')).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: 'Open original' })).toHaveAttribute('href', '/second.png');
+    expect(within(dialog).getByRole('button', { name: 'Next image' })).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.keyboard('{ArrowLeft}{Escape}');
+    expect(opener).toHaveFocus();
+    await userEvent.click(opener);
+    view.rerender(<><LightweightMarkdown content={first + '\n\nChanged'} /><LightweightMarkdown content="![Other](/other.png)" /></>);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('closes from the backdrop and never opens unsafe image sources', async () => {

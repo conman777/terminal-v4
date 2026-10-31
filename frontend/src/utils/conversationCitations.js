@@ -55,7 +55,8 @@ export function parseCitationTarget(raw) {
 export function collectCitationDefinitions(blocks, into = new Map()) {
   for (const block of blocks) {
     if (block.type === 'definition') into.set(block.label, block);
-    else if (block.type === 'list') block.items.forEach(item => collectCitationDefinitions(item, into));
+    else if (block.type === 'list') block.items.forEach(item => collectCitationDefinitions(Array.isArray(item) ? item : item.blocks, into));
+    else if (block.type === 'details' || block.type === 'alert') collectCitationDefinitions(block.blocks, into);
   }
   return into;
 }

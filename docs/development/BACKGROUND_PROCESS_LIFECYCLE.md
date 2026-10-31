@@ -1,5 +1,60 @@
 # Background process lifecycle prototype
 
+The agent-facing `background_list` operation returns action IDs and state
+metadata for the active owner, session, workspace and session incarnation. It
+combines retained in-memory entries with indexed durable receipts, including
+unknown outcomes after restart. Each stored ID is checked against the complete
+scope before it is returned. The response labels retention as
+`bounded_durable_and_memory`, marks history incomplete, and warns that
+memory-only entries may disappear. New scoped claims store their action ID in
+the receipt transaction. Older receipts can recover an ID from retained launch
+or pending-completion metadata; other older receipts remain available through
+`background_status` only when the ID is already known.
+Receipt pruning and session retirement remove indexed entries. List never returns
+commands or output and does not establish process cleanup.
+
+`background_wait_output` waits for output activity or process exit and
+returns a process-local output revision plus status metadata. It does not
+release output: `background_read_output` requests private review of the exact
+bounded snapshot before sharing it. Revisions cannot be used after eviction or restart;
+cancelling a wait does not stop the command.
+
+`background_follow_output` combines a bounded wait with private review of the
+most recent output window when the revision has advanced. The reviewer sees
+that the window contains recent output and whether earlier bytes were omitted.
+Only the immutable reviewed snapshot is released. If no new revision arrives,
+the tool returns status metadata without a review prompt. Follow windows can
+overlap: the returned revision was observed before the snapshot, so activity
+that arrives during review can trigger the next request. Output that exceeds
+the retained window between reviews can still be lost. Revisions and output are
+available only in the same live manager; eviction or restart makes them unavailable.
+
+With background commands enabled, `background_start` can request interactive
+input explicitly; the start approval identifies that capability. Each
+`background_write` asks for a separate approval showing the original command
+and exact text with control and non-ASCII characters explicitly escaped. The actor rechecks the owner, credential generation,
+session incarnation, workspace and cancellation before a bounded nonblocking
+write to a separate pipe. A successful result confirms only that bytes entered
+the pipe, not that the command consumed them. Partial or unconfirmed outcomes
+must not be retried automatically. Input is limited to 512 bytes per write.
+`background_write_bytes` accepts canonical padded Base64 and requires its own
+approval showing the decoded bytes in hexadecimal. `background_close_input` requires its own
+approval and closes the local input handle so the command can receive
+end-of-file. Success does not establish that the command consumed it; a lost
+or uncertain result must not be retried automatically.
+
+Input receipts record scoped operation IDs and outcomes, never the input bytes;
+duplicate IDs are rejected and a claim left uncertain at restart cannot be
+resolved by a new manager. A Unix subprocess test covers crashes after a write
+or input closure has reached the command but before the receipt is finalized,
+including the subsequent startup recovery. The approval and conversation history may contain
+the submitted text or Base64-encoded bytes. Receipts remain until session retirement, with limits of
+1,024 per session, 4,096 per owner and 32,768 overall. The first input claim
+upgrades the ledger guard from v2 to v3; an older server refuses the v3 guard.
+A v3 guard with a missing receipt table fails closed. The pipe and command text
+are retained only while the process is live, so input cannot resume after a
+server restart. Real-provider and deployed behavior have not been verified.
+
 The Unix runtime provisions or reopens and retains a background-process
 manager. The agent-facing command tools are off unless an operator opts in with
 `TERMINAL_V4_BACKGROUND_COMMANDS=1` (see "Enabling"). An unavailable or remotely owned existing manager makes session deletion fail
@@ -16,18 +71,49 @@ This lifeline is best effort, not containment or proof of cleanup. A process
 can leave the original group, interfere with its monitor, or take actions before
 the monitor runs. A host crash leaves the durable claim `Unknown`; reopening
 does not signal a saved PID, replay an action, or allow new actions. Neither the
-command nor captured output is persisted, and arbitrary output is withheld.
+command nor captured output is persisted by the process manager; approved output
+is shared with the provider and stored in the conversation history.
 The monitor does not make an unknown receipt safe to clear.
 An explicit authorized review can still attest an unknown receipt after a
 shutdown attempt reports unconfirmed cleanup; the stopped manager remains
 closed to new actions, and a later shutdown attempt can verify the review.
 
-The tool layer includes a separate reviewed-output action. Status and
-wait withhold process bytes. The output action shows the owning user the exact
-bounded stdout/stderr snapshot and returns only that approved snapshot to the
-agent; denial, cancellation, another owner's scope, or session retirement does
-not release it. Output is held in memory only and cannot be recovered after a
-restart. The action is offered only when the tools are enabled.
+The tool layer withholds process bytes from status and wait. A private review
+shows the exact snapshot without persisting denied output and binds approval to
+that snapshot and its session scope. Approved bytes enter the provider request
+and conversation history. Output held by the process manager is in memory only
+and cannot be recovered after restart.
+
+The approval gate has an in-memory private-review primitive: it publishes only
+an action ID and a fixed explanation, and requires a token from the current
+preview to approve that snapshot. Ordinary approvals cannot release it. Local
+owner and authorized paired-connection preview and exact-token decision endpoints are present, and
+the shared desktop/mobile conversation view can review, share or reject a
+pending private output request initiated by the agent tool.
+The client holds the preview in memory and discards it when the session,
+environment, identity or mobile workspace visibility changes. A lost decision
+response is presented as uncertain; a user can check the same exact decision.
+The gate does not expose a preview until the approval event is recorded. Its
+private preview and decision methods require a caller-supplied authority check
+inside the gate, and the decision requires an explicit credential expiry. The
+caller must still hold the appropriate admission fences and use an authorized
+event sink; the callback alone cannot prevent a concurrent logout or deletion.
+The background turn can prepare an immutable snapshot, obtain a private gate
+decision, and revalidate its original actor, session incarnation, workspace
+identity, credential generation, expiry and cancellation before releasing that
+same snapshot. Output produced after preparation is excluded. The preview
+requires a live local owner credential or an authorized paired grant with agent
+execution capability. The originating turn's authority is rechecked, together
+with the action, actor and workspace identity under the output admission fence.
+The private decision token is likewise bound to that actor and workspace.
+Preview responses use `Cache-Control: private, no-store`.
+An internal decision path also checks the precise action and token while holding
+the owner and session admission guards. It validates that the owner's lock comes
+from the correct data root and rechecks the originating credential before the
+decision is journaled. This path is separate from ordinary HTTP and WebSocket
+approval handlers, which cannot approve private output.
+Synthetic paired HTTP and scripted-provider tests exercise review and denial;
+real-provider and physical-device behavior remain unverified.
 
 A test-only provisioning experiment stores an `initializing` marker in the
 application SQLite database before creating the ledger, and marks it `ready`
@@ -80,15 +166,11 @@ process manager, so start, status, wait, cancel and output review all use the
 actor's approval, owner-generation, credential-expiry, session-incarnation and
 checkpoint fences. The older direct-manager wrapper is kept only for manager-level
 tests and is not reachable from the agent loop. A test drives a scripted provider
-through a real turn (launch, status, wait, cancel, reviewed output) with approvals
-decided through the structured approval route. Status, wait and cancel use
+through a real turn (launch, status, wait, cancel, approved and refused output
+release), including paired HTTP review. Status, wait and cancel use
 incarnation-scoped action keys, verify the live session and checkpoint, and
 recheck the owner generation, credential expiry and cancellation at the final
-read or signal. Wait checks the actor again after completion. Output review shows
-the user the exact bounded stdout/stderr snapshot, then re-fences immediately
-before returning only the approved bytes; logout, a changed session incarnation,
-expiry or denial release nothing. Output exists only in memory and is unavailable
-after a restart. Existing unscoped receipt keys retain their original format; a
+read or signal. Wait checks the actor again after completion. Existing unscoped receipt keys retain their original format; a
 new scoped action refuses to reuse an existing legacy key. The reverse is not
 guaranteed: an older or unscoped caller cannot detect a scoped receipt, so it may
 replay the same action after a downgrade. Retirement remains scoped to owner and
@@ -139,7 +221,7 @@ logged out, the background session is closed or retired, the session is being
 deleted or retired, the stored checkpoint cannot be read, or the write fails;
 otherwise appends one `system` message to the owning session and acknowledges
 it. The message is metadata only (action ID, outcome phrase, a pointer to the
-reviewed-output action) and never contains process output. Its message ID is
+output-release limitation) and never contains process output. Its message ID is
 derived from the action ID, so a crash between the append and the
 acknowledgment re-appends the identical event, which the session log treats as
 a no-op: the effect is exactly once, and concurrent consumers acknowledge a
@@ -156,9 +238,10 @@ true while any command in the session is running or has an unreviewed outcome
 settlement and the inventory lifecycle projection in structured.rs consult it
 next to `parent_has_outstanding` and refuse settlement on true or on error.
 
-Output and retention policy. Each of stdout and stderr keeps at most 64 KiB in
-memory per command (`OUTPUT_LIMIT`; the rest is dropped and flagged
-truncated); nothing is written to disk and status and wait never return it.
+Output and retention policy. Each of stdout and stderr keeps at most 64 KiB of
+the beginning and 64 KiB of the most recent bytes in memory per command
+(`OUTPUT_LIMIT` per window; omitted bytes are flagged as truncated); nothing is
+written to disk and status and wait never return it.
 Per session, only the 16 newest finished commands keep their output in memory
 (`MAX_RETAINED_FINISHED`); older entries, and their finished worker handles,
 are evicted when the next command is admitted, and status for them is answered
@@ -167,7 +250,7 @@ entries whose cleanup is unconfirmed or unknown are never evicted. Durable
 receipts and pending markers keep the caps described above (32 per session, 64
 per owner, 128 in total, oldest finished pruned first). The resulting worst case is
 therefore 8 live plus 16 retained finished entries per session, each with at
-most 128 KiB of output.
+most 256 KiB of retained output.
 
 Launch admission no longer holds a control-database transaction (or the gate
 connection) while the spawn callback runs. `OwnerGate::admit_launch` checks the

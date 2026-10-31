@@ -67,7 +67,7 @@ fn ledger_files(root: &Path) -> Result<(PathBuf, Vec<File>), String> {
     guard
         .read_exact_at(&mut contents, 0)
         .map_err(|_| "Background ledger guard unavailable")?;
-    if contents != READY {
+    if contents != READY && contents != b"v4-background-ledger-v3-ready\n" {
         return Err("Background ledger guard is invalid".into());
     }
     Ok((ledger.join("receipts.sqlite3"), files))
@@ -155,7 +155,7 @@ pub(crate) fn release_in_transaction(
     if capture_binding(data_root, None)? != binding {
         return Err("Background ledger identity changed".into());
     }
-    let (path, _files) = ledger_files(data_root)?;
+    let (path, files) = ledger_files(data_root)?;
     reject_sidecars(&path)?;
     let ledger = Connection::open_with_flags(
         &path,
@@ -170,6 +170,14 @@ pub(crate) fn release_in_transaction(
         .map_err(|_| "Background ledger unavailable")?;
     if !journal.eq_ignore_ascii_case("delete") {
         return Err("Background ledger recovery is unconfirmed".into());
+    }
+    let mut guard = vec![0; b"v4-background-ledger-v3-ready\n".len()];
+    files[2]
+        .read_exact_at(&mut guard, 0)
+        .map_err(|_| "Background guard unavailable")?;
+    if guard == b"v4-background-ledger-v3-ready\n" {
+        ledger.prepare("SELECT key,owner_key,session_key,action_key,state FROM background_input_receipts LIMIT 0")
+            .map_err(|_| "Background input receipt ledger is missing or invalid")?;
     }
     let unknown: bool = ledger.query_row(
         "SELECT EXISTS(SELECT 1 FROM receipts WHERE state NOT IN ('exited','cancelled','timed_out','failed_to_start') AND NOT (state='unknown' AND EXISTS (SELECT 1 FROM owner_reviewed_receipts reviewed JOIN owner_review_operations operation ON operation.owner_key=reviewed.owner_key AND operation.request=reviewed.request AND operation.operation=reviewed.operation WHERE reviewed.key=receipts.key AND reviewed.owner_key=receipts.owner_key)) AND owner_key=?1)",
@@ -326,6 +334,16 @@ mod tests {
         std::fs::remove_file(journal).unwrap();
 
         let guard = root.join(".background-processes.background-guard");
+        std::fs::write(&guard, b"v4-background-ledger-v3-ready\n").unwrap();
+        let tx = db.transaction().unwrap();
+        assert!(release_in_transaction(&tx, &root, "owner", "request").is_err());
+        tx.rollback().unwrap();
+        let ledger = Connection::open(&ledger_path).unwrap();
+        ledger.execute_batch("CREATE TABLE background_input_receipts(key BLOB PRIMARY KEY, owner_key BLOB NOT NULL, session_key BLOB NOT NULL, action_key BLOB NOT NULL, state TEXT NOT NULL);").unwrap();
+        drop(ledger);
+        let tx = db.transaction().unwrap();
+        assert!(release_in_transaction(&tx, &root, "owner", "request").is_ok());
+        tx.rollback().unwrap();
         std::fs::write(&guard, b"corrupt").unwrap();
         let tx = db.transaction().unwrap();
         assert!(release_in_transaction(&tx, &root, "owner", "request").is_err());
@@ -358,6 +376,7 @@ mod tests {
         let mut db = Connection::open(root.join("terminal.db")).unwrap();
         let manager = bootstrap::open_or_provision(&root, &mut db).unwrap();
         let request = BackgroundRequest {
+            interactive: false,
             scope: BackgroundScope {
                 owner: "owner".into(),
                 session: "session".into(),

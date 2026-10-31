@@ -225,15 +225,31 @@ pub(crate) struct DispatchReservation {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct VerifiedQueueAuthority {
-    owner: String,
-    generation: i64,
-    expires_at_ms: i64,
+pub(crate) enum VerifiedQueueAuthority {
+    Local {
+        owner: String,
+        generation: i64,
+        expires_at_ms: i64,
+        auth_protocol: i64,
+        auth_session_id: Option<String>,
+    },
+    #[cfg(unix)]
+    Paired(crate::paired_environments::PairedGrantAuthority),
 }
 
 impl VerifiedQueueAuthority {
-    pub(crate) fn into_parts(self) -> (String, i64, i64) {
-        (self.owner, self.generation, self.expires_at_ms)
+    #[cfg(test)]
+    pub(crate) fn into_local_parts(self) -> Option<(String, i64, i64)> {
+        match self {
+            Self::Local {
+                owner,
+                generation,
+                expires_at_ms,
+                ..
+            } => Some((owner, generation, expires_at_ms)),
+            #[cfg(unix)]
+            Self::Paired(_) => None,
+        }
     }
 }
 
@@ -252,12 +268,65 @@ struct AuthorityClaims {
     text_digest: String,
     generation: i64,
     expires_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_protocol: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth_session_id: Option<String>,
+    #[cfg(unix)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paired_grant: Option<crate::paired_environments::PairedGrantAuthority>,
 }
 
 struct AuthorityInput {
     session_incarnation: Uuid,
     generation: i64,
     expires_at_ms: i64,
+    auth_protocol: Option<i64>,
+    auth_session_id: Option<Uuid>,
+    #[cfg(unix)]
+    paired_grant: Option<crate::paired_environments::PairedGrantAuthority>,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PairedDelegationAttestation {
+    installation: Uuid,
+    ciphertext: String,
+}
+
+#[cfg(unix)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PairedDelegationClaims {
+    version: u8,
+    purpose: String,
+    owner: String,
+    data_root: String,
+    binding_digest: String,
+    grant: crate::paired_environments::PairedGrantAuthority,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct LocalDelegationAttestation {
+    installation: Uuid,
+    ciphertext: String,
+}
+
+#[cfg(unix)]
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalDelegationClaims {
+    version: u8,
+    purpose: String,
+    owner: String,
+    data_root: String,
+    binding_digest: String,
+    generation: i64,
+    expires_at_ms: i64,
+    auth_session_id: String,
 }
 #[derive(Clone, Debug)]
 pub(crate) enum DispatchOutcome {
@@ -493,6 +562,33 @@ impl QueueStore {
         authority: &crate::auth::LocalAuthority,
         check: &dyn Fn() -> Result<(), String>,
     ) -> Result<MutationReceipt, QueueError> {
+        self.mutate_authorized_inner(scope, incarnation, mutation, authority, check, false)
+    }
+
+    #[cfg(all(unix, not(any(test, feature = "queued-authority-preview"))))]
+    pub(crate) fn mutate_protected_edit_checked(
+        &self,
+        scope: &QueueScope,
+        incarnation: Uuid,
+        mutation: Mutation,
+        authority: &crate::auth::LocalAuthority,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<MutationReceipt, QueueError> {
+        if !matches!(&mutation.operation, QueueOperation::Edit { .. }) {
+            return Err(invalid("Only queued message edits can renew protection"));
+        }
+        self.mutate_authorized_inner(scope, incarnation, mutation, authority, check, true)
+    }
+
+    fn mutate_authorized_inner(
+        &self,
+        scope: &QueueScope,
+        incarnation: Uuid,
+        mutation: Mutation,
+        authority: &crate::auth::LocalAuthority,
+        check: &dyn Fn() -> Result<(), String>,
+        protected_only: bool,
+    ) -> Result<MutationReceipt, QueueError> {
         valid_uuid(incarnation)?;
         valid_uuid(mutation.operation_id)?;
         if !matches!(
@@ -509,23 +605,35 @@ impl QueueStore {
             authority.valid_for(&scope.owner, now).ok_or_else(|| {
                 invalid("Local queue authority is expired or belongs to another owner")
             })?;
+        let (auth_protocol, auth_session_id) = local_auth_binding(authority)?;
         let input = AuthorityInput {
             session_incarnation: incarnation,
             generation,
             expires_at_ms,
+            auth_protocol,
+            auth_session_id,
+            #[cfg(unix)]
+            paired_grant: None,
         };
         let payload_hash = mutation_digest(&mutation)?;
         let _guard = self.storage_guard()?;
         let _root_guard = self.try_lock_storage_root()?;
         check().map_err(|error| conflict(&error))?;
         let (path, envelope) = self.load_locked_checked(scope, Some(check))?;
+        let sign = !protected_only
+            || match &mutation.operation {
+                QueueOperation::Edit { item_id, .. } => {
+                    envelope.authority_proofs.contains_key(item_id)
+                }
+                _ => false,
+            };
         self.mutate_locked(
             scope,
             mutation,
             payload_hash,
             path,
             envelope,
-            Some(input),
+            sign.then_some(input),
             Some(check),
             false,
         )
@@ -704,7 +812,7 @@ impl QueueStore {
                     return Err(conflict("Queue is held; review it before resuming"));
                 }
                 if !queue.order.is_empty()
-                    && (!cfg!(all(unix, feature = "queued-authority-preview"))
+                    && (!cfg!(unix)
                         || queue
                             .order
                             .iter()
@@ -739,7 +847,7 @@ impl QueueStore {
         Ok(receipt)
     }
 
-    #[cfg(all(unix, feature = "queued-authority-preview"))]
+    #[cfg(unix)]
     pub(crate) fn initialize_authority_checked(
         &self,
         check: &dyn Fn() -> Result<(), String>,
@@ -748,6 +856,181 @@ impl QueueStore {
         let _root_guard = self.try_lock_storage_root()?;
         check().map_err(|error| conflict(&error))?;
         authority_installation::load_for_write(&self.data, Some(check))?;
+        Ok(())
+    }
+
+    /// The caller must hold live paired-grant admission through this operation.
+    #[cfg(unix)]
+    pub(crate) fn protect_paired_delegation_binding(
+        &self,
+        owner: &str,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        binding: &[u8],
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<PairedDelegationAttestation, QueueError> {
+        if binding.is_empty() || binding.len() > 2_000_000 || !grant.valid_for(owner, now_ms()) {
+            return Err(invalid("Invalid paired delegation binding"));
+        }
+        let _guard = self.storage_guard()?;
+        let _root_guard = self.try_lock_storage_root()?;
+        check().map_err(|error| conflict(&error))?;
+        let (cipher, installation) =
+            authority_installation::load_for_write(&self.data, Some(check))?;
+        let claims = PairedDelegationClaims {
+            version: 1,
+            purpose: "paired-delegation-binding".into(),
+            owner: owner.into(),
+            data_root: canonical_authority_root(&self.data)?,
+            binding_digest: digest(binding),
+            grant: grant.clone(),
+        };
+        let encoded = serde_json::to_string(&claims)
+            .map_err(|_| unavailable("Cannot encode delegation authority"))?;
+        let ciphertext = cipher
+            .encrypt(&encoded)
+            .map_err(|_| unavailable("Cannot protect delegation authority"))?;
+        check().map_err(|error| conflict(&error))?;
+        Ok(PairedDelegationAttestation {
+            installation,
+            ciphertext,
+        })
+    }
+
+    /// Cryptographic verification does not replace a live grant admission check.
+    #[cfg(unix)]
+    pub(crate) fn verify_paired_delegation_binding(
+        &self,
+        owner: &str,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        binding: &[u8],
+        proof: &PairedDelegationAttestation,
+    ) -> Result<(), QueueError> {
+        if binding.is_empty()
+            || binding.len() > 2_000_000
+            || proof.installation.is_nil()
+            || !proof.ciphertext.starts_with("queue:v1:enc:v2:")
+            || proof.ciphertext.len() > 8192
+            || !grant.valid_for(owner, now_ms())
+        {
+            return Err(invalid("Invalid paired delegation authority"));
+        }
+        let _guard = self.storage_guard()?;
+        let _root_guard = self.try_lock_storage_root()?;
+        let cipher = authority_installation::load_for_read(&self.data, Some(proof.installation))?;
+        let plaintext = cipher
+            .decrypt(&proof.ciphertext)
+            .map_err(|_| corrupt("Delegation authority cannot be verified"))?;
+        let claims: PairedDelegationClaims = serde_json::from_str(&plaintext)
+            .map_err(|_| corrupt("Invalid delegation authority"))?;
+        if claims.version != 1
+            || claims.purpose != "paired-delegation-binding"
+            || claims.owner != owner
+            || claims.data_root != canonical_authority_root(&self.data)?
+            || claims.binding_digest != digest(binding)
+            || claims.grant != *grant
+        {
+            return Err(corrupt(
+                "Delegation authority does not match its reviewed binding",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Caller holds live local admission while the reviewed binding is protected.
+    #[cfg(unix)]
+    pub(crate) fn protect_local_delegation_binding(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        binding: &[u8],
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<LocalDelegationAttestation, QueueError> {
+        let now = now_ms();
+        let (generation, expires_at_ms) = authority
+            .valid_for(owner, now)
+            .filter(|_| now > 0 && authority.auth_protocol() == 1)
+            .ok_or_else(|| invalid("Invalid local delegation authority"))?;
+        let session = authority
+            .session_id()
+            .filter(|value| valid_auth_session(value).is_some())
+            .ok_or_else(|| invalid("Invalid local delegation authority"))?;
+        if binding.is_empty() || binding.len() > 2_000_000 {
+            return Err(invalid("Invalid local delegation binding"));
+        }
+        let _guard = self.storage_guard()?;
+        let _root_guard = self.try_lock_storage_root()?;
+        check().map_err(|error| conflict(&error))?;
+        let (cipher, installation) =
+            authority_installation::load_for_write(&self.data, Some(check))?;
+        let claims = LocalDelegationClaims {
+            version: 1,
+            purpose: "local-delegation-binding".into(),
+            owner: owner.into(),
+            data_root: canonical_authority_root(&self.data)?,
+            binding_digest: digest(binding),
+            generation,
+            expires_at_ms,
+            auth_session_id: session.into(),
+        };
+        let encoded = serde_json::to_string(&claims)
+            .map_err(|_| unavailable("Cannot encode delegation authority"))?;
+        let ciphertext = cipher
+            .encrypt(&encoded)
+            .map_err(|_| unavailable("Cannot protect delegation authority"))?;
+        check().map_err(|error| conflict(&error))?;
+        Ok(LocalDelegationAttestation {
+            installation,
+            ciphertext,
+        })
+    }
+
+    /// A valid attestation must also pass current local session admission.
+    #[cfg(unix)]
+    pub(crate) fn verify_local_delegation_binding(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        binding: &[u8],
+        proof: &LocalDelegationAttestation,
+    ) -> Result<(), QueueError> {
+        let now = now_ms();
+        let (generation, expires_at_ms) = authority
+            .valid_for(owner, now)
+            .filter(|_| now > 0 && authority.auth_protocol() == 1)
+            .ok_or_else(|| invalid("Invalid local delegation authority"))?;
+        let session = authority
+            .session_id()
+            .filter(|value| valid_auth_session(value).is_some())
+            .ok_or_else(|| invalid("Invalid local delegation authority"))?;
+        if binding.is_empty()
+            || binding.len() > 2_000_000
+            || proof.installation.is_nil()
+            || !proof.ciphertext.starts_with("queue:v1:enc:v2:")
+            || proof.ciphertext.len() > 8192
+        {
+            return Err(invalid("Invalid local delegation authority"));
+        }
+        let _guard = self.storage_guard()?;
+        let _root_guard = self.try_lock_storage_root()?;
+        let cipher = authority_installation::load_for_read(&self.data, Some(proof.installation))?;
+        let plaintext = cipher
+            .decrypt(&proof.ciphertext)
+            .map_err(|_| corrupt("Delegation authority cannot be verified"))?;
+        let claims: LocalDelegationClaims = serde_json::from_str(&plaintext)
+            .map_err(|_| corrupt("Invalid delegation authority"))?;
+        if claims.version != 1
+            || claims.purpose != "local-delegation-binding"
+            || claims.owner != owner
+            || claims.data_root != canonical_authority_root(&self.data)?
+            || claims.binding_digest != digest(binding)
+            || claims.generation != generation
+            || claims.expires_at_ms != expires_at_ms
+            || claims.auth_session_id != session
+        {
+            return Err(corrupt(
+                "Delegation authority does not match its reviewed binding",
+            ));
+        }
         Ok(())
     }
 
@@ -876,7 +1159,7 @@ impl QueueStore {
             mutation,
             authority,
             check,
-            cfg!(not(any(test, feature = "queued-authority-preview"))),
+            false,
         )
     }
 
@@ -904,10 +1187,15 @@ impl QueueStore {
             authority.valid_for(&scope.owner, now).ok_or_else(|| {
                 invalid("Local queue authority is expired or belongs to another owner")
             })?;
+        let (auth_protocol, auth_session_id) = local_auth_binding(authority)?;
         let input = AuthorityInput {
             session_incarnation: incarnation,
             generation,
             expires_at_ms,
+            auth_protocol,
+            auth_session_id,
+            #[cfg(unix)]
+            paired_grant: None,
         };
         let payload_hash = mutation_digest(&mutation)?;
         let _guard = self.storage_guard()?;
@@ -926,6 +1214,54 @@ impl QueueStore {
             Some(input),
             Some(check),
             hold,
+        )
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn mutate_existing_paired_with_identity(
+        &self,
+        scope: &QueueScope,
+        identity: Uuid,
+        incarnation: Uuid,
+        mutation: Mutation,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<MutationReceipt, QueueError> {
+        valid_uuid(incarnation)?;
+        valid_uuid(mutation.operation_id)?;
+        if !matches!(&mutation.operation, QueueOperation::Enqueue { .. }) {
+            return Err(invalid("Delegation delivery must enqueue a message"));
+        }
+        if !grant.valid_for(&scope.owner, now_ms()) {
+            return Err(invalid(
+                "Paired queue authority is expired or belongs to another owner",
+            ));
+        }
+        let input = AuthorityInput {
+            session_incarnation: incarnation,
+            generation: -1,
+            expires_at_ms: grant.expires_at_ms(),
+            auth_protocol: None,
+            auth_session_id: None,
+            paired_grant: Some(grant.clone()),
+        };
+        let payload_hash = mutation_digest(&mutation)?;
+        let _guard = self.storage_guard()?;
+        let _root_guard = self.try_lock_storage_root()?;
+        check().map_err(|error| conflict(&error))?;
+        let (path, envelope) = self.existing_with_identity_locked(scope, identity)?;
+        if envelope.last_boot_id != self.boot_id {
+            return Err(conflict("Queue must be reviewed after restart"));
+        }
+        self.mutate_locked(
+            scope,
+            mutation,
+            payload_hash,
+            path,
+            envelope,
+            Some(input),
+            Some(check),
+            false,
         )
     }
 
@@ -1165,8 +1501,7 @@ impl QueueStore {
             .map_err(|_| corrupt("Queue authority proof cannot be verified"))?;
         let claims: AuthorityClaims = serde_json::from_str(&plaintext)
             .map_err(|_| corrupt("Queue authority proof is invalid"))?;
-        if claims.version != 1
-            || claims.owner != scope.owner
+        if claims.owner != scope.owner
             || claims.data_root != canonical_authority_root(&self.data)?
             || claims.workspace
                 != scope
@@ -1179,7 +1514,6 @@ impl QueueStore {
             || claims.item_id != item.item_id
             || claims.input_request_id != item.input_request_id
             || claims.text_digest != digest(item.text.as_bytes())
-            || claims.generation < 0
         {
             return Err(corrupt(
                 "Queue authority proof does not match its reservation",
@@ -1194,11 +1528,68 @@ impl QueueStore {
                 "Queue authority expired; review the queued message",
             ));
         }
-        Ok(Some(VerifiedQueueAuthority {
-            owner: claims.owner,
-            generation: claims.generation,
-            expires_at_ms: claims.expires_at_ms,
-        }))
+        #[cfg(unix)]
+        let verified = match (
+            claims.version,
+            claims.generation,
+            claims.paired_grant,
+            claims.auth_protocol,
+            claims.auth_session_id.as_deref(),
+        ) {
+            (1, generation, None, None, None) if generation >= 0 => VerifiedQueueAuthority::Local {
+                owner: claims.owner,
+                generation,
+                expires_at_ms: claims.expires_at_ms,
+                auth_protocol: 0,
+                auth_session_id: None,
+            },
+            (3, generation, None, Some(1), Some(session))
+                if generation >= 0 && valid_auth_session(session).is_some() =>
+            {
+                VerifiedQueueAuthority::Local {
+                    owner: claims.owner,
+                    generation,
+                    expires_at_ms: claims.expires_at_ms,
+                    auth_protocol: 1,
+                    auth_session_id: Some(session.to_owned()),
+                }
+            }
+            (2, -1, Some(grant), None, None)
+                if grant.valid_for(&scope.owner, now)
+                    && grant.expires_at_ms() == claims.expires_at_ms =>
+            {
+                VerifiedQueueAuthority::Paired(grant)
+            }
+            _ => return Err(corrupt("Queue authority credential is invalid")),
+        };
+        #[cfg(not(unix))]
+        let verified = match (
+            claims.version,
+            claims.generation,
+            claims.auth_protocol,
+            claims.auth_session_id.as_deref(),
+        ) {
+            (1, generation, None, None) if generation >= 0 => VerifiedQueueAuthority::Local {
+                owner: claims.owner,
+                generation,
+                expires_at_ms: claims.expires_at_ms,
+                auth_protocol: 0,
+                auth_session_id: None,
+            },
+            (3, generation, Some(1), Some(session))
+                if generation >= 0 && valid_auth_session(session).is_some() =>
+            {
+                VerifiedQueueAuthority::Local {
+                    owner: claims.owner,
+                    generation,
+                    expires_at_ms: claims.expires_at_ms,
+                    auth_protocol: 1,
+                    auth_session_id: Some(session.to_owned()),
+                }
+            }
+            _ => return Err(corrupt("Queue authority credential is invalid")),
+        };
+        Ok(Some(verified))
     }
     /// Accepted is trusted only after the adapter checks canonical payload equality.
     /// DefinitelyAbsent requires actor proof that no older acceptance can still
@@ -1386,6 +1777,25 @@ fn canonical_authority_root(data: &Path) -> Result<String, QueueError> {
         .ok_or_else(|| unavailable("Queue data root must be UTF-8"))
 }
 
+fn valid_auth_session(value: &str) -> Option<Uuid> {
+    let session = Uuid::parse_str(value).ok()?;
+    (!session.is_nil() && session.to_string() == value).then_some(session)
+}
+
+fn local_auth_binding(
+    authority: &crate::auth::LocalAuthority,
+) -> Result<(Option<i64>, Option<Uuid>), QueueError> {
+    match (authority.auth_protocol(), authority.session_id()) {
+        (0, None) => Ok((None, None)),
+        (1, Some(value)) => {
+            let session = valid_auth_session(value)
+                .ok_or_else(|| invalid("Queue authentication session is invalid"))?;
+            Ok((Some(1), Some(session)))
+        }
+        _ => Err(invalid("Queue authority does not match its credential")),
+    }
+}
+
 fn seal_authority(
     data: &Path,
     scope: &QueueScope,
@@ -1395,11 +1805,34 @@ fn seal_authority(
     check: Option<&dyn Fn() -> Result<(), String>>,
 ) -> Result<(String, Option<Uuid>), QueueError> {
     let now = now_ms();
-    if now <= 0 || now >= input.expires_at_ms || input.generation < 0 {
+    if now <= 0 || now >= input.expires_at_ms {
         return Err(conflict("Queue authority expired before it was saved"));
     }
+    #[cfg(unix)]
+    let version = match (
+        &input.paired_grant,
+        input.auth_protocol,
+        input.auth_session_id,
+    ) {
+        (Some(grant), None, None)
+            if input.generation == -1
+                && grant.valid_for(&scope.owner, now)
+                && grant.expires_at_ms() == input.expires_at_ms =>
+        {
+            2
+        }
+        (None, None, None) if input.generation >= 0 => 1,
+        (None, Some(1), Some(session)) if input.generation >= 0 && !session.is_nil() => 3,
+        _ => return Err(invalid("Queue authority does not match its credential")),
+    };
+    #[cfg(not(unix))]
+    let version = match (input.generation, input.auth_protocol, input.auth_session_id) {
+        (generation, None, None) if generation >= 0 => 1,
+        (generation, Some(1), Some(session)) if generation >= 0 && !session.is_nil() => 3,
+        _ => return Err(invalid("Queue authority does not match its credential")),
+    };
     let claims = AuthorityClaims {
-        version: 1,
+        version,
         owner: scope.owner.clone(),
         data_root: canonical_authority_root(data)?,
         workspace: scope
@@ -1415,6 +1848,10 @@ fn seal_authority(
         text_digest: digest(item.text.as_bytes()),
         generation: input.generation,
         expires_at_ms: input.expires_at_ms,
+        auth_protocol: input.auth_protocol,
+        auth_session_id: input.auth_session_id.map(|session| session.to_string()),
+        #[cfg(unix)]
+        paired_grant: input.paired_grant.clone(),
     };
     let encoded =
         serde_json::to_string(&claims).map_err(|_| unavailable("Cannot encode queue authority"))?;
@@ -2180,6 +2617,10 @@ mod tests {
             text_digest: digest(preview_item.text.as_bytes()),
             generation: 0,
             expires_at_ms: now_ms() + 60_000,
+            auth_protocol: None,
+            auth_session_id: None,
+            #[cfg(unix)]
+            paired_grant: None,
         };
         preview_envelope.queue_identity = Some(identity);
         preview_envelope.authority_proofs.insert(
@@ -2481,6 +2922,10 @@ mod tests {
             text_digest: digest(item.text.as_bytes()),
             generation: 0,
             expires_at_ms: now_ms() + 60_000,
+            auth_protocol: None,
+            auth_session_id: None,
+            #[cfg(unix)]
+            paired_grant: None,
         };
         let legacy_proof = legacy_cipher
             .encrypt(&serde_json::to_string(&claims).unwrap())
@@ -2690,6 +3135,245 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn local_delegation_attestation_binds_login_and_reviewed_payload() {
+        let (_data, _workspace, scope, store) = setup();
+        let expires = now_ms() + 60_000;
+        let session = Uuid::new_v4().to_string();
+        let authority =
+            crate::auth::LocalAuthority::for_test_session(&scope.owner, 7, expires, &session);
+        let binding = b"owner, parent, task, workspace, prompt and session";
+        let proof = store
+            .protect_local_delegation_binding(&scope.owner, &authority, binding, &|| Ok(()))
+            .unwrap();
+        assert!(store
+            .verify_local_delegation_binding(&scope.owner, &authority, binding, &proof)
+            .is_ok());
+        let other = crate::auth::LocalAuthority::for_test_session(
+            &scope.owner,
+            7,
+            expires,
+            &Uuid::new_v4().to_string(),
+        );
+        assert!(store
+            .verify_local_delegation_binding(&scope.owner, &other, binding, &proof)
+            .is_err());
+        assert!(store
+            .verify_local_delegation_binding(&scope.owner, &authority, b"changed prompt", &proof)
+            .is_err());
+        assert!(store
+            .verify_local_delegation_binding("other", &authority, binding, &proof)
+            .is_err());
+        let (_other_data, _other_workspace, _other_scope, other_store) = setup();
+        assert!(other_store
+            .verify_local_delegation_binding(&scope.owner, &authority, binding, &proof)
+            .is_err());
+        let mut altered = proof.clone();
+        altered.ciphertext.push('x');
+        assert!(store
+            .verify_local_delegation_binding(&scope.owner, &authority, binding, &altered)
+            .is_err());
+        assert!(store
+            .protect_local_delegation_binding(&scope.owner, &authority, binding, &|| Err(
+                "revoked".into()
+            ))
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_delegation_attestation_binds_exact_reviewed_scope_and_installation() {
+        let (data, _workspace, scope, store) = setup();
+        let app = crate::state::AppState::new(terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let (grant_id, token) =
+            crate::paired_environments::synthetic_input_grant(&app, &scope.owner);
+        let paired = crate::auth::PairedInputAuthority {
+            token: token.clone(),
+            method: "POST".into(),
+            path: format!(
+                "/api/structured/sessions/{}/message",
+                scope.parent_session_id
+            ),
+        };
+        let grant =
+            crate::paired_environments::capture_paired_grant(&app, &paired, &scope.owner).unwrap();
+        let admission = app.local_admission().unwrap();
+        let binding = b"exact owner, conversation, task, operation, workspace and prompt";
+        let (protected, confirmed) = admission
+            .accept_paired(&scope.owner, &grant, |check| {
+                store.protect_paired_delegation_binding(&scope.owner, &grant, binding, check)
+            })
+            .unwrap();
+        assert!(confirmed);
+        let proof = protected.unwrap();
+        let encoded = serde_json::to_string(&proof).unwrap();
+        assert!(!encoded.contains(&token));
+        assert!(!encoded.contains(&grant_id));
+        assert!(store
+            .verify_paired_delegation_binding(&scope.owner, &grant, binding, &proof)
+            .is_ok());
+        assert!(store
+            .verify_paired_delegation_binding(
+                &scope.owner,
+                &grant,
+                b"different reviewed binding",
+                &proof
+            )
+            .is_err());
+        assert!(store
+            .verify_paired_delegation_binding("another owner", &grant, binding, &proof)
+            .is_err());
+        let (_other_data, _other_workspace, _other_scope, other_store) = setup();
+        assert!(other_store
+            .verify_paired_delegation_binding(&scope.owner, &grant, binding, &proof)
+            .is_err());
+        let mut altered = proof.clone();
+        altered.ciphertext.push('x');
+        assert!(store
+            .verify_paired_delegation_binding(&scope.owner, &grant, binding, &altered)
+            .is_err());
+        app.lock_db()
+            .unwrap()
+            .execute("DELETE FROM paired_grants WHERE id=?1", [&grant_id])
+            .unwrap();
+        assert!(admission
+            .accept_paired(&scope.owner, &grant, |check| {
+                store.protect_paired_delegation_binding(&scope.owner, &grant, binding, check)
+            })
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_delegation_proof_binds_the_grant_and_exact_queue_reservation() {
+        let (data, _workspace, scope, store) = setup();
+        let app = crate::state::AppState::new(terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let (grant_id, token) =
+            crate::paired_environments::synthetic_input_grant(&app, &scope.owner);
+        let paired = crate::auth::PairedInputAuthority {
+            token: token.clone(),
+            method: "POST".into(),
+            path: format!(
+                "/api/structured/sessions/{}/message",
+                scope.parent_session_id
+            ),
+        };
+        let grant = {
+            let db = app.lock_db().unwrap();
+            crate::paired_environments::capture_paired_grant_with_connection(
+                &db,
+                &paired,
+                &scope.owner,
+            )
+            .unwrap()
+        };
+        let identity = store.ensure_delegation_identity(&scope).unwrap();
+        let incarnation = id(101);
+        let mutation = Mutation {
+            operation_id: id(102),
+            expected_queue_revision: 0,
+            operation: QueueOperation::Enqueue {
+                item_id: id(103),
+                text: "child result".into(),
+                run_when_idle: false,
+            },
+        };
+        let admission = app.local_admission().unwrap();
+        let (result, confirmed) = admission
+            .accept_paired(&scope.owner, &grant, |check| {
+                store.mutate_existing_paired_with_identity(
+                    &scope,
+                    identity,
+                    incarnation,
+                    mutation,
+                    &grant,
+                    check,
+                )
+            })
+            .unwrap();
+        assert!(confirmed);
+        result.unwrap();
+        let path = store.existing_path_readonly(&scope).unwrap().unwrap();
+        let persisted = std::fs::read_to_string(&path).unwrap();
+        assert!(!persisted.contains(&token));
+        assert!(!persisted.contains(&grant_id));
+        let envelope = store.read(&path, &scope).unwrap().unwrap();
+        let cipher = authority_installation::load_for_read(
+            data.path(),
+            envelope.queue_authority_installation,
+        )
+        .unwrap();
+        let plaintext = cipher
+            .decrypt(envelope.authority_proofs.get(&id(103)).unwrap())
+            .unwrap();
+        let decoded: serde_json::Value = serde_json::from_str(&plaintext).unwrap();
+        assert_eq!(decoded["version"], 2);
+        assert!(decoded["pairedGrant"].is_object());
+        assert!(!plaintext.contains(&token));
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct PriorAuthorityClaims {
+            version: u8,
+            owner: String,
+            data_root: String,
+            workspace: String,
+            parent_session_id: String,
+            session_incarnation: Uuid,
+            queue_identity: Uuid,
+            item_id: Uuid,
+            input_request_id: Uuid,
+            text_digest: String,
+            generation: i64,
+            expires_at_ms: i64,
+        }
+        assert!(serde_json::from_str::<PriorAuthorityClaims>(&plaintext).is_err());
+        store
+            .mutate(
+                &scope,
+                Mutation {
+                    operation_id: id(104),
+                    expected_queue_revision: 1,
+                    operation: QueueOperation::Resume,
+                },
+            )
+            .unwrap();
+        let reservation = store
+            .reserve_next(&scope, 2, IdleBoundary { turn_epoch: 7 })
+            .unwrap()
+            .unwrap();
+        let verified = store
+            .verify_reservation_authority(&scope, incarnation, &reservation)
+            .unwrap()
+            .unwrap();
+        assert_eq!(verified, VerifiedQueueAuthority::Paired(grant.clone()));
+        assert!(crate::auth::LocalAuthority::from_verified_queue(verified).is_err());
+        assert!(store
+            .verify_reservation_authority(&scope, id(105), &reservation)
+            .is_err());
+        let mut altered = reservation.clone();
+        altered.text.push_str(" tampered");
+        assert!(store
+            .verify_reservation_authority(&scope, incarnation, &altered)
+            .is_err());
+        app.lock_db()
+            .unwrap()
+            .execute("DELETE FROM paired_grants WHERE id=?1", [&grant_id])
+            .unwrap();
+        assert!(admission
+            .accept_paired(&scope.owner, &grant, |_check| Ok::<_, String>(()))
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn delegated_enqueue_binds_existing_queue_identity_and_signed_authority() {
         let (data, _workspace, scope, store) = setup();
         #[cfg(all(unix, feature = "queued-authority-preview"))]
@@ -2748,7 +3432,10 @@ mod tests {
             .verify_reservation_authority(&scope, incarnation, &reservation)
             .unwrap()
             .unwrap();
-        assert_eq!(proof.into_parts(), (scope.owner.clone(), 3, expires));
+        assert_eq!(
+            proof.into_local_parts().unwrap(),
+            (scope.owner.clone(), 3, expires)
+        );
         assert!(store
             .verify_reservation_authority(&scope, id(24), &reservation)
             .is_err());
@@ -2886,7 +3573,8 @@ mod tests {
                 .verify_reservation_authority(&scope, incarnation, &reservation)
                 .unwrap()
                 .unwrap()
-                .into_parts(),
+                .into_local_parts()
+                .unwrap(),
             (scope.owner.clone(), 2, expires)
         );
     }
@@ -3060,7 +3748,7 @@ mod tests {
             let after = store.load(&scope).unwrap();
             assert_eq!(after.order, before.order);
             assert_eq!(after.items, before.items);
-            if cfg!(feature = "queued-authority-preview") && !mixed {
+            if !mixed {
                 assert_eq!(after.mode, QueueMode::Running);
             } else {
                 assert_eq!(
@@ -3104,11 +3792,20 @@ mod tests {
         let workspace = PathBuf::from(std::env::var_os("V4_QUEUE_AUTH_TEST_WORKSPACE").unwrap());
         let scope = QueueScope::new("account-A", &workspace, SESSION).unwrap();
         let writer = std::env::var("V4_QUEUE_AUTH_TEST_STAGE").unwrap() == "write";
+        let session_scoped = std::env::var("V4_QUEUE_AUTH_SESSION_SCOPED").unwrap() == "1";
         let store = QueueStore::new(&data, if writer { id(1) } else { id(2) });
         if writer {
             crate::vault::VaultCipher::load(&data).unwrap();
-            let authority =
-                crate::auth::LocalAuthority::for_test("account-A", 7, now_ms() + 60_000);
+            let authority = if session_scoped {
+                crate::auth::LocalAuthority::for_test_session(
+                    "account-A",
+                    7,
+                    now_ms() + 60_000,
+                    &id(70).to_string(),
+                )
+            } else {
+                crate::auth::LocalAuthority::for_test("account-A", 7, now_ms() + 60_000)
+            };
             store
                 .mutate_authorized(
                     &scope,
@@ -3155,7 +3852,16 @@ mod tests {
                 .verify_reservation_authority(&scope, id(50), &reserved)
                 .unwrap()
                 .unwrap();
-            assert_eq!(verified.generation, 7);
+            let authority = crate::auth::LocalAuthority::from_verified_queue(verified).unwrap();
+            assert_eq!(authority.generation_for("account-A"), Some(7));
+            assert_eq!(
+                authority.auth_protocol(),
+                if session_scoped { 1 } else { 0 }
+            );
+            assert_eq!(
+                authority.session_id(),
+                session_scoped.then(|| id(70).to_string()).as_deref()
+            );
             assert!(store
                 .verify_reservation_authority(&scope, id(51), &reserved)
                 .is_err());
@@ -3166,38 +3872,44 @@ mod tests {
     #[test]
     fn authorized_queue_restarts_held_and_retains_proof_across_processes() {
         use std::time::{Duration, Instant};
-        let data = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        for stage in ["write", "read"] {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "followup_queue::tests::authority_restart_process_fixture",
-                    "--ignored",
-                ])
-                .env(
-                    "VAULT_ENCRYPTION_KEY",
-                    "synthetic-queue-cross-process-fixture",
-                )
-                .env("V4_QUEUE_AUTH_TEST_DATA", data.path())
-                .env("V4_QUEUE_AUTH_TEST_WORKSPACE", workspace.path())
-                .env("V4_QUEUE_AUTH_TEST_STAGE", stage)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .unwrap();
-            let deadline = Instant::now() + Duration::from_secs(15);
-            loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    assert!(status.success(), "queue authority fixture {stage} failed");
-                    break;
+        for session_scoped in [false, true] {
+            let data = tempfile::tempdir().unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+            for stage in ["write", "read"] {
+                let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "followup_queue::tests::authority_restart_process_fixture",
+                        "--ignored",
+                    ])
+                    .env(
+                        "VAULT_ENCRYPTION_KEY",
+                        "synthetic-queue-cross-process-fixture",
+                    )
+                    .env("V4_QUEUE_AUTH_TEST_DATA", data.path())
+                    .env("V4_QUEUE_AUTH_TEST_WORKSPACE", workspace.path())
+                    .env("V4_QUEUE_AUTH_TEST_STAGE", stage)
+                    .env(
+                        "V4_QUEUE_AUTH_SESSION_SCOPED",
+                        if session_scoped { "1" } else { "0" },
+                    )
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(15);
+                loop {
+                    if let Some(status) = child.try_wait().unwrap() {
+                        assert!(status.success(), "queue authority fixture {stage} failed");
+                        break;
+                    }
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        panic!("queue authority fixture {stage} timed out");
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
                 }
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!("queue authority fixture {stage} timed out");
-                }
-                std::thread::sleep(Duration::from_millis(5));
             }
         }
     }
@@ -3239,8 +3951,9 @@ mod tests {
             .verify_reservation_authority(&scope, incarnation, &reservation)
             .unwrap()
             .unwrap();
-        assert_eq!(verified.generation, 3);
-        assert!(verified.expires_at_ms > now_ms());
+        let (_, generation, expires_at_ms) = verified.into_local_parts().unwrap();
+        assert_eq!(generation, 3);
+        assert!(expires_at_ms > now_ms());
         assert!(store
             .verify_reservation_authority(&scope, id(51), &reservation)
             .is_err());
@@ -3266,9 +3979,142 @@ mod tests {
                 .verify_reservation_authority(&scope, incarnation, &again)
                 .unwrap()
                 .unwrap()
-                .generation,
+                .into_local_parts()
+                .unwrap()
+                .1,
             3
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_queue_proof_preserves_upgraded_session_authority() {
+        let (data, _workspace, scope, store) = setup();
+        crate::vault::VaultCipher::load(data.path()).unwrap();
+        let incarnation = id(50);
+        let login_session = id(70).to_string();
+        let authority = crate::auth::LocalAuthority::for_test_session(
+            &scope.owner,
+            3,
+            now_ms() + 60_000,
+            &login_session,
+        );
+        store
+            .mutate_authorized(
+                &scope,
+                incarnation,
+                Mutation {
+                    operation_id: id(201),
+                    expected_queue_revision: 0,
+                    operation: QueueOperation::Enqueue {
+                        item_id: id(21),
+                        text: "Session-bound queued work".into(),
+                        run_when_idle: true,
+                    },
+                },
+                &authority,
+            )
+            .unwrap();
+        let reservation = reserve(&store, &scope);
+        let proof = store
+            .verify_reservation_authority(&scope, incarnation, &reservation)
+            .unwrap()
+            .unwrap();
+        let restored = crate::auth::LocalAuthority::from_verified_queue(proof).unwrap();
+        assert_eq!(restored.auth_protocol(), 1);
+        assert_eq!(restored.session_id(), Some(login_session.as_str()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upgraded_queue_proofs_reject_invalid_session_claim_combinations() {
+        let (data, _workspace, scope, store) = setup();
+        crate::vault::VaultCipher::load(data.path()).unwrap();
+        let incarnation = id(50);
+        let login_session = "abcdef00-0000-4000-8000-000000000001".to_string();
+        let authority = crate::auth::LocalAuthority::for_test_session(
+            &scope.owner,
+            3,
+            now_ms() + 60_000,
+            &login_session,
+        );
+        store
+            .mutate_authorized(
+                &scope,
+                incarnation,
+                Mutation {
+                    operation_id: id(201),
+                    expected_queue_revision: 0,
+                    operation: QueueOperation::Enqueue {
+                        item_id: id(21),
+                        text: "Session-bound queued work".into(),
+                        run_when_idle: true,
+                    },
+                },
+                &authority,
+            )
+            .unwrap();
+        let reservation = reserve(&store, &scope);
+        let path = store.path(&scope).unwrap();
+        let mut envelope = store.read(&path, &scope).unwrap().unwrap();
+        let cipher = authority_installation::load_for_read(
+            data.path(),
+            envelope.queue_authority_installation,
+        )
+        .unwrap();
+        let plaintext = cipher
+            .decrypt(envelope.authority_proofs.get(&id(21)).unwrap())
+            .unwrap();
+        let original: serde_json::Value = serde_json::from_str(&plaintext).unwrap();
+        assert_eq!(original["version"], 3);
+        assert_eq!(original["authProtocol"], 1);
+        assert_eq!(original["authSessionId"], login_session);
+        #[allow(dead_code)]
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct PriorLocalClaims {
+            version: u8,
+            owner: String,
+            data_root: String,
+            workspace: String,
+            parent_session_id: String,
+            session_incarnation: Uuid,
+            queue_identity: Uuid,
+            item_id: Uuid,
+            input_request_id: Uuid,
+            text_digest: String,
+            generation: i64,
+            expires_at_ms: i64,
+        }
+        assert!(serde_json::from_str::<PriorLocalClaims>(&plaintext).is_err());
+        let mut invalid = Vec::new();
+        let mut claim = original.clone();
+        claim.as_object_mut().unwrap().remove("authSessionId");
+        invalid.push(claim);
+        let mut claim = original.clone();
+        claim["authSessionId"] = serde_json::json!(Uuid::nil().to_string());
+        invalid.push(claim);
+        let mut claim = original.clone();
+        claim["authSessionId"] = serde_json::json!(login_session.to_uppercase());
+        invalid.push(claim);
+        let mut claim = original.clone();
+        claim["authProtocol"] = serde_json::json!(0);
+        invalid.push(claim);
+        let mut claim = original.clone();
+        claim["version"] = serde_json::json!(1);
+        invalid.push(claim);
+        let mut claim = original.clone();
+        claim["version"] = serde_json::json!(2);
+        invalid.push(claim);
+        for claim in invalid {
+            envelope
+                .authority_proofs
+                .insert(id(21), cipher.encrypt(&claim.to_string()).unwrap());
+            store.commit(&path, &envelope, &scope).unwrap();
+            assert!(store
+                .verify_reservation_authority(&scope, incarnation, &reservation)
+                .is_err());
+        }
     }
 
     #[cfg(unix)]

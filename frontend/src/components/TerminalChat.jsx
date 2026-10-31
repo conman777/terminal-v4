@@ -6,6 +6,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { terminalFileLinks } from './terminalFileLinks';
+import { ProjectFilePreview } from './ProjectFilePreview';
+import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import '@xterm/xterm/css/xterm.css';
 import { observeActiveTerminalResize } from '../utils/observeActiveTerminalResize';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
@@ -46,7 +49,8 @@ import {
 import { focusElementWithoutScroll } from '../utils/focusElementWithoutScroll';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
-import { resolveWebSocketUrl } from '../utils/apiBase';
+import { resolveHomeApiUrl, resolveWebSocketUrl } from '../utils/apiBase';
+import { readStrictResponseMetadata, validateStrictResponse } from '../utils/strictAuthenticatedFetch';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 import { getHistoryReplayObserverText, shouldUseSingleHistoryWrite, unseenTerminalEvents, hasTerminalHistoryGap } from '../utils/terminalHistoryReplay';
 import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
@@ -134,10 +138,49 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize: requestedSyncPtySize = true, surface, inputEnabled: requestedInputEnabled = true }) {
+function strictSocketScope(snapshot) {
+  const pair = snapshot?.pair;
+  if (snapshot?.status !== 'active' || snapshot.refreshReserved
+    || typeof snapshot.incarnation !== 'string' || !snapshot.incarnation
+    || typeof snapshot.controlRevision !== 'string' || !snapshot.controlRevision
+    || typeof pair?.owner !== 'string' || !pair.owner || snapshot.user?.id !== pair.owner
+    || typeof pair.session !== 'string' || !pair.session
+    || typeof pair.accessToken !== 'string' || !pair.accessToken) throw new Error('Authentication is unavailable');
+  let home;
+  try { home = new URL(pair.home).href; } catch { throw new Error('Authentication is unavailable'); }
+  if (home !== new URL(resolveHomeApiUrl('/'), window.location.origin).href) throw new Error('Authentication is unavailable');
+  return { incarnation: snapshot.incarnation, controlRevision: snapshot.controlRevision, owner: pair.owner, session: pair.session, home, accessToken: pair.accessToken };
+}
+
+function sameStrictSocketScope(a, b) {
+  return a.incarnation === b.incarnation && a.controlRevision === b.controlRevision
+    && a.owner === b.owner && a.session === b.session && a.home === b.home;
+}
+
+export function TerminalChat(props) {
+  const { sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize: requestedSyncPtySize = true, surface, inputEnabled: requestedInputEnabled = true, filePreviewThreadId, filePreviewRoot, authLifecycle, strictReady } = props;
+  const strictAuth = Object.hasOwn(props, 'authLifecycle');
+  const strictBindingRef = useRef(null);
+  strictBindingRef.current = { strictAuth, authLifecycle, strictReady };
   const [inputDeliveryError, setInputDeliveryError] = useState('');
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
-  const inputEnabled = requestedInputEnabled !== false && environmentAllows(environment, 'terminalInput');
+  const [terminalFilePreview, setTerminalFilePreview] = useState(null);
+  const fileLinkScope = useRef(null);
+  const previousFileLinkScope = fileLinkScope.current;
+  const fileLinkScopeVersion = useRef(0);
+  if (previousFileLinkScope && (previousFileLinkScope.threadId !== filePreviewThreadId
+    || previousFileLinkScope.root !== filePreviewRoot || previousFileLinkScope.active !== isPrimary)) fileLinkScopeVersion.current++;
+  fileLinkScope.current = { threadId: filePreviewThreadId, root: filePreviewRoot, active: isPrimary };
+  useEffect(() => {
+    setTerminalFilePreview(null);
+    if (strictAuth) return subscribeEnvironment(() => setTerminalFilePreview(null));
+    const auth = captureAuthScope();
+    const stopAuth = subscribeAuth(() => { if (!isAuthScopeCurrent(auth)) setTerminalFilePreview(null); });
+    const stopEnvironment = subscribeEnvironment(() => setTerminalFilePreview(null));
+    return () => { stopAuth(); stopEnvironment(); };
+  }, [filePreviewThreadId, filePreviewRoot, isPrimary, strictAuth]);
+  const inputEnabled = requestedInputEnabled !== false && environmentAllows(environment, 'terminalInput')
+    && (!strictAuth || (strictReady === true && typeof authLifecycle?.read === 'function' && typeof authLifecycle?.refresh === 'function'));
   const syncPtySize = requestedSyncPtySize !== false && environmentAllows(environment, 'terminalInput');
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
@@ -182,6 +225,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const USE_FRAMED_PROTOCOL = true;
   const MAX_PENDING_WRITE_CHARS = 1_000_000;
   const MAX_MESSAGE_QUEUE = 500;
+  const MAX_STRICT_BUFFER_BYTES = 8 * 1024 * 1024;
   const DROP_NOTICE_INTERVAL_MS = 5000;
   const LARGE_PASTE_THRESHOLD = 5000;
   const { activeSessionId, sessions, restoreSession, registerTerminalSender, unregisterTerminalSender, updateSessionTopic, syncSessionThread } = useTerminalSession();
@@ -272,6 +316,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const historyCharCountRef = useRef(0);
   const historyReloadingRef = useRef(false);
   const pendingSocketDataRef = useRef([]);
+  const pendingSocketBytesRef = useRef(0);
   const loadMoreHistoryRef = useRef(null);
   const shouldReplayHistoryRef = useRef(true);
   const reconnectSocketRef = useRef(null);
@@ -610,6 +655,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (sendSocketInputRef.current?.(data)) {
         return;
       }
+      if (strictAuth) {
+        setInputDeliveryError('Terminal authentication is unavailable. Your input was not sent.');
+        return;
+      }
       apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
         body: { command: data }
@@ -619,7 +668,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         setInputDeliveryError(error.message || 'Terminal input failed.');
       });
     }
-  }, [sessionId]);
+  }, [sessionId, strictAuth]);
 
   const handleReaderLoadMore = useCallback(() => {
     loadMoreHistoryRef.current?.();
@@ -665,8 +714,23 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, []);
 
   const selectionListenersRef = useRef(new Set());
+  const selectionVersionRef = useRef(0);
   const getTerminalSelectionText = useCallback(() => xtermRef.current?.getSelection?.() || '', []);
   const clearTerminalSelection = useCallback(() => { xtermRef.current?.clearSelection?.(); }, []);
+  const selectTerminalLineAtPoint = useCallback(({ x, y } = {}) => {
+    const term = xtermRef.current;
+    if (!term || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+    if (term.hasSelection()) return true;
+    const screen = term.element?.querySelector('.xterm-screen');
+    const bounds = screen?.getBoundingClientRect();
+    if (!bounds || !bounds.width || !bounds.height || !term.rows || !term.cols
+      || x < bounds.left || x >= bounds.right || y < bounds.top || y >= bounds.bottom) return false;
+    const row = Math.floor((y - bounds.top) * term.rows / bounds.height) + term.buffer.active.viewportY;
+    const line = term.buffer.active.getLine(row);
+    if (!line?.translateToString(true).trim()) return false;
+    term.select(0, row, term.cols);
+    return term.hasSelection();
+  }, []);
   const subscribeTerminalSelection = useCallback((listener) => {
     selectionListenersRef.current.add(listener);
     return () => selectionListenersRef.current.delete(listener);
@@ -1534,22 +1598,23 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     resetHistoryCache();
     historyReloadingRef.current = false;
     pendingSocketDataRef.current = [];
+    pendingSocketBytesRef.current = 0;
     resetCopyModeState();
   }, [applyHistoryConfig, resetCopyModeState, resetHistoryCache, sessionId, skipHistory]);
 
   // Register image upload trigger for external components
   useEffect(() => {
     if (onRegisterImageUpload) {
-      onRegisterImageUpload(triggerFileInput);
+      onRegisterImageUpload(strictAuth ? () => setInputDeliveryError('Image uploads are unavailable in strict mode.') : triggerFileInput);
     }
-  }, [onRegisterImageUpload, triggerFileInput]);
+  }, [onRegisterImageUpload, triggerFileInput, strictAuth]);
 
   // Register history panel trigger for external components
   useEffect(() => {
     if (onRegisterHistoryPanel) {
-      onRegisterHistoryPanel(() => setHistoryModalOpen(true));
+      onRegisterHistoryPanel(strictAuth ? () => setInputDeliveryError('The history panel is unavailable in strict mode.') : () => setHistoryModalOpen(true));
     }
-  }, [onRegisterHistoryPanel]);
+  }, [onRegisterHistoryPanel, strictAuth]);
 
   // Register selection actions for mobile long-press context menu
   useEffect(() => {
@@ -1561,13 +1626,39 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       copySelection: copyTerminalSelection,
       getSelectionText: getTerminalSelectionText,
       clearSelection: clearTerminalSelection,
-      subscribe: subscribeTerminalSelection
+      selectLineAtPoint: selectTerminalLineAtPoint,
+      subscribe: subscribeTerminalSelection,
+      getOpenFileAction: () => {
+        if (strictAuth) return null;
+        const term = xtermRef.current;
+        const scope = fileLinkScope.current;
+        const text = term?.getSelection?.() || '';
+        const trimmed = text.trim();
+        const position = term?.getSelectionPosition?.();
+        const startLine = position && term.buffer.active.getLine(position.start.y);
+        if (!position || !startLine || startLine.isWrapped || term.buffer.active.getLine(position.start.y + 1)?.isWrapped) return null;
+        const links = terminalFileLinks(trimmed, scope?.root);
+        if (!scope?.active || !scope.threadId || !scope.root || !term?.hasSelection?.()
+          || !environmentAllows(getActiveEnvironment(), 'transfer') || links.length !== 1
+          || links[0].start !== 0 || links[0].end !== trimmed.length || /[\r\n]/.test(text)) return null;
+        const version = selectionVersionRef.current;
+        const scopeVersion = fileLinkScopeVersion.current;
+        const auth = captureAuthScope();
+        const environmentSignal = getEnvironmentSignal();
+        return { label: 'Open file', onClick: () => {
+          const current = fileLinkScope.current;
+          if (selectionVersionRef.current !== version || fileLinkScopeVersion.current !== scopeVersion || term !== xtermRef.current || term.getSelection() !== text
+            || !current?.active || current.threadId !== scope.threadId || current.root !== scope.root
+            || !isAuthScopeCurrent(auth) || environmentSignal.aborted || !environmentAllows(getActiveEnvironment(), 'transfer')) return;
+          setTerminalFilePreview({ threadId: scope.threadId, root: scope.root, file: links[0].file });
+        } };
+      }
     });
 
     return () => {
       onRegisterSelectionActions(null);
     };
-  }, [onRegisterSelectionActions, sessionId, hasTerminalSelection, copyTerminalSelection, getTerminalSelectionText, clearTerminalSelection, subscribeTerminalSelection]);
+  }, [onRegisterSelectionActions, sessionId, hasTerminalSelection, copyTerminalSelection, getTerminalSelectionText, clearTerminalSelection, selectTerminalLineAtPoint, subscribeTerminalSelection, strictAuth]);
 
   // Register focus terminal trigger for iOS keyboard activation
   useEffect(() => {
@@ -1646,6 +1737,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let connectSocket = () => {};
     const environmentSignal = getEnvironmentSignal();
     const remoteEnvironment = Boolean(getActiveEnvironment());
+    const strictLifetime = new AbortController();
+    let strictActiveScope = null;
+    const readStrictScope = async (expected) => {
+      const sameBinding = () => strictBindingRef.current?.strictAuth === true
+        && strictBindingRef.current.authLifecycle === authLifecycle && strictBindingRef.current.strictReady === true;
+      if (!strictAuth || strictReady !== true || !sameBinding() || typeof authLifecycle?.read !== 'function'
+        || typeof authLifecycle?.refresh !== 'function' || disposed || environmentSignal.aborted
+        || strictLifetime.signal.aborted) throw new Error('Authentication is unavailable');
+      const current = strictSocketScope(await authLifecycle.read());
+      if (disposed || environmentSignal.aborted || strictLifetime.signal.aborted || !sameBinding()
+        || (expected && !sameStrictSocketScope(expected, current))) throw new Error('Authentication changed');
+      return current;
+    };
+    const terminalFetch = (url, options = {}) => apiFetch(url, strictAuth ? { ...options, authLifecycle } : options);
+    const terminalResponseMetadata = response => strictAuth ? readStrictResponseMetadata(response) : Promise.resolve(response);
     const reconnectController = createTerminalReconnectController((options = {}) => {
       connectSocket(options);
     });
@@ -1805,15 +1911,22 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const body = priority
         ? { cols: nextCols, rows: nextRows, clientId, priority: true }
         : { cols: nextCols, rows: nextRows, clientId };
+      const expectedScope = strictActiveScope;
 
-      apiFetch(`/api/terminal/${sessionId}/resize`, {
-        method: 'POST',
-        body,
-        signal: environmentSignal
+      Promise.resolve().then(async () => {
+        if (strictAuth) {
+          if (!expectedScope) throw new Error('Authentication is unavailable');
+          await readStrictScope(expectedScope);
+        }
+        return terminalFetch(`/api/terminal/${sessionId}/resize`, {
+          method: 'POST', body, signal: environmentSignal,
+        });
       })
         .then(async (response) => {
-          if (!response?.ok) return;
+          if (!(await terminalResponseMetadata(response)).ok) return;
           const payload = await response.json().catch(() => null);
+          if (strictAuth) await validateStrictResponse(response, { required: true });
+          if (strictAuth) await readStrictScope(expectedScope);
           if (disposed || environmentSignal.aborted || lastResizeRequestKey !== requestKey) return;
           updatePtyOwnerFromResizeAck(payload);
         })
@@ -1899,6 +2012,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
 
     const capturePreviewFromInput = (text) => {
+      if (strictAuth) return;
       if (!sessionId || !text) return;
       const completedLines = extractCompletedLinesFromTerminalInputChunk(text, previewInputLineRef);
       if (completedLines.length === 0) return;
@@ -1943,9 +2057,38 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (externalInputTimerRef.current) clearTimeout(externalInputTimerRef.current);
       externalInputTimerRef.current = null;
     };
+    const invalidateStrictSocket = (reason = 'Terminal authentication changed. Reconnect before sending input.') => {
+      if (!strictAuth) return;
+      strictLifetime.abort();
+      strictActiveScope = null;
+      reconnectController.stop();
+      socketReadyForInputRef.current = false;
+      discardUnsentInput();
+      pendingSocketDataRef.current = [];
+      pendingSocketBytesRef.current = 0;
+      try { socketRef.current?.close(4001, 'Authentication changed'); } catch {}
+      if (!disposed) {
+        onConnectionChange?.(false);
+        setIsLoadingHistory(false);
+        setInputDeliveryError(reason);
+      }
+    };
+    const bufferPendingSocketData = (text, seq) => {
+      const bytes = typeof text === 'string' ? text.length * 2 : 0;
+      if (strictAuth && (pendingSocketBytesRef.current + bytes > MAX_STRICT_BUFFER_BYTES || pendingSocketDataRef.current.length >= MAX_MESSAGE_QUEUE)) {
+        invalidateStrictSocket('Terminal output exceeded the safe buffer. Reconnect to reload the terminal.');
+        return;
+      }
+      pendingSocketDataRef.current.push({ text, seq });
+      pendingSocketBytesRef.current += bytes;
+    };
+    let strictSendTail = Promise.resolve();
+    const activeBinding = () => !disposed && !environmentSignal.aborted
+      && strictBindingRef.current?.strictAuth === strictAuth
+      && (!strictAuth || (strictBindingRef.current.authLifecycle === authLifecycle && strictBindingRef.current.strictReady === true));
 
     const sendTerminalInput = (text, terminalDelivery) => {
-      if (!text || disposed || !environmentAllows(getActiveEnvironment(), 'terminalInput') || environmentSignal.aborted || reconnectController.isStopped()) return false;
+      if (!text || !activeBinding() || !environmentAllows(getActiveEnvironment(), 'terminalInput') || reconnectController.isStopped()) return false;
       let resolvedText;
       try { resolvedText = rewriteTerminalAgentInput(text); }
       catch (error) {
@@ -1956,6 +2099,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
       capturePreviewFromInput(resolvedText);
       let receipt = sendSocketInputRef.current?.(resolvedText, terminalDelivery);
+      if (!receipt && strictAuth) {
+        const error = Object.assign(new Error('Terminal authentication is unavailable. Your draft was kept.'), { definitelyRejected: true });
+        setInputDeliveryError(error.message);
+        const rejected = Promise.reject(error); rejected.catch(() => {}); return rejected;
+      }
       if (!receipt) receipt = apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
         body: { command: resolvedText }, signal: environmentSignal, terminalDelivery,
@@ -1977,7 +2125,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const flushQueuedSocketInput = () => {
-      if (!environmentAllows(getActiveEnvironment(), 'terminalInput')) { discardUnsentInput(); return false; }
+      if (!activeBinding() || !environmentAllows(getActiveEnvironment(), 'terminalInput')) { discardUnsentInput(); return false; }
       const socket = socketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN || !socketReadyForInputRef.current) {
         return false;
@@ -1987,26 +2135,53 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       preAuthSocketInputRef.current = [];
       for (const entry of pending) {
         try {
-          prepareTerminalInput(sessionId, entry.delivery);
-          socket.send(entry.payload);
-          entry.resolve(true);
+          if (strictAuth) {
+            Promise.resolve(sendSocketInput(entry.payload, entry.delivery)).then(entry.resolve, entry.reject);
+          } else {
+            prepareTerminalInput(sessionId, entry.delivery);
+            socket.send(entry.payload);
+            entry.resolve(true);
+          }
         } catch (error) { entry.reject(error); }
       }
       return true;
     };
 
     const sendSocketInput = (payload, delivery) => {
-      if (disposed || environmentSignal.aborted || reconnectController.isStopped() || !environmentAllows(getActiveEnvironment(), 'terminalInput')) return false;
+      if (!activeBinding() || reconnectController.isStopped() || !environmentAllows(getActiveEnvironment(), 'terminalInput')) return false;
       const socket = socketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         return false;
       }
-      prepareTerminalInput(sessionId, delivery);
       if (!socketReadyForInputRef.current) {
+        if (!strictAuth) prepareTerminalInput(sessionId, delivery);
         const receipt = new Promise((resolve, reject) => preAuthSocketInputRef.current.push({ payload, delivery, resolve, reject }));
         receipt.catch(() => {});
         return receipt;
       }
+      if (strictAuth) {
+        const expected = strictActiveScope;
+        const pending = strictSendTail.then(async () => {
+          let attempted = false;
+          try {
+            if (!expected) throw new Error('Authentication is unavailable');
+            await readStrictScope(expected);
+            if (socketRef.current !== socket || socket.readyState !== WebSocket.OPEN || !socketReadyForInputRef.current) throw new Error('Terminal connection changed');
+            prepareTerminalInput(sessionId, delivery);
+            attempted = true;
+            socket.send(payload);
+            return true;
+          } catch (cause) {
+            invalidateStrictSocket();
+            throw Object.assign(new Error(attempted ? 'Terminal input outcome is unconfirmed. Review the terminal before retrying.' : 'Terminal authentication changed. Your draft was kept.'), {
+              definitelyRejected: !attempted, ...(attempted ? { outcomeUncertain: true } : {}), cause,
+            });
+          }
+        });
+        strictSendTail = pending.catch(() => {});
+        return pending;
+      }
+      prepareTerminalInput(sessionId, delivery);
       socket.send(payload);
       return true;
     };
@@ -2037,7 +2212,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const queueTerminalInput = (data) => {
-      if (!data || disposed || environmentSignal.aborted) return;
+      if (!data || !activeBinding()) return;
       try { prepareTerminalInput(sessionId); }
       catch (error) { setInputDeliveryError(error.message); return; }
       inputBufferRef.current += data;
@@ -2050,7 +2225,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const sendUserInput = (text, delivery) => {
-      if (!text || disposed) return;
+      if (!text || !activeBinding()) return false;
       const copyModeExit = exitCopyModeIfActive(delivery);
       markUserInput();
       resetIdleTimer(false);
@@ -2153,6 +2328,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (navigator.clipboard?.readText) {
           try {
             clipboardText = await navigator.clipboard.readText();
+            if (!activeBinding()) return;
             if (shouldSendTextBeforeImage(clipboardText)) {
               sendPastedText(clipboardText);
               return;
@@ -2166,7 +2342,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           try {
             const clipboardItems = await navigator.clipboard.read();
             const imageFile = await getImageFileFromClipboardItems(clipboardItems);
+            if (!activeBinding()) return;
             if (imageFile) {
+              if (strictAuth) { setInputDeliveryError('Image uploads are unavailable in strict mode.'); return; }
               const path = await uploadScreenshot(imageFile);
               if (path) {
                 sendPastedText(path + ' ');
@@ -2181,6 +2359,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (navigator.clipboard?.readText) {
           if (!hasMeaningfulClipboardText(clipboardText)) {
             clipboardText = await navigator.clipboard.readText();
+            if (!activeBinding()) return;
           }
           if (hasMeaningfulClipboardText(clipboardText)) {
             sendPastedText(clipboardText);
@@ -2200,7 +2379,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (event.defaultPrevented) return false;
       const normalizedKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
 
-      if (event.type === 'keydown' && event.ctrlKey && !event.metaKey && !event.shiftKey && normalizedKey === 'm') {
+      if (event.type === 'keydown' && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && normalizedKey === 'm') {
         tabMovesFocus = !tabMovesFocus;
         describeTabBehavior();
         return false;
@@ -2243,9 +2422,31 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       console.warn('[Terminal] WebLinks addon unavailable:', error);
     }
 
+    term.registerLinkProvider({
+      provideLinks: (y, callback) => {
+        if (strictAuth) { callback(undefined); return; }
+        const scope = fileLinkScope.current;
+        const line = term.buffer.active.getLine(y - 1);
+        if (!scope?.active || !scope.threadId || !scope.root || !line || line.isWrapped || term.buffer.active.getLine(y)?.isWrapped
+          || !environmentAllows(getActiveEnvironment(), 'transfer')) { callback(undefined); return; }
+        const links = terminalFileLinks(line.translateToString(true), scope.root).map(({ start, end, file }) => ({
+          range: { start: { x: start + 1, y }, end: { x: end, y } },
+          text: line.translateToString(true).slice(start, end),
+          activate: event => {
+            const current = fileLinkScope.current;
+            const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
+            if (!(isMac ? event.metaKey : event.ctrlKey) || term.hasSelection() || !current?.active
+              || current.threadId !== scope.threadId || current.root !== scope.root || !environmentAllows(getActiveEnvironment(), 'transfer')) return;
+            setTerminalFilePreview({ threadId: scope.threadId, root: scope.root, file });
+          },
+        }));
+        callback(links.length ? links : undefined);
+      },
+    });
+
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
-    term.onSelectionChange?.(() => selectionListenersRef.current.forEach((listener) => listener()));
+    term.onSelectionChange?.(() => { selectionVersionRef.current++; selectionListenersRef.current.forEach((listener) => listener()); });
 
     const openWhenReady = () => {
       if (disposed || hasOpened) return;
@@ -2495,9 +2696,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (afterTs) {
           params.set('afterTs', String(afterTs));
         }
-        const response = await apiFetch(`/api/terminal/${sessionId}/history?${params.toString()}`);
-        if (!response.ok) throw new Error(`Terminal history was not available (${response.status}).`);
+        const expectedScope = strictActiveScope;
+        if (strictAuth) {
+          if (!expectedScope) throw new Error('Authentication is unavailable');
+          await readStrictScope(expectedScope);
+        }
+        const response = await terminalFetch(`/api/terminal/${sessionId}/history?${params.toString()}`);
+        const metadata = await terminalResponseMetadata(response);
+        if (!metadata.ok) throw new Error(`Terminal history was not available (${metadata.status}).`);
         const snapshot = await response.json();
+        if (strictAuth) await validateStrictResponse(response, { required: true });
+        if (strictAuth) await readStrictScope(expectedScope);
         return {
           history: Array.isArray(snapshot?.history) ? snapshot.history : [],
           currentCols: Number.isFinite(snapshot?.currentCols) ? snapshot.currentCols : null,
@@ -2539,6 +2748,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (disposed) return;
         const pending = pendingSocketDataRef.current;
         pendingSocketDataRef.current = [];
+        pendingSocketBytesRef.current = 0;
         if (pending.length === 0) return;
         const pendingChunks = unseenTerminalEvents(pending
           .map((item) => (typeof item === 'string' ? { text: item } : item))
@@ -2909,6 +3119,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
 
       const ensureFreshSocketToken = async () => {
+        if (strictAuth) {
+          try {
+            const initial = await readStrictScope();
+            if (!isAccessTokenExpired(initial.accessToken, 30)) return { ok: true, scope: initial };
+            const { incarnation, owner, session, home } = initial;
+            const result = await authLifecycle.refresh({ incarnation, owner, session, home }, { signal: strictLifetime.signal });
+            if (result?.status !== 'active') throw new Error('Authentication refresh is unavailable');
+            return { ok: true, scope: await readStrictScope(initial) };
+          } catch {
+            return { ok: false, message: 'Terminal authentication is unavailable. Reconnect after sign-in.' };
+          }
+        }
         const token = getAccessToken();
         if (!token) {
           return { ok: false, message: 'Session expired - please refresh' };
@@ -2989,10 +3211,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         let connectTimeout = null;
         lastServerPingAtRef.current = 0;
         const messageQueue = [];
+        let queuedMessageBytes = 0;
         activeMessageQueue = messageQueue;
         let processingQueue = false;
         let didOpen = false;
         let authConnected = false;
+        let strictAuthSent = false;
+        if (strictAuth) strictActiveScope = null;
         socketReadyForInputRef.current = false;
         const HEARTBEAT_INTERVAL = 10000;
         const HEARTBEAT_TIMEOUT = isMobile ? 30000 : 45000;
@@ -3056,7 +3281,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             } catch {}
           }, CONNECT_TIMEOUT);
 
-          socket.onopen = () => {
+          socket.onopen = async () => {
             if (disposed) return;
             if (!reconnectController.isCurrentAttempt(connectAttemptId)) {
               try {
@@ -3068,8 +3293,27 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             settleConnectAttempt();
             reconnectController.clearScheduledReconnect();
-            const token = getAccessToken();
-            if (token) socket.send(JSON.stringify({ type: 'auth', token }));
+            let token;
+            if (strictAuth) {
+              try {
+                const current = await readStrictScope(authResult.scope);
+                if (!reconnectController.isCurrentAttempt(connectAttemptId) || socketRef.current !== socket || socket.readyState !== WebSocket.OPEN) return;
+                strictActiveScope = current;
+                token = current.accessToken;
+              } catch {
+                invalidateStrictSocket();
+                return;
+              }
+            } else {
+              token = getAccessToken();
+            }
+            if (token) {
+              if (strictAuth) {
+                try { socket.send(JSON.stringify({ type: 'auth', token })); }
+                catch { invalidateStrictSocket(); return; }
+              } else socket.send(JSON.stringify({ type: 'auth', token }));
+            }
+            if (strictAuth) strictAuthSent = true;
             didOpen = true;
             if (connectTimeout) {
               clearTimeout(connectTimeout);
@@ -3151,8 +3395,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           let pendingWriteLastSeq = null;
           let pendingWriteFrame = null;
           let parserRecoveryNeeded = false;
-          const flushPendingWrites = () => {
+          const flushPendingWrites = async () => {
             if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) return;
+            if (strictAuth) {
+              try {
+                const expectedScope = strictActiveScope;
+                if (!expectedScope) throw new Error('Authentication is unavailable');
+                await readStrictScope(expectedScope);
+              } catch { invalidateStrictSocket(); return; }
+              if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) return;
+            }
             pendingWriteFrame = null;
             activePendingWriteFrame = null;
             if (parserRecoveryNeeded) {
@@ -3177,7 +3429,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             pendingWriteLastSeq = null;
 
             if (historyReloadingRef.current) {
-              pendingSocketDataRef.current.push({ text: data, seq: pendingSeq ?? undefined });
+              bufferPendingSocketData(data, pendingSeq ?? undefined);
               return;
             }
 
@@ -3335,9 +3587,22 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             while (messageQueue.length > 0 && !disposed && reconnectController.isCurrentAttempt(connectAttemptId)) {
               const event = messageQueue.shift();
               if (!event) break;
+              const expectedScope = strictActiveScope;
 
+              if (strictAuth) {
+                try {
+                  if (!expectedScope) throw new Error('Authentication is unavailable');
+                  await readStrictScope(expectedScope);
+                } catch { invalidateStrictSocket(); break; }
+              }
               const decoded = await decodeSocketData(event.data);
+              if (strictAuth) queuedMessageBytes = Math.max(0, queuedMessageBytes - event.bufferedBytes);
               if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) break;
+              if (strictAuth) {
+                try { await readStrictScope(expectedScope); }
+                catch { invalidateStrictSocket(); break; }
+                if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) break;
+              }
 
               lastServerPingAtRef.current = Date.now();
               if (decoded.type === 'meta') {
@@ -3382,10 +3647,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 lastOutputSeq = Math.max(lastOutputSeq, outputSeq);
               }
               if (historyReloadingRef.current) {
-                pendingSocketDataRef.current.push({
-                  text: data,
-                  seq: pendingServerSeqRef.current ?? undefined
-                });
+                bufferPendingSocketData(data, pendingServerSeqRef.current ?? undefined);
                 pendingServerSeqRef.current = null;
                 continue;
               }
@@ -3399,6 +3661,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           socket.onmessage = (event) => {
             if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) return;
+            if (strictAuth && !strictAuthSent) { invalidateStrictSocket(); return; }
+            if (strictAuth) {
+              const data = event.data;
+              const bytes = typeof data === 'string' ? data.length * 2 : data instanceof Blob ? data.size : data instanceof ArrayBuffer ? data.byteLength : Infinity;
+              if (queuedMessageBytes + bytes > MAX_STRICT_BUFFER_BYTES || messageQueue.length >= MAX_MESSAGE_QUEUE) {
+                messageQueue.length = 0;
+                queuedMessageBytes = 0;
+                invalidateStrictSocket('Terminal output exceeded the safe buffer. Reconnect to reload the terminal.');
+                return;
+              }
+              queuedMessageBytes += bytes;
+              event = { data, bufferedBytes: bytes };
+            }
             messageQueue.push(event);
             if (messageQueue.length > MAX_MESSAGE_QUEUE) {
               const overflow = messageQueue.length - MAX_MESSAGE_QUEUE;
@@ -3446,8 +3721,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               heartbeatTimer = null;
             }
             messageQueue.length = 0;
+            queuedMessageBytes = 0;
             if (isPermanentSocketClose(event, remoteEnvironment)) {
               handleAuthFailure(remoteEnvironment ? 'Remote access is unavailable or revoked. Return to Home to reconnect.' : 'Terminal access was denied.');
+              return;
+            }
+            if (strictAuth && (event.reason === 'Session ended' || event.reason === 'Terminal session not found' || event.code === 4404)) {
+              handleAuthFailure('Terminal restoration is unavailable in strict mode. Reopen the terminal after sign-in.');
               return;
             }
             if (event.reason === 'Session ended') {
@@ -3525,6 +3805,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               return;
             }
             if (event.reason === 'Unauthorized' || event.code === 4401) {
+              if (strictAuth) {
+                handleAuthFailure('Terminal authentication was rejected. Sign in again before reconnecting.');
+                return;
+              }
               refreshTokens()
                 .then(() => {
                   if (!disposed && shouldReconnect) {
@@ -3577,10 +3861,27 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
 
       const closeSocket = connectSocket();
+      let stopStrictAuth = () => {};
+      if (strictAuth && typeof authLifecycle?.subscribe === 'function') {
+        try {
+          const unsubscribe = authLifecycle.subscribe((event) => {
+            if (event?.status === 'unavailable') { invalidateStrictSocket(); return; }
+            const expected = strictActiveScope;
+            if (!expected || disposed) return;
+            void readStrictScope(expected).catch(() => {
+              if (!disposed && strictActiveScope === expected) invalidateStrictSocket();
+            });
+          });
+          if (typeof unsubscribe !== 'function') throw new Error('Authentication subscription is unavailable');
+          stopStrictAuth = unsubscribe;
+        } catch { invalidateStrictSocket(); }
+      }
       const stopEnvironmentSocket = () => {
+        strictLifetime.abort();
         reconnectController.stop();
         discardUnsentInput();
         pendingSocketDataRef.current = [];
+        pendingSocketBytesRef.current = 0;
         socketReadyForInputRef.current = false;
         socketRef.current?.close();
         onConnectionChange?.(false);
@@ -3721,6 +4022,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         e.preventDefault();
         try {
           const text = await navigator.clipboard.readText();
+          if (!activeBinding()) return;
           sendPastedText(text);
         } catch (err) {
           console.error('Failed to read clipboard:', err);
@@ -3749,10 +4051,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         } catch (error) {
           console.error('Failed to inspect clipboard image data:', error);
         }
-        if (disposed || environmentSignal.aborted) return;
+        if (!activeBinding()) return;
         if (imageFile && !shouldSendText) {
           e.preventDefault();
           e.stopPropagation();
+          if (strictAuth) { setInputDeliveryError('Image uploads are unavailable in strict mode.'); return; }
           uploadScreenshot(imageFile)
             .then((path) => {
               if (path) {
@@ -3775,6 +4078,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (imageFile) {
           e.preventDefault();
           e.stopPropagation();
+          if (strictAuth) { setInputDeliveryError('Image uploads are unavailable in strict mode.'); return; }
           uploadScreenshot(imageFile)
             .then((path) => {
               if (path) {
@@ -3799,6 +4103,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         document.removeEventListener('visibilitychange', handleVisibility);
         window.removeEventListener('online', handleOnline);
         window.removeEventListener('offline', handleOffline);
+        stopStrictAuth();
         environmentSignal.removeEventListener('abort', stopEnvironmentSocket);
         container.removeEventListener('contextmenu', handleContextMenu);
         container.removeEventListener('paste', handlePasteEvent, true);
@@ -3843,6 +4148,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     return () => {
       disposed = true;
+      strictLifetime.abort();
       discardUnsentInput();
       detectedUrlsRef.current.clear();
       sendSocketInputRef.current = null;
@@ -3930,7 +4236,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // separate live-update effects below.
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, onUrlDetected, isMobile, platformConfig.scrollback]);
+  }, [sessionId, onUrlDetected, isMobile, platformConfig.scrollback, strictAuth, authLifecycle, strictReady]);
 
   useEffect(() => {
     const term = xtermRef.current;
@@ -4133,15 +4439,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     <div
       className={`terminal-chat ${platformConfig.rootClassName}${isScrollMode ? ' scroll-mode' : ''}`}
       data-terminal-engine="terminal-v4-stable"
-      onDragOver={handleDragOver}
+      onDragOver={strictAuth ? (event) => event.preventDefault() : handleDragOver}
       onDragLeave={handleDragLeave}
-      onDrop={handleImageDrop}
+      onDrop={strictAuth ? (event) => { event.preventDefault(); setInputDeliveryError('Image uploads are unavailable in strict mode.'); } : handleImageDrop}
       onClick={handleTerminalTap}
       onTouchStartCapture={handleTouchStartCapture}
       onTouchMoveCapture={handleTouchMoveCapture}
       onTouchEndCapture={handleTouchEndCapture}
       onTouchCancelCapture={handleTouchCancelCapture}
     >
+      {!strictAuth && isPrimary && terminalFilePreview && terminalFilePreview.threadId === filePreviewThreadId && terminalFilePreview.root === filePreviewRoot && environmentAllows(environment, 'transfer') && <ProjectFilePreview
+        sessionId={terminalFilePreview.threadId} root={terminalFilePreview.root} file={terminalFilePreview.file} onClose={() => setTerminalFilePreview(null)} />}
       {inputDeliveryError && <div role="alert" className="terminal-input-error">{inputDeliveryError}</div>}
       <div
         ref={terminalRef}
@@ -4230,7 +4538,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         onClick={triggerFileInput}
         title="Upload image"
         aria-label="Upload image"
-        disabled={!inputEnabled || !environmentAllows(environment, 'fileWrite') || !environmentAllows(environment, 'transfer')}
+        disabled={strictAuth || !inputEnabled || !environmentAllows(environment, 'fileWrite') || !environmentAllows(environment, 'transfer')}
       >
         <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
@@ -4243,7 +4551,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         type="file"
         accept="image/*"
         style={{ display: 'none' }}
-        onChange={handleImageSelect}
+        onChange={strictAuth ? () => setInputDeliveryError('Image uploads are unavailable in strict mode.') : handleImageSelect}
       />
 
       {imageDragOver && (
@@ -4300,7 +4608,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         </div>
       )}
       <TerminalHistoryModal
-        isOpen={historyModalOpen}
+        isOpen={!strictAuth && historyModalOpen}
         sessionId={sessionId}
         onClose={() => setHistoryModalOpen(false)}
       />
