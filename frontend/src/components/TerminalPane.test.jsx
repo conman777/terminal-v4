@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { setActiveEnvironment, setEnvironmentIdentity } from '../utils/remoteEnvironments';
 import { clearTokens, setTokens, setUser } from '../utils/auth';
@@ -173,6 +174,8 @@ vi.mock('../hooks/useMobileChatTurns', () => ({
   })
 }));
 
+vi.mock('./ProviderAuthModal', () => ({ ProviderAuthModal: ({ isOpen, onClose, focusProviderId }) => isOpen
+  ? <div role="dialog" aria-label="Provider authentication" data-provider={focusProviderId}><button type="button" onClick={onClose}>Close provider settings</button></div> : null }));
 vi.mock('./WorkspaceToolsButton', () => ({ WorkspaceToolsButton: props => <span data-testid="workspace-tools-path" data-path={props.workspacePath} /> }));
 vi.mock('./WorkspaceProfileButton', () => ({ WorkspaceProfileButton: props => <span data-testid="workspace-knowledge-path" data-path={props.workspacePath} /> }));
 
@@ -1254,6 +1257,21 @@ describe('TerminalPane', () => {
       .toEqual([true, 'openai-api', false, undefined, false, undefined]);
   });
 
+  it('opens provider settings for the thread provider from a V4 thread chip and restores focus', async () => {
+    render(<TerminalPane {...buildProps({ pane: { id: 'pane-1', sessionId: 'ss-v4-provider' }, sessions: [{ id: 'ss-v4-provider', runtime: 'v4', aiType: 'azure-foundry', model: 'gpt-deploy', isActive: true }] })} />);
+    const chip = await screen.findByRole('button', { name: /Provider settings/ });
+    expect(chip).toHaveTextContent('V4 · gpt-deploy');
+    expect(chip.tagName).toBe('BUTTON');
+    expect(chip.tabIndex).toBe(0);
+    expect(screen.getByRole('textbox', { name: 'Command composer' }).compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    chip.focus();
+    await userEvent.keyboard(' ');
+    expect(screen.getByRole('dialog', { name: 'Provider authentication' })).toHaveAttribute('data-provider', 'azure-foundry');
+    fireEvent.click(screen.getByRole('button', { name: 'Close provider settings' }));
+    expect(screen.queryByRole('dialog', { name: 'Provider authentication' })).toBeNull();
+    expect(chip).toHaveFocus();
+  });
+
   it('passes authoritative cleanup status into the hook and keeps recovery in the actual desktop view', () => {
     structuredRequiresCleanup = true;
     const onSessionBusyChange = vi.fn();
@@ -1400,6 +1418,28 @@ describe('TerminalPane', () => {
     expect(structuredInterrupt).not.toHaveBeenCalled();
   });
 
+  it('keeps thread details closed by default and remembers the chosen state per browser', () => {
+    const original = window.matchMedia;
+    window.matchMedia = query => ({ matches: query === '(min-width: 1280px)', media: query, addEventListener() {}, removeEventListener() {} });
+    localStorage.removeItem('tv4ThreadDetailsOpen');
+    const props = () => buildProps({ pane: { id: 'pane-1', sessionId: 'ss-details-pref' }, sessionAiTypes: {}, sessions: [{ id: 'ss-details-pref', aiType: 'claude', cwd: '/repo/current', title: 'Chat', isActive: true }] });
+    try {
+      const first = render(<TerminalPane {...props()} />);
+      expect(screen.queryByRole('complementary', { name: 'Thread details' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle thread details panel' }));
+      first.unmount();
+      const second = render(<TerminalPane {...props()} />);
+      expect(screen.getByRole('complementary', { name: 'Thread details' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Toggle thread details panel' }));
+      second.unmount();
+      render(<TerminalPane {...props()} />);
+      expect(screen.queryByRole('complementary', { name: 'Thread details' })).toBeNull();
+    } finally {
+      window.matchMedia = original;
+      localStorage.removeItem('tv4ThreadDetailsOpen');
+    }
+  });
+
   it('toggles T3-style thread details and opens a terminal drawer in the thread folder', async () => {
     createSession.mockReset().mockResolvedValue({ id: 'pty-drawer' });
     updateThreadMetadata.mockImplementation((_id, patch) => Promise.resolve({ ...patch }));
@@ -1421,7 +1461,7 @@ describe('TerminalPane', () => {
     };
     try {
       expect([toggleSequence(true), toggleSequence(false), toggleSequence(true, false)]).toEqual([
-        ['thread-details-card', null, 'thread-details-card'],
+        [null, 'thread-details-card', null],
         [null, 'thread-details-card thread-details-floating', null],
         [null, null, null],
       ]);

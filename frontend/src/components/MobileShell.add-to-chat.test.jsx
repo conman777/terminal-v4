@@ -91,6 +91,28 @@ describe('MobileShell terminal selection menu', () => {
     expect(terminals.get('pty-drawer').copied).toBe(1);
   });
 
+  it('opens the menu when the terminal reports the selection just after the long press fires', async () => {
+    render(shell(sessions, 'ss-a', { threadTerminalOpen: true }));
+    const drawer = await screen.findByRole('region', { name: 'Thread terminal' });
+    await waitFor(() => expect(terminals.has('pty-drawer')).toBe(true));
+    fireEvent.touchStart(drawer, { touches: [{ clientX: 40, clientY: 60 }] });
+    act(() => { vi.advanceTimersByTime(500); });
+    select('pty-drawer', 'wrapped first row\ncontinued');
+    act(() => { vi.advanceTimersByTime(60); });
+    fireEvent.touchEnd(drawer);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add to chat: Alpha' }));
+    expect(draft('ss-a').chips).toEqual([expect.objectContaining({ body: 'wrapped first row\ncontinued' })]);
+  });
+
+  it('opens no menu when nothing is selected even after the settle delay', async () => {
+    render(shell(sessions, 'ss-a', { threadTerminalOpen: true }));
+    const drawer = await screen.findByRole('region', { name: 'Thread terminal' });
+    await waitFor(() => expect(terminals.has('pty-drawer')).toBe(true));
+    longPress(drawer);
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.queryByRole('group', { name: 'Context actions' })).not.toBeInTheDocument();
+  });
+
   it('opens no menu without a selection', async () => {
     render(shell(sessions, 'ss-a', { threadTerminalOpen: true }));
     const drawer = await screen.findByRole('region', { name: 'Thread terminal' });

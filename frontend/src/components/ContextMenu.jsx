@@ -25,13 +25,14 @@ export function ContextMenu({ x, y, items, onClose }) {
       onClose();
       return;
     }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Tab'].includes(event.key)) return;
     const actions = [...menuRef.current.querySelectorAll('button:not(:disabled)')];
     if (!actions.length) return;
     event.preventDefault();
     const current = actions.indexOf(document.activeElement);
+    const forward = event.key === 'ArrowDown' || (event.key === 'Tab' && !event.shiftKey);
     const next = event.key === 'Home' ? 0 : event.key === 'End' ? actions.length - 1
-      : (current + (event.key === 'ArrowDown' ? 1 : -1) + actions.length) % actions.length;
+      : (current + (forward ? 1 : -1) + actions.length) % actions.length;
     actions[next].focus();
   };
 

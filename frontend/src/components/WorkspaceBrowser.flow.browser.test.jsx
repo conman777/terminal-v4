@@ -574,8 +574,11 @@ describe('WorkspaceBrowser with an isolated managed Chromium helper', () => {
       await page.getByRole('textbox', { name: 'Browser address', exact: true }).fill(`${site}/responsive`);
       await page.getByRole('button', { name: 'Go', exact: true }).click();
       await page.getByRole('tab', { name: 'Responsive fixture', exact: true }).waitFor();
-      await remoteClick(300, 98);
-      await page.getByRole('tab', { name: 'INTENDED', exact: true }).waitFor();
+      const intendedTabs = page.getByRole('tab', { name: 'INTENDED', exact: true });
+      await expect.poll(async () => {
+        if (await intendedTabs.count() === 0) await remoteClick(300, 98);
+        return intendedTabs.count();
+      }, { timeout: 25000, intervals: [1500] }).toBeGreaterThan(0);
       await page.getByRole('tab', { name: 'Second fixture page', exact: true }).click();
       await page.waitForFunction(() => document.querySelector('.workspace-browser-surface img')?.naturalWidth > 0);
       await page.evaluate(() => window.hideBrowser());

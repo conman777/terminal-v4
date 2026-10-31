@@ -34,16 +34,17 @@ export function useTerminalAddToChat({ terminalId, owner, label = 'Terminal' }) 
     return true;
   }, [actions, label, ownerId, ownerTitle]);
 
-  const menuItems = useMemo(() => {
+  const getMenuItems = useCallback(() => {
     if (!actions?.hasSelection?.()) return [];
     const check = describeAddToChat({ owner: ownerId ? { threadId: ownerId, title: ownerTitle } : null, text: readText(actions) });
     return [
       { label: 'Copy selection', onClick: () => actions.copySelection?.() },
       { label: check.disabled ? `Add to chat (${check.reason.replace(/\.$/, '').replace(/^./, c => c.toLowerCase())})` : `Add to chat: ${ownerTitle}`, disabled: check.disabled, onClick: add },
     ];
-  }, [actions, add, ownerId, ownerTitle, text]);
+  }, [actions, add, ownerId, ownerTitle]);
+  const menuItems = useMemo(() => getMenuItems(), [getMenuItems, text]);
 
-  return { ...state, owner, added, register, add, menuItems, hasSelection: Boolean(text) };
+  return { ...state, owner, added, register, add, menuItems, getMenuItems, hasSelection: Boolean(text) };
 }
 
 export function TerminalAddToChat({ state, className = 'terminal-add-to-chat' }) {

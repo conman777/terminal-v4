@@ -34,6 +34,7 @@ import { useCurrentPullRequest } from '../hooks/useCurrentPullRequest';
 import { parseTerminalRuntimeInfo, resolveForegroundAiType } from '../utils/terminalRuntimeInfo';
 import { ProjectBadge } from './ProjectBadge';
 import { ThreadDetailsCard } from './ThreadDetailsCard';
+import { ProviderAuthModal } from './ProviderAuthModal';
 import { withAttachedFiles } from '../utils/attachedFiles';
 import { PLAN_MARKER } from '../utils/planMode';
 import { notifyAgent } from '../utils/agentNotifications';
@@ -101,7 +102,7 @@ function getPaneSessionLabel(session) {
 
 const THREAD_DETAILS_KEY = 'tv4ThreadDetailsOpen';
 function readThreadDetailsPreference() {
-  try { return localStorage.getItem(THREAD_DETAILS_KEY) !== 'false'; } catch { return true; }
+  try { return localStorage.getItem(THREAD_DETAILS_KEY) === 'true'; } catch { return false; }
 }
 function writeThreadDetailsPreference(open) {
   try { localStorage.setItem(THREAD_DETAILS_KEY, String(open)); } catch { /* preference is optional */ }
@@ -245,6 +246,8 @@ export const TerminalPane = memo(function TerminalPane({
   const matchingProjectInfo = !isStructuredSession && sessionCwd && projectInfo?.cwd === sessionCwd ? projectInfo : null;
   const [detailsOpen, setDetailsOpen] = useState(() => readThreadDetailsPreference());
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [providerSettingsOpen, setProviderSettingsOpen] = useState(false);
+  const providerSettingsTrigger = useRef(null);
   // Wide windows dock the card beside the conversation; narrower ones open it over the content on request.
   const installedSkills = useInstalledSkills(isStructuredSession ? sessionCwd : '');
   const [planMode, setPlanMode] = useState(false);
@@ -1203,6 +1206,8 @@ export const TerminalPane = memo(function TerminalPane({
           {threadGit.branch && <ThreadGitActions cwd={sessionCwd} branch={threadGit.branch} files={threadGit.files} onChanged={threadGit.refresh} />}
           {threadGit.branch && <PullRequestStatus cwd={sessionCwd} branch={threadGit.branch} />}
         </ThreadDetailsCard>}
+        {isV4Session && <ProviderAuthModal isOpen={providerSettingsOpen} focusProviderId={currentSession?.aiType || null}
+          onClose={() => { setProviderSettingsOpen(false); requestAnimationFrame(() => providerSettingsTrigger.current?.focus()); }} />}
         {pane.sessionId ? (
           <div className={`terminal-with-status${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
             <div className={`desktop-terminal-stack${isTerminalPanelOpen ? ' terminal-panel-open' : ''}${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
@@ -1392,7 +1397,9 @@ export const TerminalPane = memo(function TerminalPane({
                         <AgentModelPicker compact agentId="claude" syncSelection={false} disabled={modelChangeDisabled}
                           value={currentSession?.model ? { model: currentSession.model, reasoning: currentSession.reasoning || '' } : null}
                           onChange={handleSelectModel} />
-                      </div> : isStructuredSession && <span className="session-composer-context">{getStructuredAgentLabel(currentSession)}{currentSession?.model ? ` · ${currentSession.model}` : ''}</span>}
+                      </div> : isStructuredSession && (isV4Session
+                        ? <button type="button" ref={providerSettingsTrigger} className="session-composer-context session-composer-provider" aria-haspopup="dialog" aria-label={`Provider settings: ${getStructuredAgentLabel(currentSession)}${currentSession?.model ? ` · ${currentSession.model}` : ''}`} title="Provider settings" onClick={() => setProviderSettingsOpen(true)}>{getStructuredAgentLabel(currentSession)}{currentSession?.model ? ` · ${currentSession.model}` : ''}</button>
+                        : <span className="session-composer-context">{getStructuredAgentLabel(currentSession)}{currentSession?.model ? ` · ${currentSession.model}` : ''}</span>)}
                     <div className="session-composer-actions">
                     {(isV4Session || serverQueue.status === 'available') && <FollowupQueueButton sessionId={pane.sessionId} queue={serverQueue} />}
                     {isV4Session && <ConversationContextButton

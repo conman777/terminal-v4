@@ -4,6 +4,8 @@ import { DiffView } from './DiffView';
 import { prepareWorktreeCreation } from '../utils/worktreeCreationIntent';
 import { discardUnfinishedWorktree, fetchWorktreeProgress } from '../utils/worktreeProgress';
 import { WorktreeSetupCard } from './WorktreeSetupCard';
+import { WorkspaceGitShipping } from './WorkspaceGitShipping';
+import { useMobileDetect } from '../hooks/useMobileDetect';
 import './WorkspaceGitPanel.css';
 
 async function request(url, options) {
@@ -38,6 +40,7 @@ function GitWorkspace({ workspacePath, onStartTask }) {
   const [activeOperation, setActiveOperation] = useState(null);
   const mounted = useRef(false);
   const id = useId();
+  const isMobile = useMobileDetect();
   const query = new URLSearchParams({ path: workspacePath, mode, base, ...(checkpointId ? { checkpointId } : {}) }).toString();
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -116,6 +119,7 @@ function GitWorkspace({ workspacePath, onStartTask }) {
         </div>
       </div>
     </>}
+    {isMobile && workspacePath && <WorkspaceGitShipping cwd={workspacePath} onChanged={() => setRefresh(value => value + 1)} />}
     <h3>Isolated tasks</h3><p>Create a separate checkout and branch for a task, then choose its agent. It starts from committed code. Archiving saves a checkpoint and keeps the checkout, including ignored files, for reactivation.</p>
     <form className="workspace-git-inline" onSubmit={event => {
       event.preventDefault(); mutate(async () => {

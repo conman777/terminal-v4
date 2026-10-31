@@ -2,7 +2,8 @@ import { FileTransferPanel } from './FileTransferPanel';
 import { CollaborationPanel } from './CollaborationPanel';
 import { SessionReplayPanel } from './SessionReplayPanel';
 import { WorkspaceRewindPanel } from './WorkspaceRewindPanel';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { MobileDrawerContext } from '../contexts/MobileDrawerContext';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { useViewportMetrics } from '../hooks/useViewportHeight';
 import { createPortal } from 'react-dom';
@@ -139,9 +140,10 @@ export function WorkspaceToolsButton(props) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
   const wasOpen = useRef(false);
+  const drawer = useContext(MobileDrawerContext);
   const accessibleLabel = props.ariaLabel || props.label || 'Workspace tools';
   useEffect(() => { if (!open && wasOpen.current) triggerRef.current?.focus({ preventScroll: true }); wasOpen.current = open; }, [open]);
-  function close() { setOpen(false); }
+  function close() { setOpen(false); drawer?.closeDrawer(); }
   return <>
     <button className={`workspace-tools-button${props.iconOnly ? ' workspace-tools-button-icon-only' : ''}`} type="button" ref={triggerRef} aria-label={accessibleLabel}
       aria-haspopup="dialog" aria-expanded={open} title={accessibleLabel}

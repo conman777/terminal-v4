@@ -322,3 +322,16 @@
   opacity: 0.75;
 }
 .mobile-shell.mobile-ui .mobile-thread-terminal { position: relative; }
+
+.mobile-shell .mobile-draft-stash { display: grid; gap: 4px; min-width: 0; }
+.mobile-shell .mobile-draft-stash button {
+  display: flex; flex-direction: column; align-items: flex-start; justify-content: center; width: 100%; min-height: 44px; padding: 8px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: 13px var(--font-ui); text-align: left;
+}
+.mobile-shell .mobile-draft-stash button:disabled { opacity: .5; }
+.mobile-shell .mobile-draft-stash button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+.mobile-shell .mobile-draft-stash button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-shell .mobile-draft-stash button small { color: var(--text-muted); font-size: 11px; }
+.mobile-shell .mobile-stash-list { display: grid; gap: 2px; padding-left: 8px; border-left: 2px solid var(--border-subtle); }
+.mobile-shell .mobile-stash-list p, .mobile-shell .mobile-stash-error { margin: 0; padding: 4px 8px; font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.mobile-shell .mobile-stash-error { color: var(--error); }

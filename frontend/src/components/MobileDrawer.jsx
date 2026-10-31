@@ -1,5 +1,6 @@
 import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { MobileDrawerContext } from '../contexts/MobileDrawerContext';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { getCompactSessionSubtitle, getSessionDisplayInfo } from '../utils/sessionDisplay';
 import { downloadProjectArchive } from '../utils/projectArchiveDownload';
@@ -147,6 +148,7 @@ export function MobileDrawer({
   const searchingThreads = Boolean(threadSearch.trim());
   const showArchivedThreads = searchingThreads ? searchArchivedExpanded : archivedExpanded;
   const [historySearch, setHistorySearch] = useState({ rows: [], loading: false, error: '' });
+  useEffect(() => { if (!isOpen) { setThreadSearch(''); setSearchArchivedExpanded(true); } }, [isOpen]);
 
   useEffect(() => {
     const query = threadSearch.trim();
@@ -428,6 +430,8 @@ export function MobileDrawer({
     );
   }, [projects, searchQuery]);
 
+  const drawerContext = useMemo(() => ({ closeDrawer: () => onClose() }), [onClose]);
+
   const openAction = (callback) => {
     onClose();
     callback?.();
@@ -696,7 +700,7 @@ export function MobileDrawer({
           {(workspaceActions || onCreateTerminal) && (
             <section className="mobile-drawer-section-modern md-workspace-actions" aria-label="Project actions">
               <div className="mobile-drawer-section-title-modern">Project</div>
-              {workspaceActions}
+              <MobileDrawerContext.Provider value={drawerContext}>{workspaceActions}</MobileDrawerContext.Provider>
               {onCreateTerminal && <button type="button" className="md-action-item" onClick={() => openAction(onCreateTerminal)}><span aria-hidden="true">›_</span><span>New terminal</span></button>}
             </section>
           )}

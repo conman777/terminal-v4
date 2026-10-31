@@ -291,6 +291,18 @@ describe('advanced schedule capability', () => {
       expect.stringMatching(/^Missed 1 scheduled run while/),
     ]);
   });
+  it.each([true, undefined])('shows no scheduling-unavailable banner and leaves controls enabled when workerAvailable is %s', async workerAvailable => {
+    apiFetch.mockReset().mockImplementation(async url => ({ ok: true, json: async () => url === '/api/workspace/schedules/capabilities'
+      ? { advancedTimingProtocolVersion: 1, workerAvailable }
+      : { tasks: [task], schedules: [schedule] } }));
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByRole('button', { name: 'Run Morning review now' });
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules/capabilities', expect.anything()));
+    expect(screen.queryByText(/Scheduled tasks are unavailable/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Check build' } });
+    expect(screen.getByRole('button', { name: 'Queue task' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run Morning review now' })).toBeEnabled();
+  });
   it('shows a persistent banner and disables scheduling controls when the task worker is unavailable', async () => {
     apiFetch.mockReset().mockImplementation(async url => ({ ok: true, json: async () => url === '/api/workspace/schedules/capabilities'
       ? { advancedTimingProtocolVersion: 1, workerAvailable: false, workerReason: 'newer' }

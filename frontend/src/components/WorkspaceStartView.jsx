@@ -10,6 +10,7 @@ import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from
 import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { environmentAllows } from '../utils/runtimePermissions';
 import { DesktopStatusBar } from './DesktopStatusBar';
+import { ProviderAuthModal } from './ProviderAuthModal';
 import { useComposerDraft } from '../hooks/useComposerDraft';
 import { useStartImageDraft } from '../hooks/useStartImageDraft';
 import { prepareWorktreeCreation } from '../utils/worktreeCreationIntent';
@@ -58,6 +59,8 @@ async function createTaskWorktree(path, prompt, baseRef, operation) {
   return result.path;
 }
 
+const SETUP_STATUSES = ['auth-required', 'not-configured'];
+
 export function WorkspaceStartView({
   currentPath,
   projects = [],
@@ -78,6 +81,8 @@ export function WorkspaceStartView({
   const canExecuteAgent = canCreateSession && environmentAllows(environment, 'agentExecute');
   const { value: composerValue, setValue: setComposerValue, revision: composerDraftRevision, clearIfUnchanged: clearComposerDraft, error: composerDraftError, store: composerStore } = useComposerDraft('workspace-start');
   const [agents, setAgents] = useState([]);
+  const [providerSetupOpen, setProviderSetupOpen] = useState(false);
+  const setupButton = useRef(null);
   const [agentId, setAgentId] = useState('codex');
   const [selection, setSelection] = useState(() => loadSavedAgentSelection('codex'));
   const [selectedPath, setSelectedPath] = useState(currentPath || '');
@@ -127,7 +132,7 @@ export function WorkspaceStartView({
         const response = await apiFetch('/api/agent/catalog', { signal: controller.signal });
         const catalog = await response.json();
         if (!response.ok || !Array.isArray(catalog.agents)) throw new Error('Unable to load agents. Try again.');
-        const choices = catalog.agents.filter(agent => isConversationAgent(agent) && (agent.available === true || agent.id === 'codex'));
+        const choices = catalog.agents.filter(agent => isConversationAgent(agent) && (agent.available === true || agent.id === 'codex' || SETUP_STATUSES.includes(agent.status)));
         if (!choices.length) throw new Error('No compatible agents are available. Configure an agent, then try again.');
         if (controller.signal.aborted) return;
         setAgents(choices);
@@ -402,10 +407,16 @@ export function WorkspaceStartView({
           </div>}
 
           {catalogError && <button type="button" className="workspace-start-retry" onClick={() => setCatalogAttempt(attempt => attempt + 1)}>Retry loading agents</button>}
+          {canExecuteAgent && !environment && agentUnavailable && !loading && <button type="button" ref={setupButton} className="workspace-start-retry" disabled={starting} onClick={() => setProviderSetupOpen(true)}>Set up {selectedAgent.label || 'provider'}</button>}
           {canRecheck && <button type="button" className="workspace-start-retry" onClick={() => setCatalogAttempt(attempt => attempt + 1)}>Recheck availability</button>}
           {startHint && (!attachmentDraft.pending || starting) && <p role="status" className="workspace-start-hint">{startHint}</p>}
         </div>
       </div>
+      <ProviderAuthModal isOpen={providerSetupOpen} focusProviderId={agentId} onClose={() => {
+        setProviderSetupOpen(false);
+        setCatalogAttempt(attempt => attempt + 1);
+        requestAnimationFrame(() => setupButton.current?.focus());
+      }} />
     </section>
   );
 }

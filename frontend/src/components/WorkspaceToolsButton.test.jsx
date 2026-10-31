@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WorkspaceToolsButton } from './WorkspaceToolsButton';
 import { useState } from 'react';
+import { MobileDrawerContext } from '../contexts/MobileDrawerContext';
 
 vi.mock('./WorkspaceGitPanel', () => ({ WorkspaceGitPanel: ({ onStartTask }) => <button onClick={() => onStartTask('/worktree')}>Open managed task</button> }));
 vi.mock('./SessionHistorySearch', () => ({ SessionHistorySearch: ({ onSelectSession }) => <button onClick={() => onSelectSession('saved-session')}>Open saved conversation</button> }));
@@ -200,4 +201,26 @@ it('shows grouped tool navigation and restores focus when returning to the index
   expect(screen.getByRole('tab', { name: 'History' })).toHaveFocus();
   window.visualViewport.width = originalVisualWidth;
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
+});
+
+describe('WorkspaceToolsButton inside the mobile drawer', () => {
+  it('closes the drawer after the tools are dismissed or an item is chosen', async () => {
+    const closeDrawer = vi.fn();
+    const view = render(<MobileDrawerContext.Provider value={{ closeDrawer }}><WorkspaceToolsButton workspacePath="/project" initialTool="git" label="Project tools" onStartTask={vi.fn()} /></MobileDrawerContext.Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Project tools' }));
+    expect(closeDrawer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close workspace tools' }));
+    expect(closeDrawer).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Project tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open managed task' }));
+    await waitFor(() => expect(closeDrawer).toHaveBeenCalledTimes(2));
+    view.unmount();
+  });
+
+  it('works without a drawer around it', () => {
+    render(<WorkspaceToolsButton workspacePath="/project" initialTool="git" label="Project tools" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Project tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close workspace tools' }));
+    expect(screen.getByRole('button', { name: 'Project tools' })).toHaveFocus();
+  });
 });

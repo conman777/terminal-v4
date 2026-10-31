@@ -46,4 +46,18 @@ describe('ContextMenu keyboard interaction', () => {
     expect(trigger).toHaveFocus();
     trigger.remove();
   });
+
+  it('keeps Tab and Shift+Tab inside the menu', () => {
+    render(<><button type="button">Outside</button><ContextMenu x={12} y={12} onClose={vi.fn()} items={[
+      { label: 'Copy selection', onClick: vi.fn() },
+      { label: 'Add to chat', onClick: vi.fn() },
+    ]} /></>);
+    expect(screen.getByRole('button', { name: 'Copy selection' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: 'Add to chat' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: 'Copy selection' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement, { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: 'Add to chat' })).toHaveFocus();
+  });
 });

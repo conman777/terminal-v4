@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileDrawer } from './MobileDrawer';
 import { setActiveEnvironment } from '../utils/remoteEnvironments';
+import { MobileDrawerContext } from '../contexts/MobileDrawerContext';
+import { useContext } from 'react';
 
 const downloadProjectArchiveMock = vi.fn();
 const apiFetchMock = vi.fn();
@@ -445,6 +447,28 @@ describe('MobileDrawer', () => {
       expect(callback).toHaveBeenCalledWith();
     }
     expect(props.onClose).toHaveBeenCalledTimes(4);
+  });
+
+  it('lets project actions close the drawer through its context', () => {
+    function Probe() { const drawer = useContext(MobileDrawerContext); return <button type="button" onClick={() => drawer?.closeDrawer()}>Probe tools closed</button>; }
+    const props = buildProps({ workspaceActions: <Probe /> });
+    render(<MobileDrawer {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Probe tools closed' }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the thread search when the drawer closes and shows pinned ordering again on reopen', () => {
+    const sessions = [{ id: 'a', title: 'First' }, { id: 'b', title: 'Pinned one', thread: { pinned: true } }, { id: 'c', title: 'Last' }];
+    const props = buildProps({ activeSessions: sessions, sessionsGroupedByProject: [{ projectName: 'Project', sessions }] });
+    const { rerender } = render(<MobileDrawer {...props} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'Last' } });
+    expect(screen.queryByRole('button', { name: 'First' })).not.toBeInTheDocument();
+    rerender(<MobileDrawer {...props} isOpen={false} />);
+    rerender(<MobileDrawer {...props} isOpen />);
+    expect(screen.getByRole('searchbox', { name: 'Search threads' })).toHaveValue('');
+    const dialog = screen.getByRole('dialog', { name: 'Mobile menu' });
+    const titles = [...dialog.querySelectorAll('.mobile-drawer-project-sessions-modern .thread-item-title-modern')].map(node => node.textContent);
+    expect(titles).toEqual(['Pinned one', 'First', 'Last']);
   });
 
   it('restores focus and releases body scrolling when unmounted while open', () => {

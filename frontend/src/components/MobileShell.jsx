@@ -14,6 +14,7 @@ import { DesktopStatusBar } from './DesktopStatusBar';
 import { MobileModelSettings } from './MobileModelSettings';
 import { serviceTierEntry } from '../utils/agentServiceTier';
 import { MobileKeybar } from './MobileKeybar';
+import { MobileDraftStash } from './MobileDraftStash';
 import { WorkspaceStartView } from './WorkspaceStartView';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
@@ -44,6 +45,7 @@ import { parseTerminalRuntimeInfo, resolveForegroundAiType } from '../utils/term
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import './MobileUI.css';
 
+const SELECTION_SETTLE_MS = 150;
 const ANSI_ESCAPE_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 function extractTerminalPreviewLines(chunk) {
@@ -186,12 +188,22 @@ export function MobileShell({
   const drawerAddToChat = useTerminalAddToChat({ terminalId: threadTerminal.terminalId, owner: drawerOwner, label: 'Thread terminal' });
   const [selectionMenu, setSelectionMenu] = useState(null);
   const closeSelectionMenu = useCallback(() => setSelectionMenu(null), []);
+  const selectionTimer = useRef(null);
   const openSelectionMenu = useCallback((addToChat, coords) => {
-    if (addToChat.menuItems.length) setSelectionMenu({ x: coords?.x || 12, y: coords?.y || 12, items: addToChat.menuItems });
+    clearTimeout(selectionTimer.current);
+    selectionTimer.current = setTimeout(() => {
+      const items = addToChat.current.getMenuItems();
+      if (items.length) setSelectionMenu({ x: coords?.x || 12, y: coords?.y || 12, items });
+    }, SELECTION_SETTLE_MS);
   }, []);
-  const mainSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(mainAddToChat, coords), [mainAddToChat, openSelectionMenu]));
-  const drawerSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(drawerAddToChat, coords), [drawerAddToChat, openSelectionMenu]));
-  useEffect(() => { setSelectionMenu(null); }, [currentSession?.id, threadTerminal.terminalId]);
+  const mainAddToChatRef = useRef(mainAddToChat);
+  const drawerAddToChatRef = useRef(drawerAddToChat);
+  mainAddToChatRef.current = mainAddToChat;
+  drawerAddToChatRef.current = drawerAddToChat;
+  const mainSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(mainAddToChatRef, coords), [openSelectionMenu]));
+  const drawerSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(drawerAddToChatRef, coords), [openSelectionMenu]));
+  useEffect(() => () => clearTimeout(selectionTimer.current), []);
+  useEffect(() => { clearTimeout(selectionTimer.current); setSelectionMenu(null); }, [currentSession?.id, threadTerminal.terminalId]);
   const agentExecutionAllowed = visible && environmentAllows(environment, 'agentExecute');
   const sessionInputAllowed = isStructuredSession ? agentExecutionAllowed : terminalInputAllowed;
   const inferredAiType = currentSession ? (isManagedConversation ? inferSessionAiType(currentSession) : sessionAiTypes[currentSession.id] ?? inferSessionAiType(currentSession)) : null;
@@ -784,6 +796,7 @@ export function MobileShell({
                   value={currentSession.model ? { model: currentSession.model, reasoning: currentSession.reasoning || '', ...(isCodexSession ? serviceTierEntry(currentSession.serviceTier) : {}) } : null}
                   onChange={handleSelectModel} />}
                 composerSecondaryAction={<>
+                  {isStructuredSession && <MobileDraftStash composerValue={composerValue} onComposerChange={setComposerValue} />}
                   {(isCodexSession || isClaudeChat) && sessionInputAllowed && <button type="button" className={`mobile-plan-toggle${planMode ? ' active' : ''}`} aria-label="Plan mode" aria-pressed={planMode}
                     disabled={modelChangeDisabled} onClick={() => setPlanMode(value => !value)}>Plan mode: {planMode ? 'On' : 'Off'}</button>}
                   {(isV4Session || serverQueue.status === 'available') && <FollowupQueueButton sessionId={currentSession?.id} queue={serverQueue} />}

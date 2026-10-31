@@ -40,3 +40,8 @@
   .workspace-git-panel :is(select, input:not([type=checkbox]):not([type=range]), textarea) { font-size: 16px; }
   .workspace-git-panel label:has(input[type=checkbox]) { min-height: 44px; align-items: center; }
 }
+
+.workspace-git-shipping { display: grid; gap: 8px; min-width: 0; }
+.workspace-git-panel .workspace-git-shipping :is(button.thread-details-row, a.thread-details-row) { width: 100%; min-height: 44px; }
+.workspace-git-panel .workspace-git-shipping :is(.thread-git-buttons, .thread-pr-actions) button { min-height: 44px; }
+.workspace-git-panel .workspace-git-shipping .thread-git-note { font-size: 13px; }

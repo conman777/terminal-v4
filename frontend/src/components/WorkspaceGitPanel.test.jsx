@@ -3,18 +3,29 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WorkspaceGitPanel } from './WorkspaceGitPanel';
 import { setUser } from '../utils/auth';
 const apiFetch = vi.fn();
-vi.mock('../utils/api', () => ({ apiFetch: (...args) => apiFetch(...args) }));
+let mobile = false;
+vi.mock('../hooks/useMobileDetect', () => ({ useMobileDetect: () => mobile }));
+vi.mock('../utils/api', () => ({ apiFetch: (...args) => apiFetch(...args), apiGet: () => Promise.resolve({ pullRequest: null, availability: 'ok', repository: '/projects/example' }), apiPost: vi.fn() }));
 const path = '/projects/example';
 const tree = { id: 'tree', name: 'Fix example', path: '/tasks/example', branch: 'codex/fix-example', available: true };
 const reply = data => ({ ok: true, json: async () => data });
 describe('WorkspaceGitPanel', () => {
   beforeEach(() => {
-    localStorage.clear(); setUser({ id: 'fixture-user' });
+    localStorage.clear(); setUser({ id: 'fixture-user' }); mobile = false;
     apiFetch.mockReset(); apiFetch.mockImplementation(async url => {
       if (url.includes('/worktrees') || url.includes('/checkpoints')) return reply([]);
       if (url.includes('/diff')) return reply({ patch: '+<script>unsafe()</script>', binary: false, truncated: false });
       return reply({ branch: 'feature', files: [{path: 'src/example.js', status:' M', added:2, removed:1}], truncated:false });
     });
+  });
+  it('adds the commit and pull request section only on mobile layouts', async () => {
+    const view = render(<WorkspaceGitPanel workspacePath={path} />);
+    await screen.findByText('Isolated tasks');
+    expect(screen.queryByRole('button', { name: 'Commit, push & PR' })).toBeNull();
+    view.unmount();
+    mobile = true;
+    render(<WorkspaceGitPanel workspacePath={path} />);
+    expect(await screen.findByRole('button', { name: 'Commit, push & PR' })).toBeInTheDocument();
   });
   it('reviews escaped diff text and staged changes', async () => {
     render(<WorkspaceGitPanel workspacePath={path} />);

@@ -1437,7 +1437,7 @@ button {
 .terminal-chat-desktop {
   --terminal-scroll-buttons-bottom: 52px;
   --terminal-scroll-buttons-right: 14px;
-  --terminal-readable-width: 880px;
+  --terminal-readable-width: 100%;
 }
 
 .terminal-chat-desktop .xterm-container {

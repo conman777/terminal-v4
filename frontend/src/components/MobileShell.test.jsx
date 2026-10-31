@@ -1,4 +1,4 @@
-import { setActiveEnvironment } from '../utils/remoteEnvironments';
+import { setActiveEnvironment, setEnvironmentIdentity } from '../utils/remoteEnvironments';
 import { clearTokens, setTokens, setUser } from '../utils/auth';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -266,6 +266,27 @@ describe('MobileShell', () => {
     fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Existing draft' } });
     act(() => lastConversationViewProps.onEditMessage('Earlier message'));
     expect(screen.getByLabelText('Command composer')).toHaveValue('Existing draft\n\nEarlier message');
+  });
+
+  it('stashes the thread draft from the composer actions and restores it', async () => {
+    localStorage.clear();
+    setEnvironmentIdentity('stash-account');
+    const session = { id: 'ss-mobile-stash', runtime: 'codex', cwd: '/work/project' };
+    renderMobileShell({ sessions: [session], activeSessionId: session.id });
+    await screen.findByTestId('desktop-conversation-view');
+    fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Half-written idea' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Stash' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stash this draft' }));
+    expect(screen.getByLabelText('Command composer')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: /Restore draft: Half-written idea/ }));
+    expect(screen.getByLabelText('Command composer')).toHaveValue('Half-written idea');
+    setEnvironmentIdentity('');
+  });
+
+  it('offers no stash control for a plain terminal session', async () => {
+    renderMobileShell();
+    await screen.findByTestId('terminal-chat');
+    expect(screen.queryByRole('button', { name: /^Stash/ })).toBeNull();
   });
 
   it('sends a plan request and implements a plan without losing a separate draft', async () => {

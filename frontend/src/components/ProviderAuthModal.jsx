@@ -25,14 +25,14 @@ function setupLabel(provider) {
   return provider.methods?.includes('oauth') ? 'OAuth login' : 'Native/cloud setup';
 }
 
-export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
+export function ProviderAuthModal({ isOpen, onClose, sessionId = null, focusProviderId = null }) {
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
   const writing = useRef(false);
   const [pending, setPending] = useState(false);
-  return isOpen ? <OpenProviderAuthModal key={`${environment?.id || 'home'}:${sessionId || ''}`} onClose={onClose} sessionId={sessionId} remoteEnvironment={environment} writing={writing} pending={pending} onWritingChange={setPending} /> : null;
+  return isOpen ? <OpenProviderAuthModal key={`${environment?.id || 'home'}:${sessionId || ''}:${focusProviderId || ''}`} onClose={onClose} sessionId={sessionId} focusProviderId={focusProviderId} remoteEnvironment={environment} writing={writing} pending={pending} onWritingChange={setPending} /> : null;
 }
 
-function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing, pending, onWritingChange }) {
+function OpenProviderAuthModal({ onClose, sessionId, focusProviderId, remoteEnvironment, writing, pending, onWritingChange }) {
   const dialog = useRef(null);
   const mounted = useRef(false);
   const inheritedWrite = useRef(pending);
@@ -102,6 +102,17 @@ function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing,
     load();
     return () => { mounted.current = false; statusRequest.current?.abort(); clearTimeout(copyTimer.current); };
   }, []);
+
+  const focusedProvider = useRef(false);
+  useEffect(() => {
+    if (!focusProviderId || focusedProvider.current || loading || !providers.length) return;
+    const card = [...dialog.current.querySelectorAll('[data-provider-id]')].find(node => node.dataset.providerId === focusProviderId);
+    const target = card?.querySelector('input:not(:disabled)');
+    if (!target) return;
+    focusedProvider.current = true;
+    target.focus();
+    target.scrollIntoView?.({ block: 'nearest' });
+  }, [focusProviderId, loading, providers]);
 
   const settingValue = (provider, key) => settingValues[provider.id]?.[key] ?? provider.configuredSettings?.[key] ?? '';
   const missingSettings = provider => (provider.settings || []).some(field => field.required && !String(settingValue(provider, field.key)).trim());
@@ -218,7 +229,7 @@ function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing,
           {!loading && (
             <div className="tv4-provider-auth-list">
               {providers.map(provider => (
-                <section className="tv4-provider-auth-card" key={provider.id}>
+                <section className="tv4-provider-auth-card" key={provider.id} data-provider-id={provider.id}>
                   <div className="tv4-provider-auth-card-header">
                     <strong>{provider.label}</strong>
                     <span className={`tv4-provider-auth-status tv4-provider-auth-status-${provider.status}`}>{statusLabel(provider)}</span>
