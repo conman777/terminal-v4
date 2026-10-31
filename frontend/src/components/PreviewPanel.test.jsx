@@ -289,6 +289,7 @@ describe('PreviewPanel', () => {
     const { container } = render(<PreviewPanel {...buildProps({ url: '/preview/4173/app', projectInfo: { cwd: '/synthetic/project', projectType: 'unknown' } })} />);
     expect(previewUrlBarSpy.mock.lastCall[0].previewLoaded).toBe(false);
     await waitFor(() => expect(container.querySelector('iframe')?.src).toContain('previewToken'));
+    await act(async () => {});
     fireEvent.load(container.querySelector('iframe'));
     expect(previewUrlBarSpy.mock.lastCall[0].previewLoaded).toBe(true);
     fireEvent.error(container.querySelector('iframe'));

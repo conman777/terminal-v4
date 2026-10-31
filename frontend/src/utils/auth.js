@@ -180,7 +180,7 @@ function withRefreshLock(name, run) {
             // still owns a live transaction before any token side effect.
             try { store.get(name); }
             catch { work.reject(lost()); fail(); return; }
-            try { work.resolve(work.work()); }
+            try { work.resolve(work.work(store)); }
             catch (error) { work.reject(error); }
           }
           keepAlive();
@@ -189,6 +189,39 @@ function withRefreshLock(name, run) {
       keepAlive();
     };
   });
+}
+
+const CONSUMED_KEY = 'consumed';
+const CONSUMED_LIMIT = 8;
+const STORAGE_CATCH_UP_MS = 3000;
+
+function fingerprint(value) {
+  let a = 0xdeadbeef, b = 0x41c6ce57;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    a = Math.imul(a ^ code, 2654435761);
+    b = Math.imul(b ^ code, 1597334677);
+  }
+  a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909);
+  b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+  return (b >>> 0).toString(16) + (a >>> 0).toString(16);
+}
+
+function readConsumed(store) {
+  if (!store) return [];
+  return new Promise((resolve, reject) => {
+    const request = store.get(CONSUMED_KEY);
+    request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function awaitStorageCatchUp(refreshToken) {
+  const deadline = Date.now() + STORAGE_CATCH_UP_MS;
+  while (getRefreshToken() === refreshToken) {
+    if (Date.now() >= deadline) throw new Error('Token refresh temporarily unavailable');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
 }
 
 // Same-account rotation shares a promise locally and exclusive ownership across tabs.
@@ -202,6 +235,10 @@ export async function refreshTokens() {
   pending.promise = Promise.resolve().then(async () => {
     try {
       const result = await withRefreshLock(`terminal-auth-refresh:${JSON.stringify([scope.home, scope.userId])}`, async owned => {
+        const consumed = await owned(readConsumed);
+        const tokenFingerprint = fingerprint(refreshToken);
+        // Cross-process localStorage can lag the lock hand-off; a ledger entry proves this token was already spent.
+        if (consumed.includes(tokenFingerprint)) await awaitStorageCatchUp(refreshToken);
         const started = await owned(() => {
           if (!isAuthScopeCurrent(scope)) throw new Error('Authentication changed');
           // Another tab may have rotated while this request was waiting for ownership.
@@ -227,7 +264,7 @@ export async function refreshTokens() {
           }
         });
         const data = await response.json();
-        return owned(() => {
+        return owned(store => {
           if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken || getAccessToken() !== accessToken) throw new Error('Authentication changed');
           const tokens = data?.tokens || data;
           if (!tokens?.accessToken || !tokens?.refreshToken) {
@@ -237,6 +274,7 @@ export async function refreshTokens() {
           localStorage.setItem(ACCESS_TOKEN_KEY, tokens.accessToken);
           localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
           if (data.user) localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+          if (tokens.refreshToken !== refreshToken) store?.put([tokenFingerprint, ...consumed].slice(0, CONSUMED_LIMIT), CONSUMED_KEY);
           notifyAuth(data.user ? 'identity' : 'rotation');
           return { accessToken: tokens.accessToken, user: data.user };
         });

@@ -65,6 +65,24 @@ describe('refreshTokens across independent same-origin browser tabs', () => {
     expect(requests).toEqual([{ refreshToken: initial.refresh }]);
   });
 
+  it('does not replay a consumed refresh token while another tab\'s rotation has not reached this tab\'s storage view', async () => {
+    for (const page of [first, second]) await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
+    await second.evaluate(() => {
+      const lagging = new Set(['terminal_access_token', 'terminal_refresh_token']), getItem = Storage.prototype.getItem, view = {};
+      for (const key of lagging) view[key] = getItem.call(localStorage, key);
+      window.thaw = () => { window.thawed = true; };
+      Storage.prototype.getItem = function (key) { return !window.thawed && lagging.has(key) ? view[key] : getItem.call(this, key); };
+    });
+    await start(first); await expect.poll(() => requests.length).toBe(1);
+    await start(second);
+    release(); await finished(first);
+    await second.waitForTimeout(300);
+    expect(requests).toEqual([{ refreshToken: initial.refresh }]);
+    await second.evaluate(() => thaw()); await finished(second);
+    expect(await snapshot(second)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+    expect(requests).toEqual([{ refreshToken: initial.refresh }]);
+  });
+
   it('fences logout while an HTTP tab is queued behind another refresh', async () => {
     for (const page of [first, second]) await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
     await start(first); await expect.poll(() => requests.length).toBe(1);
@@ -223,5 +241,19 @@ describe('refreshTokens across independent same-origin browser tabs', () => {
     expect((await snapshot(second)).outcome).toEqual({ name: 'AbortError' });
     expect(requests).toEqual([{ refreshToken: initial.refresh }]);
     expect(apiRequests).toEqual([{ body: '', authorization: `Bearer ${initial.access}` }]);
+  });
+
+  it('does not lock a session out when a server answers with the refresh token it was sent', async () => {
+    for (const page of [first, second]) await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
+    await start(first); await expect.poll(() => requests.length).toBe(1);
+    release(200, { tokens: { accessToken: rotated.access, refreshToken: initial.refresh } });
+    await finished(first);
+    expect((await snapshot(first)).outcome).toEqual({ accessToken: rotated.access });
+    consumed = false;
+    await start(first); await expect.poll(() => requests.length).toBe(2);
+    release(200, { tokens: { accessToken: 'synthetic-second-access', refreshToken: initial.refresh } });
+    await finished(first);
+    expect((await snapshot(first)).outcome).toEqual({ accessToken: 'synthetic-second-access' });
+    expect(requests).toEqual([{ refreshToken: initial.refresh }, { refreshToken: initial.refresh }]);
   });
 });
