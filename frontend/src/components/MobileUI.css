@@ -266,6 +266,10 @@
 .mobile-shell.mobile-ui .mobile-thread-terminal-tabs { display: flex; flex: 0 0 auto; overflow-x: auto; border-bottom: 1px solid var(--border-subtle); }
 .mobile-shell.mobile-ui .mobile-thread-terminal-tabs button { flex: 0 0 auto; min-height: 44px; min-width: 44px; padding: 0 12px; border: 0; background: transparent; color: var(--text-secondary); font: 13px var(--font-ui); }
 .mobile-shell.mobile-ui .mobile-thread-terminal-tabs button[aria-selected="true"] { background: var(--bg-surface); color: var(--text-primary); }
+.mobile-shell.mobile-ui .mobile-thread-terminal-confirm { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary); font: 13px var(--font-ui); }
+.mobile-shell.mobile-ui .mobile-thread-terminal-confirm p { flex: 1 1 180px; margin: 0; }
+.mobile-shell.mobile-ui .mobile-thread-terminal-confirm button { min-height: 44px; padding: 0 12px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); }
+.mobile-shell.mobile-ui .mobile-thread-terminal-confirm button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 .mobile-shell.mobile-ui .mobile-shell-session-strip { flex-shrink: 0; padding: 8px 12px; background: var(--bg-base); }
 .mobile-shell.mobile-ui .mobile-shell-session-card { min-height: 44px; border-radius: 6px; border-color: var(--border-subtle); background: var(--bg-surface); }
 .mobile-shell.mobile-ui .mobile-shell-session-card.active { border-color: var(--border-default); background: var(--bg-hover); box-shadow: none; }

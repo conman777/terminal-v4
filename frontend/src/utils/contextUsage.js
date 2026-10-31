@@ -8,11 +8,15 @@ export function latestContextUsage(controlState) {
 
 // A small "Context N%" reading for the composer, with token and cost detail for its tooltip.
 export function contextMeter(usage) {
-  if (!usage?.contextWindow || !Number.isFinite(usage.contextTokens)) return null;
+  const validTokens = value => Number.isSafeInteger(value) && value >= 0;
+  if (!validTokens(usage?.contextWindow) || usage.contextWindow === 0 || !validTokens(usage.contextTokens)) return null;
   const percent = Math.min(100, Math.round((usage.contextTokens / usage.contextWindow) * 100));
-  const tokens = value => Number(value || 0).toLocaleString('en-US');
+  const tokens = value => value.toLocaleString('en-US');
   const parts = [`${tokens(usage.contextTokens)} of ${tokens(usage.contextWindow)} tokens`];
-  if (Number.isFinite(usage.inputTokens)) parts.push(`${tokens(usage.inputTokens)} in, ${tokens(usage.outputTokens)} out`);
-  if (Number.isFinite(usage.costUsd)) parts.push(`$${usage.costUsd.toFixed(2)}`);
+  const counters = [];
+  if (validTokens(usage.inputTokens)) counters.push(`${tokens(usage.inputTokens)} in`);
+  if (validTokens(usage.outputTokens)) counters.push(`${tokens(usage.outputTokens)} out`);
+  if (counters.length) parts.push(counters.join(', '));
+  if (Number.isFinite(usage.costUsd) && usage.costUsd >= 0) parts.push(`$${usage.costUsd.toFixed(2)}`);
   return { percent, label: `Context ${percent}%`, detail: parts.join(' · ') };
 }

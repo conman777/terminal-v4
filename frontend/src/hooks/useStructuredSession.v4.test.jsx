@@ -540,6 +540,33 @@ describe('owned V4 structured session contract', () => {
       expect(apiFetch).not.toHaveBeenCalled();
     } finally { view.unmount(); act(() => setEnvironmentIdentity('')); }
   });
+  it('does not retain context usage across environment changes for the same session', async () => {
+    const view = renderSession('ss-context-scope', true);
+    await act(async () => { await Promise.resolve(); });
+    const late = Socket.instances.at(-1).onmessage;
+    act(() => emit({ seq: 1, type: 'context_usage', usage: { requestBytes: 123 } }));
+    expect(view.result.current.contextUsage).toEqual({ requestBytes: 123 });
+    await act(async () => {
+      setActiveEnvironment({ id: 'other-context-host', capabilities: { agentExecute: true } });
+      await Promise.resolve();
+    });
+    act(() => late({ data: JSON.stringify({ __terminal_meta: true, type: 'structured_event', event: { seq: 2, type: 'context_usage', usage: { requestBytes: 456 } } }) }));
+    expect(view.result.current.contextUsage).toBeNull();
+    act(() => emit({ seq: 1, type: 'context_usage', usage: { requestBytes: 789 } }));
+    expect(view.result.current.contextUsage).toEqual({ requestBytes: 789 });
+    await act(async () => { setActiveEnvironment(null); await Promise.resolve(); });
+    expect(view.result.current.contextUsage).toBeNull();
+    view.unmount();
+  });
+  it('clears the context reading when an event gap requires a history reset', async () => {
+    const view = renderSession('ss-context-gap', true);
+    await act(async () => { await Promise.resolve(); });
+    act(() => emit({ seq: 1, type: 'context_usage', usage: { requestBytes: 123 } }));
+    expect(view.result.current.contextUsage).toEqual({ requestBytes: 123 });
+    act(() => Socket.instances.at(-1).onmessage({ data: JSON.stringify({ __terminal_meta: true, type: 'events_lost' }) }));
+    expect(view.result.current.contextUsage).toBeNull();
+    view.unmount();
+  });
   it('does not project owned controls for optional legacy structured providers', async () => {
     const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-legacy-control', active: true }));
     await act(async () => { await Promise.resolve(); });

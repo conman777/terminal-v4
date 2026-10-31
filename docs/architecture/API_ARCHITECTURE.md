@@ -314,7 +314,8 @@ authenticated owner; malformed IDs and unsupported operations are rejected.
 | GET | /api/system/doctor | Setup check: Git, Claude Code, Codex, GitHub CLI and data folder, each with a fix |
 | GET | /api/workspace/files?path=&query= | Project files matching an `@` mention (git ls-files, or a bounded walk) |
 | GET | /api/workspace/files/search-content?sessionId=&query= | Bounded text search rooted at the authenticated owner's session workspace; paired environments require file-transfer permission |
-| GET | /api/workspace/files/read-content?sessionId=&root=&path=&line=&query= | Read up to 15 lines around a selected search result in the authenticated owner's unchanged session workspace. Unix only; files are bounded to 256 KiB, paths do not follow symlinks and paired environments require file-transfer permission. The response is not cached. |
+| GET | /api/workspace/files/read-content?sessionId=&root=&path=&line=&query= | Read up to 15 lines around a project search result or linked file in the authenticated owner's unchanged session workspace. The absolute root may be a symlinked alias if it resolves to the session workspace both before and after reading; the response echoes the requested root. Unix only; files are bounded to 256 KiB, file components do not follow symlinks and paired environments require file-transfer permission. For an empty file, line 1 returns `totalLines: 0` and an empty `lines` array. The response is not cached. |
+| GET | /api/workspace/files/list-directory?sessionId=&root=&path= | List up to 2,000 files and directories within the authenticated owner's unchanged session workspace. Unix only; traversal does not follow symlinks, symlink entries are omitted, and a two-second scan limit may truncate results. Paired environments require file-transfer permission. The response is not cached. |
 | GET, PUT | /api/workspace/scripts?path= | Saved project scripts `{scripts: [{name, command}]}` (≤20) |
 | GET | /api/workspace/git/pull-request?path= | Pull request for the current branch with check counts and review decision (GitHub CLI) |
 | GET | /api/structured/usage | Tokens and cost per agent conversation, from reported usage |
@@ -418,6 +419,8 @@ unconfirmed cleanup is not reported as a confirmed Stop. These guarantees requir
 cooperating current Unix servers; non-Unix behavior has not been verified.
 
 POST `/api/structured/sessions/{id}/approve` accepts `{approved, approvalId, answers?, forSession?}`. `answers` maps an agent question's ids to lists of answer text; `forSession` approves this kind of action for the rest of the conversation (Codex `acceptForSession`, or the Claude tool name).
+
+The local owner or an authorized paired connection with agent-execution capability can POST `{approvalId, actionId}` to `/api/structured/sessions/{id}/private-output/preview` to retrieve an active private output snapshot and a preview token. The response is private and non-cacheable. POST `{approvalId, actionId, previewToken}` to `/api/structured/sessions/{id}/private-output/approve` approves that exact snapshot; ordinary approval routes cannot approve it. With background commands explicitly enabled, the agent can initiate this review, and the conversation UI can share or reject the snapshot. Approved output enters the provider request and conversation history; denied output does not. Process-manager output is held only in memory and cannot be recovered after restart.
 
 PATCH `/api/structured/sessions/{id}/selection` accepts `{model, reasoning, serviceTier?}`
 for an owned, idle Codex session and returns its complete snapshot. It validates

@@ -3,6 +3,7 @@ import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { MermaidFlowchart, parseFlowchart } from './MermaidFlowchart';
 import { MermaidSequence, parseSequence } from './MermaidSequence';
+import { projectFileReference } from '../utils/projectFileReference';
 import './LightweightMarkdown.css';
 
 const LINK_RE = /(`+)|\[([^\]]+)\]\(|\*\*([^*]+)\*\*|(https?:\/\/)|(?<![\\$])\$(?!\$)/g;
@@ -10,6 +11,10 @@ const SAFE_URL_RE = /^https?:\/\//i;
 const HEADING_RE = /^(#{1,4})\s+(.+)$/;
 const FENCE_RE = /^(`{3,}|~{3,})([\w.+#-]*)[ \t]*$/;
 const IMAGE_RE = /^!\[([^\]]*)\]\(([^\s)]+)\)\s*$/;
+const ALERT_RE = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*$/i;
+const DETAILS_RE = /^<details(?:[ \t]+(open)(?:[ \t]*=[ \t]*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?[ \t]*>(?:[ \t]*<summary>(.*?)<\/summary>)?[ \t]*$/i;
+const INLINE_DETAILS_RE = /^<details(?:[ \t]+(open)(?:[ \t]*=[ \t]*(?:"[^"]*"|'[^']*'|[^\s>]+))?)?[ \t]*>[ \t]*<summary>(.*?)<\/summary>(.*?)<\/details>[ \t]*$/i;
+const SUMMARY_RE = /^<summary>(.*?)<\/summary>[ \t]*$/i;
 const safeUrl = href => SAFE_URL_RE.test(href) || /^\/(?![\\/])/.test(href);
 
 function mathMarkup(content, displayMode) {
@@ -65,7 +70,7 @@ function linkDestination(text, start, explicit) {
   return { href: href.replace(/[.,;:!]+$/, ''), end: index, suffix: href.match(/[.,;:!]+$/)?.[0] || '' };
 }
 
-function renderInline(text, linkClassName) {
+function renderInline(text, linkClassName, fileOptions) {
   if (!text) return null;
 
   const parts = [];
@@ -94,7 +99,12 @@ function renderInline(text, linkClassName) {
       const destination = linkDestination(text, match[2] ? end : match.index, Boolean(match[2]));
       if (destination) {
         const { href, suffix } = destination;
-        parts.push(safeUrl(href)
+        const file = match[2] && fileOptions?.workspacePath ? projectFileReference(href, fileOptions.workspacePath) : null;
+        parts.push(file
+          ? fileOptions.onFileClick
+            ? <button key={match.index} type="button" className="md-file-link" aria-label={`Open ${match[2]} at line ${file.line}`} onClick={event => { event.stopPropagation(); fileOptions.onFileClick(file); }}>{match[2]}</button>
+            : <span key={match.index}>{match[2]}</span>
+          : safeUrl(href)
           ? <a key={match.index} href={href} target="_blank" rel="noopener noreferrer" className={linkClassName}>{match[2] || href}</a>
           : <span key={match.index}>{match[2] || href}</span>);
         if (suffix) parts.push(suffix);
@@ -137,6 +147,8 @@ function isBlockStart(line, nextLine) {
     || FENCE_RE.test(line)
     || Boolean(listMarker(line))
     || HEADING_RE.test(line)
+    || DETAILS_RE.test(line.trim())
+    || INLINE_DETAILS_RE.test(line.trim())
   );
 }
 
@@ -160,14 +172,15 @@ function removeIndent(line, width) {
   return ' '.repeat(Math.max(0, columns - width)) + line.slice(index);
 }
 
-function parseList(lines, startIndex) {
+function parseList(lines, startIndex, depth) {
   const first = listMarker(lines[startIndex]);
   const items = [];
   let index = startIndex, loose = false;
   while (index < lines.length) {
     const marker = listMarker(lines[index]);
     if (!marker || marker.indent !== first.indent || marker.ordered !== first.ordered) break;
-    const itemLines = [marker.content];
+    const task = marker.content.match(/^\[([ xX])\](?:[ \t]+|$)/);
+    const itemLines = [task ? marker.content.slice(task[0].length) : marker.content];
     index += 1;
     let blanks = 0;
     while (index < lines.length) {
@@ -183,12 +196,44 @@ function parseList(lines, startIndex) {
       itemLines.push(removeIndent(line, marker.contentIndent));
       index += 1;
     }
-    items.push(parseBlocks(itemLines.join('\n')));
+    items.push({ blocks: parseBlocks(itemLines.join('\n'), depth), checked: task ? task[1].toLowerCase() === 'x' : null });
   }
   return { block: { type: 'list', ordered: first.ordered, start: first.start, items, loose }, index };
 }
 
-function parseBlocks(content) {
+function parseDetails(lines, startIndex, depth) {
+  const opening = lines[startIndex].trim().match(DETAILS_RE);
+  if (!opening || depth >= 8) return null;
+  let nesting = 1, fence = null;
+  const limit = Math.min(lines.length, startIndex + 2048);
+  for (let index = startIndex + 1; index < limit; index += 1) {
+    const line = lines[index].trim();
+    if (fence) {
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const startFence = line.match(FENCE_RE);
+    if (startFence) { fence = startFence[1]; continue; }
+    if (DETAILS_RE.test(line)) {
+      nesting += 1;
+      if (depth + nesting > 8) return null;
+    } else if (/^<details(?:[ \t]|>)/i.test(line) && !INLINE_DETAILS_RE.test(line)) {
+      return null;
+    } else if (/^<\/details>[ \t]*$/i.test(line) && --nesting === 0) {
+      let bodyStart = startIndex + 1;
+      while (bodyStart < index && !lines[bodyStart].trim()) bodyStart += 1;
+      const summary = opening[2] === undefined && lines[bodyStart]?.trim().match(SUMMARY_RE);
+      if (summary) bodyStart += 1;
+      return {
+        block: { type: 'details', open: Boolean(opening[1]), summary: opening[2] || summary?.[1] || 'Details', blocks: parseBlocks(lines.slice(bodyStart, index).join('\n'), depth + 1) },
+        index: index + 1,
+      };
+    }
+  }
+  return null;
+}
+
+function parseBlocks(content, depth = 0) {
   const blocks = [];
   const lines = String(content || '').replace(/\r\n?/g, '\n').split('\n');
   let index = 0;
@@ -230,6 +275,17 @@ function parseBlocks(content) {
       continue;
     }
 
+    const inlineDetails = depth < 8 && line.trim().match(INLINE_DETAILS_RE);
+    if (inlineDetails) {
+      blocks.push({ type: 'details', open: Boolean(inlineDetails[1]), summary: inlineDetails[2] || 'Details', blocks: parseBlocks(inlineDetails[3], depth + 1) });
+      index += 1;
+      continue;
+    }
+    if (DETAILS_RE.test(line.trim())) {
+      const details = parseDetails(lines, index, depth);
+      if (details) { blocks.push(details.block); index = details.index; continue; }
+    }
+
     if (isTableStart(line, lines[index + 1])) {
       const headers = tableCells(line);
       const rows = [];
@@ -255,7 +311,9 @@ function parseBlocks(content) {
         quote.push(lines[index].replace(/^>\s?/, ''));
         index += 1;
       }
-      blocks.push({ type: 'quote', content: quote.join(' ') });
+      const alert = depth < 8 && quote[0].match(ALERT_RE);
+      if (alert) blocks.push({ type: 'alert', kind: alert[1].toLowerCase(), blocks: parseBlocks(quote.slice(1).join('\n'), depth + 1) });
+      else blocks.push({ type: 'quote', content: quote.join(' ') });
       continue;
     }
 
@@ -271,7 +329,7 @@ function parseBlocks(content) {
     }
 
     if (listMarker(line)) {
-      const list = parseList(lines, index);
+      const list = parseList(lines, index, depth);
       blocks.push(list.block);
       index = list.index;
       continue;
@@ -334,17 +392,25 @@ function renderBlocks(blocks, options, tight = false) {
 
     if (block.type === 'table') {
       return <div className="md-table-scroll" role="region" aria-label="Markdown table" tabIndex={0} data-conversation-scroll-region key={index}><table className="md-table">
-        <thead><tr>{block.headers.map((cell, column) => <th key={column} scope="col">{renderInline(cell, linkClassName)}</th>)}</tr></thead>
-        <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{block.headers.map((_, column) => <td key={column}>{renderInline(row[column] || '', linkClassName)}</td>)}</tr>)}</tbody>
+        <thead><tr>{block.headers.map((cell, column) => <th key={column} scope="col">{renderInline(cell, linkClassName, options)}</th>)}</tr></thead>
+        <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{block.headers.map((_, column) => <td key={column}>{renderInline(row[column] || '', linkClassName, options)}</td>)}</tr>)}</tbody>
       </table></div>;
     }
     if (block.type === 'image') return <MarkdownImage key={`${index}-${block.src}`} src={block.src} alt={block.alt} />;
-    if (block.type === 'quote') return <blockquote className="md-blockquote" key={index}>{renderInline(block.content, linkClassName)}</blockquote>;
+    if (block.type === 'details') return <details className="md-details" key={index} open={block.open || undefined}>
+      <summary>{renderInline(block.summary, linkClassName, options)}</summary>
+      <div className="md-details-content">{renderBlocks(block.blocks, options)}</div>
+    </details>;
+    if (block.type === 'quote') return <blockquote className="md-blockquote" key={index}>{renderInline(block.content, linkClassName, options)}</blockquote>;
+    if (block.type === 'alert') return <div className={`md-alert md-alert-${block.kind}`} key={index}>
+      <p className="md-alert-title">{block.kind[0].toUpperCase() + block.kind.slice(1)}</p>
+      {renderBlocks(block.blocks, options)}
+    </div>;
     if (block.type === 'heading') {
       const HeadingTag = `h${block.level}`;
       return (
         <HeadingTag key={index}>
-          {renderInline(block.content, linkClassName)}
+          {renderInline(block.content, linkClassName, options)}
         </HeadingTag>
       );
     }
@@ -354,18 +420,19 @@ function renderBlocks(blocks, options, tight = false) {
       return (
         <ListTag key={index} className="md-list" start={block.ordered ? block.start : undefined}>
           {block.items.map((item, itemIndex) => (
-            <li key={itemIndex}>
-              {renderBlocks(item, options, !block.loose)}
+            <li key={itemIndex} className={item.checked !== null ? 'md-task-item' : undefined}>
+              {item.checked !== null && <input type="checkbox" checked={item.checked} disabled aria-label={item.checked ? 'Completed task' : 'Incomplete task'} />}
+              {renderBlocks(item.blocks, options, !block.loose)}
             </li>
           ))}
         </ListTag>
       );
     }
 
-    if (tight) return <Fragment key={index}>{renderInline(block.content, linkClassName)}</Fragment>;
+    if (tight) return <Fragment key={index}>{renderInline(block.content, linkClassName, options)}</Fragment>;
     return (
       <p key={index}>
-        {renderInline(block.content, linkClassName)}
+        {renderInline(block.content, linkClassName, options)}
       </p>
     );
   });
@@ -375,12 +442,14 @@ export const LightweightMarkdown = memo(function LightweightMarkdown({
   content,
   linkClassName,
   codeClassName = 'lazy-syntax-fallback',
-  renderCodeActions
+  renderCodeActions,
+  workspacePath,
+  onFileClick,
 }) {
   if (!content) return null;
   return (
     <div className="lightweight-markdown">
-      {renderBlocks(parseBlocks(content), { linkClassName, codeClassName, renderCodeActions })}
+      {renderBlocks(parseBlocks(content), { linkClassName, codeClassName, renderCodeActions, workspacePath, onFileClick })}
     </div>
   );
 });

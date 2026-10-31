@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { openWorkspaceImageConversation, startWorkspacePrompt } from './workspaceStart';
+import { addContext, buildThreadContext } from '../components/composer-context/composerContext';
 
 let controller;
 let authority;
@@ -55,6 +56,23 @@ it('creates a scoped session and clears only the submitted draft after acceptanc
   expect(result).toEqual({ accepted: true, sessionId: 'ss-new' });
   expect(deps.sendToSession).toHaveBeenCalledWith('ss-new', 'Fork context');
   expect(getComposerDraftStore('ss-new').clearIfUnchanged).toHaveBeenCalledWith(1, 'Fork context');
+});
+
+it('uses the readable task for the title and sends the complete thread reference', async () => {
+  const deps = fixture();
+  const text = addContext('Investigate the login bug', buildThreadContext({ id: 'ss-old', title: 'Earlier investigation' }));
+  await startWorkspacePrompt(text, { path: '/project' }, deps);
+  expect(deps.createStructuredSession).toHaveBeenCalledWith(expect.objectContaining({ title: 'Investigate the login bug' }));
+  expect(deps.sendToSession).toHaveBeenCalledWith('ss-new', text.trim());
+});
+
+it('uses the readable task for an image conversation title without altering its draft', async () => {
+  const deps = fixture();
+  const text = addContext('Review this image', buildThreadContext({ id: 'ss-old', title: 'Earlier investigation' }));
+  getComposerDraftStore.mockReturnValue({ setText: vi.fn(), getSnapshot: () => ({ text }) });
+  await openWorkspaceImageConversation(text, { path: '/project' }, deps);
+  expect(deps.createStructuredSession).toHaveBeenCalledWith(expect.objectContaining({ title: 'Review this image' }));
+  expect(getComposerDraftStore('ss-new').setText).toHaveBeenCalledWith(text);
 });
 
 it('keeps the draft and identifies the session when no acceptance receipt is returned', async () => {

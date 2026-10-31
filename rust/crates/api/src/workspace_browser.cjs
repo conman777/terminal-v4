@@ -329,7 +329,9 @@ async function createBrowser(options = {}) {
         if (typeof input.text !== 'string' || Buffer.byteLength(input.text) > 32768) throw new Error('Invalid browser text.');
         await inspect(`(()=>{const e=${element(input)};if(e.matches(':disabled')||e.readOnly||!e.getClientRects().length||getComputedStyle(e).visibility==='hidden'||!(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&['text','search','url','tel','email','password','number'].includes(e.type)))throw Error('Ref is not visible and editable');e.scrollIntoView({block:'center'});e.focus();if(document.activeElement!==e&&e.getRootNode().activeElement!==e)throw Error('Element could not receive focus');if(${input.clear !== false}){if(e.isContentEditable){const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}else e.select();}return true;})()`);
         verifyTarget();
-        await page.keyboard.insertText(input.text); return { typedCharacters: [...input.text].length };
+        if (!operation?.active) throw new Error('Typing ended before text admission.');
+        await inspect(`(()=>{const e=${element(input)};if(e.matches(':disabled')||e.readOnly||!e.getClientRects().length||getComputedStyle(e).visibility==='hidden'||!(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&['text','search','url','tel','email','password','number'].includes(e.type))||document.activeElement!==e&&e.getRootNode().activeElement!==e)throw Error('Element lost focus or is no longer editable; review before retrying');if(!document.execCommand('insertText',false,${JSON.stringify(input.text)}))throw Error('Text insertion failed');return true;})()`);
+        return { typedCharacters: [...input.text].length };
       }
       case 'browser_press': {
         const spec = browserKey(input.key);

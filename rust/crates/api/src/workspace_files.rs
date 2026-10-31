@@ -48,6 +48,29 @@ struct LinePreviewQuery {
     query: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScopedDirectoryQuery {
+    session_id: String,
+    root: String,
+    #[serde(default)]
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ScopedDirectoryEntry {
+    name: String,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    size: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ScopedDirectory {
+    items: Vec<ScopedDirectoryEntry>,
+    truncated: bool,
+}
+
 #[derive(Debug, PartialEq, Serialize)]
 struct ContentMatch {
     path: String,
@@ -102,7 +125,7 @@ fn open_child(parent: &std::fs::File, name: &std::ffi::CStr) -> Option<std::fs::
 }
 
 #[cfg(unix)]
-fn open_workspace_root(root: &Path) -> Result<std::fs::File, String> {
+pub(crate) fn open_workspace_root(root: &Path) -> Result<std::fs::File, String> {
     use std::{
         ffi::CString,
         os::unix::{ffi::OsStrExt, fs::OpenOptionsExt},
@@ -136,7 +159,10 @@ fn open_workspace_root(root: &Path) -> Result<std::fs::File, String> {
 }
 
 #[cfg(unix)]
-fn open_workspace_file(root: &std::fs::File, relative: &str) -> Result<std::fs::File, String> {
+pub(crate) fn open_workspace_file(
+    root: &std::fs::File,
+    relative: &str,
+) -> Result<std::fs::File, String> {
     use std::{
         ffi::CString,
         os::{fd::AsRawFd, unix::ffi::OsStrExt},
@@ -190,6 +216,132 @@ fn open_workspace_file(root: &std::fs::File, relative: &str) -> Result<std::fs::
         parent = file;
     }
     Ok(parent)
+}
+
+#[cfg(unix)]
+fn open_workspace_directory(root: &std::fs::File, relative: &str) -> Result<std::fs::File, String> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    if relative.len() > 2_048 || relative.contains('\\') || relative.chars().any(char::is_control) {
+        return Err("Invalid project directory".into());
+    }
+    let mut directory = root.try_clone().map_err(|_| "Workspace is unavailable")?;
+    if relative.is_empty() {
+        return Ok(directory);
+    }
+    for part in relative.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return Err("Invalid project directory".into());
+        }
+        let name = CString::new(std::ffi::OsStr::new(part).as_bytes())
+            .map_err(|_| "Invalid project directory")?;
+        directory = open_child(&directory, &name).ok_or("Project directory is unavailable")?;
+        if !directory
+            .metadata()
+            .map_err(|_| "Project directory is unavailable")?
+            .is_dir()
+        {
+            return Err("Project directory is unavailable".into());
+        }
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn list_scoped_directory(root: &Path, relative: &str) -> Result<ScopedDirectory, String> {
+    use std::{
+        ffi::CStr,
+        os::{
+            fd::{AsRawFd, IntoRawFd},
+            unix::fs::MetadataExt,
+        },
+        time::Instant,
+    };
+    let root_fd = open_workspace_root(root)?;
+    let root_meta = root_fd.metadata().map_err(|_| "Workspace is unavailable")?;
+    let directory = open_workspace_directory(&root_fd, relative)?;
+    let before = directory
+        .metadata()
+        .map_err(|_| "Project directory is unavailable")?;
+    let duplicate = directory
+        .try_clone()
+        .map_err(|_| "Project directory is unavailable")?
+        .into_raw_fd();
+    let stream = unsafe { libc::fdopendir(duplicate) };
+    if stream.is_null() {
+        unsafe {
+            libc::close(duplicate);
+        }
+        return Err("Project directory is unavailable".into());
+    }
+    let mut items = Vec::new();
+    let mut truncated = false;
+    let started = Instant::now();
+    loop {
+        if items.len() >= 2_000 || started.elapsed() >= Duration::from_secs(2) {
+            truncated = true;
+            break;
+        }
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let Ok(name_str) = name.to_str() else {
+            continue;
+        };
+        if name_str == "." || name_str == ".." || name_str.chars().any(char::is_control) {
+            continue;
+        }
+        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+        if unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name.as_ptr(),
+                metadata.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            continue;
+        }
+        let metadata = unsafe { metadata.assume_init() };
+        let kind = match metadata.st_mode & libc::S_IFMT {
+            libc::S_IFDIR => "directory",
+            libc::S_IFREG => "file",
+            _ => continue,
+        };
+        items.push(ScopedDirectoryEntry {
+            name: name_str.into(),
+            kind,
+            size: metadata.st_size.max(0) as u64,
+        });
+    }
+    unsafe {
+        libc::closedir(stream);
+    }
+    let current_root = open_workspace_root(root)?;
+    let current_root_meta = current_root
+        .metadata()
+        .map_err(|_| "Workspace is unavailable")?;
+    let current = open_workspace_directory(&current_root, relative)?
+        .metadata()
+        .map_err(|_| "Project directory is unavailable")?;
+    if (root_meta.dev(), root_meta.ino()) != (current_root_meta.dev(), current_root_meta.ino())
+        || (before.dev(), before.ino()) != (current.dev(), current.ino())
+    {
+        return Err("Project directory changed; try again".into());
+    }
+    items.sort_by(|a, b| {
+        (b.kind == "directory")
+            .cmp(&(a.kind == "directory"))
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    Ok(ScopedDirectory { items, truncated })
+}
+
+#[cfg(not(unix))]
+fn list_scoped_directory(_root: &Path, _relative: &str) -> Result<ScopedDirectory, String> {
+    Err("Project directory listing is unavailable on this platform".into())
 }
 
 #[cfg(unix)]
@@ -261,6 +413,14 @@ fn read_line_context(
     }
     let text = std::str::from_utf8(&bytes).map_err(|_| "File is not a supported text file")?;
     let all: Vec<_> = text.lines().collect();
+    if all.is_empty() && line == 1 {
+        return Ok(LinePreview {
+            path: relative.into(),
+            line,
+            total_lines: 0,
+            lines: Vec::new(),
+        });
+    }
     if line > all.len() {
         return Err("That line no longer exists; search again".into());
     }
@@ -650,7 +810,12 @@ async fn line_preview_route(
         return Err(ApiError::bad_request("Invalid preview request"));
     }
     let root = session_workspace(&state, &user.user_id, &input.session_id).await?;
-    if Path::new(&input.root) != root {
+    if !Path::new(&input.root).is_absolute()
+        || crate::files::resolve_existing_contained_path(&input.root)
+            .ok()
+            .as_deref()
+            != Some(root.as_path())
+    {
         return Err(ApiError::bad_request("Workspace changed; search again"));
     }
     let permit = CONTENT_SEARCH_SLOTS
@@ -662,6 +827,7 @@ async fn line_preview_route(
             message: "File preview is busy. Try again.".into(),
         })?;
     let read_root = root.clone();
+    let requested_root = input.root;
     let path = input.path;
     let query = input.query;
     let line = input.line;
@@ -672,13 +838,68 @@ async fn line_preview_route(
     .await
     .map_err(|_| ApiError::internal("File preview failed"))?
     .map_err(ApiError::bad_request)?;
-    if session_workspace(&state, &user.user_id, &input.session_id).await? != root {
+    if session_workspace(&state, &user.user_id, &input.session_id).await? != root
+        || crate::files::resolve_existing_contained_path(&requested_root)
+            .ok()
+            .as_deref()
+            != Some(root.as_path())
+    {
         return Err(ApiError::bad_request("Workspace changed; search again"));
     }
     let mut payload =
         serde_json::to_value(preview).map_err(|_| ApiError::internal("File preview failed"))?;
-    payload["root"] = json!(root);
+    payload["root"] = json!(requested_root);
     let mut response = Json(payload).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn scoped_directory_route(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(input): Query<ScopedDirectoryQuery>,
+) -> Result<Response, ApiError> {
+    if input.root.len() > 2_048 || input.path.len() > 2_048 || !Path::new(&input.root).is_absolute()
+    {
+        return Err(ApiError::bad_request("Invalid project directory request"));
+    }
+    let root = session_workspace(&state, &user.user_id, &input.session_id).await?;
+    if crate::files::resolve_existing_contained_path(&input.root)
+        .ok()
+        .as_deref()
+        != Some(root.as_path())
+    {
+        return Err(ApiError::bad_request("Workspace changed; try again"));
+    }
+    let permit = CONTENT_SEARCH_SLOTS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(4)))
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ApiError {
+            status: axum::http::StatusCode::TOO_MANY_REQUESTS,
+            message: "Project directory is busy. Try again.".into(),
+        })?;
+    let read_root = root.clone();
+    let relative = input.path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        list_scoped_directory(&read_root, &relative)
+    })
+    .await
+    .map_err(|_| ApiError::internal("Project directory failed"))?
+    .map_err(ApiError::bad_request)?;
+    if session_workspace(&state, &user.user_id, &input.session_id).await? != root
+        || crate::files::resolve_existing_contained_path(&input.root)
+            .ok()
+            .as_deref()
+            != Some(root.as_path())
+    {
+        return Err(ApiError::bad_request("Workspace changed; try again"));
+    }
+    let mut response = Json(json!({ "root": input.root, "path": input.path, "items": result.items, "truncated": result.truncated })).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),
@@ -691,6 +912,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/workspace/files", get(files_route))
         .route("/api/workspace/files/search-content", get(content_route))
         .route("/api/workspace/files/read-content", get(line_preview_route))
+        .route(
+            "/api/workspace/files/list-directory",
+            get(scoped_directory_route),
+        )
 }
 
 #[cfg(test)]
@@ -736,6 +961,20 @@ mod tests {
         }
         assert!(read_line_context(&canonical, "src/file.txt", 0, "needle").is_err());
         assert!(read_line_context(&canonical, "src/file.txt", 4, "needle").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn line_preview_recognizes_an_empty_file_without_inventing_lines() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("empty.txt"), b"").unwrap();
+        let canonical = root.path().canonicalize().unwrap();
+        let preview = read_line_context(&canonical, "empty.txt", 1, "").unwrap();
+        assert_eq!(
+            serde_json::to_value(preview).unwrap(),
+            json!({"path":"empty.txt","line":1,"totalLines":0,"lines":[]})
+        );
+        assert!(read_line_context(&canonical, "empty.txt", 2, "").is_err());
     }
 
     #[cfg(unix)]
@@ -948,6 +1187,10 @@ mod tests {
         let workspace = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
         std::fs::write(workspace.path().join("owned.txt"), "first\nneedle\nlast").unwrap();
         let root = workspace.path().canonicalize().unwrap();
+        let alias = workspace.path().join("workspace-alias");
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let other = workspace.path().join("other-workspace");
+        std::fs::create_dir(&other).unwrap();
         let state = AppState::new_with_external_auth(
             terminal_v4_core::AppConfig {
                 data_dir: data.path().into(),
@@ -989,6 +1232,12 @@ mod tests {
             ),
             (
                 Some("owner"),
+                other.to_str().unwrap(),
+                "owned.txt",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some("owner"),
                 root.to_str().unwrap(),
                 "../owned.txt",
                 StatusCode::BAD_REQUEST,
@@ -996,6 +1245,12 @@ mod tests {
             (
                 Some("owner"),
                 root.to_str().unwrap(),
+                "owned.txt",
+                StatusCode::OK,
+            ),
+            (
+                Some("owner"),
+                alias.to_str().unwrap(),
                 "owned.txt",
                 StatusCode::OK,
             ),
@@ -1032,9 +1287,256 @@ mod tests {
                         .unwrap(),
                 )
                 .unwrap();
+                assert_eq!(body["root"], root_arg);
                 assert_eq!(body["line"], 2);
                 assert_eq!(body["lines"][1]["text"], "needle");
             }
         }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn scoped_directory_listing_does_not_follow_links_or_escape_the_project() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir(workspace.path().join("src")).unwrap();
+        std::fs::write(workspace.path().join("src/app.js"), "fixture").unwrap();
+        std::fs::write(workspace.path().join("src/.hidden"), "hidden").unwrap();
+        std::fs::write(outside.path().join("secret"), "private").unwrap();
+        std::os::unix::fs::symlink(outside.path(), workspace.path().join("src/escape")).unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        let result = list_scoped_directory(&root, "src").unwrap();
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![".hidden", "app.js"]
+        );
+        assert!(!result.truncated);
+        for invalid in [
+            "../",
+            "src/../",
+            "src/escape",
+            "/etc",
+            "src//other",
+            "src\\other",
+        ] {
+            assert!(list_scoped_directory(&root, invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn scoped_directory_route_requires_owner_and_matching_workspace() {
+        use axum::{
+            body::Body,
+            http::{Request, StatusCode},
+        };
+        use tower::ServiceExt;
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        std::fs::create_dir(workspace.path().join("src")).unwrap();
+        std::fs::write(workspace.path().join("src/app.js"), "fixture").unwrap();
+        let root = workspace.path().canonicalize().unwrap();
+        std::os::unix::fs::symlink("/", root.join("src/escape")).unwrap();
+        let state = AppState::new_with_external_auth(
+            terminal_v4_core::AppConfig {
+                data_dir: data.path().into(),
+                jwt_secret: "scoped-directory-test".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        let session = state
+            .structured_session_manager()
+            .create_session("owner", root.to_str().unwrap(), Some("codex"), None, None)
+            .await
+            .unwrap();
+        let app = routes()
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::require_auth,
+            ))
+            .with_state(state);
+        for (owner, root_arg, path, expected) in [
+            (
+                None,
+                root.to_str().unwrap(),
+                "src",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                Some("other"),
+                root.to_str().unwrap(),
+                "src",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                Some("owner"),
+                "/wrong-workspace",
+                "src",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some("owner"),
+                root.to_str().unwrap(),
+                "../",
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some("owner"),
+                root.to_str().unwrap(),
+                "src/escape",
+                StatusCode::BAD_REQUEST,
+            ),
+            (Some("owner"), root.to_str().unwrap(), "src", StatusCode::OK),
+        ] {
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("sessionId", &session.id)
+                .append_pair("root", root_arg)
+                .append_pair("path", path)
+                .finish();
+            let mut request =
+                Request::builder().uri(format!("/api/workspace/files/list-directory?{query}"));
+            if let Some(owner) = owner {
+                request = request.header(
+                    "authorization",
+                    format!(
+                        "Bearer {}",
+                        crate::auth::issue_access_token("scoped-directory-test", owner, owner)
+                    ),
+                );
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            if expected == StatusCode::OK {
+                assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+                let body: Value = serde_json::from_slice(
+                    &axum::body::to_bytes(response.into_body(), 8192)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    body,
+                    json!({"root": root_arg, "path":"src", "items":[{"name":"app.js", "type":"file", "size":7}], "truncated":false})
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "Requires the bundled browser runtime and frontend dependencies"]
+    async fn project_file_reveal_browser_fixture() {
+        use std::process::Stdio;
+        use tokio::process::Command;
+        use tokio::time::{sleep, timeout, Duration};
+
+        let data = tempfile::tempdir().unwrap();
+        let workspace_dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let workspace = workspace_dir.path().canonicalize().unwrap();
+        let mut contents =
+            String::from("const first = true;\nconst target = true;\nconst last = true;\n");
+        for line in 4..=35 {
+            contents.push_str(&format!("// fixture line {line}\n"));
+        }
+        std::fs::write(workspace.join("sample.js"), contents).unwrap();
+        std::fs::write(workspace.join("empty.txt"), b"").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            port,
+            local_testing_login: true,
+            ..Default::default()
+        };
+        let state = crate::state::AppState::new(config).unwrap();
+        let server =
+            tokio::spawn(async move { axum::serve(listener, crate::app(state)).await.unwrap() });
+        let runtime = crate::browser_runtime::resolve().unwrap();
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let vite_port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let mut vite = Command::new(&runtime.node)
+            .arg(root.join("frontend/node_modules/vite/bin/vite.js"))
+            .args([
+                "--host",
+                "127.0.0.1",
+                "--port",
+                &vite_port.to_string(),
+                "--strictPort",
+            ])
+            .current_dir(root.join("frontend"))
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+            .env("TMPDIR", data.path())
+            .env(
+                "TERMINAL_V4_API_PROXY_TARGET",
+                format!("http://127.0.0.1:{port}"),
+            )
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        timeout(Duration::from_secs(30), async {
+            while tokio::net::TcpStream::connect(("127.0.0.1", vite_port))
+                .await
+                .is_err()
+            {
+                sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("Vite fixture did not start");
+        let output = timeout(
+            Duration::from_secs(120),
+            Command::new(&runtime.node)
+                .arg(root.join("frontend/node_modules/@playwright/test/cli.js"))
+                .args([
+                    "test",
+                    "e2e/project-file-preview.spec.ts",
+                    "e2e/project-content-search.spec.ts",
+                    "--reporter=line",
+                    "--workers=1",
+                ])
+                .arg(format!(
+                    "--output={}",
+                    data.path().join("playwright").display()
+                ))
+                .current_dir(root.join("frontend"))
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .env("TMPDIR", data.path())
+                .env("BASE_URL", format!("http://127.0.0.1:{vite_port}"))
+                .env("E2E_LOCAL_TESTING", "1")
+                .env("E2E_PROJECT_ROOT", &workspace)
+                .env("E2E_SEARCH_ROOT", &workspace)
+                .env("E2E_LOCAL_BROWSER", &runtime.chromium)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .expect("Browser fixture timed out")
+        .unwrap();
+        let _ = vite.kill().await;
+        server.abort();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { WorkspaceTasksPanel } from './WorkspaceTasksPanel';
+import { WorkspaceTasksPanel, describeLastRun, describeSchedule } from './WorkspaceTasksPanel';
 
 const apiFetch = vi.fn();
 vi.mock('../utils/api', () => ({ apiFetch: (...args) => apiFetch(...args) }));
@@ -9,6 +9,82 @@ const task = { id: 'task-one', provider: 'codex', prompt: 'Review', status: 'com
 const schedule = { id: 'schedule-one', name: 'Morning review', provider: 'claude', enabled: false, intervalSeconds: 3600 };
 describe('WorkspaceTasksPanel', () => {
   beforeEach(() => { apiFetch.mockReset(); apiFetch.mockResolvedValue({ ok: true, json: async () => ({ tasks: [], schedules: [] }) }); });
+
+  it('describes a cron schedule using its expression and zone', () => {
+    expect(describeSchedule({ at: { cron: '0 9 * * MON-FRI', hour: 0, minute: 0, weekdays: [], timeZone: 'Europe/London' } }, true))
+      .toBe('Cron 0 9 * * MON-FRI · Europe/London');
+  });
+
+  it('shows the schedule last status and error when its task is not listed', async () => {
+    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ tasks: [], schedules: [
+      { ...schedule, lastRunAt: 1000, lastTaskId: 'not-in-this-list', lastStatus: 'failed', lastError: 'Agent exited with code 2' },
+    ] }) });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    expect(await screen.findByText(/Last run .* · failed/)).toBeInTheDocument();
+    expect(screen.getByText('Last error: Agent exited with code 2')).toBeInTheDocument();
+  });
+
+  it('uses a listed task rather than an older schedule status', () => {
+    const result = describeLastRun({ lastRunAt: 1000, lastTaskId: 'current', lastStatus: 'failed', lastError: 'old error' }, [
+      { id: 'current', status: 'completed' },
+    ]);
+    expect(result.text).toMatch(/ · completed$/);
+    expect(result.error).toBe('');
+  });
+
+  it('does not show an old error for a completed schedule without its task', () => {
+    const result = describeLastRun({ lastRunAt: 1000, lastTaskId: 'missing', lastStatus: 'completed', lastError: 'old error' }, []);
+    expect(result.text).toMatch(/ · completed$/);
+    expect(result.error).toBe('');
+  });
+
+  it('creates a cron schedule with the advanced protocol and its selected time zone', async () => {
+    apiFetch.mockImplementation(async url => ({ ok: true, json: async () => url === '/api/workspace/schedules/capabilities'
+      ? { advancedTimingProtocolVersion: 1 }
+      : url === '/api/agent/catalog'
+        ? { agents: [{ id: 'claude', label: 'Claude', available: true, capabilities: { durableTasks: true } }] }
+        : { tasks: [], schedules: [] } }));
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByText('No tasks yet.');
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Review' } });
+    fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Daily' } });
+    fireEvent.change(screen.getByLabelText('Runs'), { target: { value: 'cron' } });
+    expect(screen.getByText(/Times in a daylight-saving gap run when the clock advances/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Cron expression'), { target: { value: '0 9 *' } });
+    expect(screen.getByRole('button', { name: 'Create schedule' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Cron expression'), { target: { value: '0 9 * * MON-FRI' } });
+    fireEvent.change(screen.getByLabelText('Time zone (IANA)'), { target: { value: 'Europe/London' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create schedule' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules', { method: 'POST', body: {
+      workspacePath: path, provider: 'claude', prompt: 'Review', model: null, parentSessionId: null, parentTaskId: null,
+      name: 'Daily', enabled: false, intervalSeconds: 0, at: { cron: '0 9 * * MON-FRI', timeZone: 'Europe/London' },
+    } }));
+  });
+
+  it('shows a server rejection when a capability-compatible older server cannot parse cron', async () => {
+    let posts = 0;
+    apiFetch.mockImplementation(async (url, options) => {
+      if (url === '/api/workspace/schedules/capabilities') return { ok: true, json: async () => ({ advancedTimingProtocolVersion: 1 }) };
+      if (url === '/api/agent/catalog') return { ok: true, json: async () => ({ agents: [{ id: 'claude', label: 'Claude', available: true, capabilities: { durableTasks: true } }] }) };
+      if (url === '/api/workspace/schedules' && options?.method === 'POST') {
+        posts += 1;
+        expect(options.body).toEqual(expect.objectContaining({ intervalSeconds: 0, at: { cron: '0 9 * * *', timeZone: 'UTC' } }));
+        return { ok: false, json: async () => ({ error: 'Cron schedules are not supported' }) };
+      }
+      return { ok: true, json: async () => ({ tasks: [], schedules: [] }) };
+    });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByText('No tasks yet.');
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Review' } });
+    fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Daily' } });
+    fireEvent.change(screen.getByLabelText('Runs'), { target: { value: 'cron' } });
+    fireEvent.change(screen.getByLabelText('Time zone (IANA)'), { target: { value: 'UTC' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create schedule' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Cron schedules are not supported');
+    expect(posts).toBe(1);
+  });
 
   it('queues selected native agent tasks linked to the current conversation', async () => {
     render(<WorkspaceTasksPanel workspacePath={path} currentSessionId="ss-parent" />);

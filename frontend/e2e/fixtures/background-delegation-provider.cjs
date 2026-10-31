@@ -19,7 +19,7 @@ http.createServer((request, response) => {
       const messages = body.messages || [];
       const transcript = JSON.stringify(messages);
       let result;
-      if (parent && transcript.includes('Delegated task ')) {
+      if (transcript.includes('Delegated task ')) {
         result = answer({ role: 'assistant', content: transcript.includes('Verified fixture child answer.') ? 'Parent received the verified background answer.' : 'Fixture child verification failed.' }, 'stop');
       } else if (parent && messages.some(message => message.role === 'tool')) {
         result = answer({ role: 'assistant', content: 'Background investigation started.' }, 'stop');

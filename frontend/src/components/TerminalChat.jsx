@@ -667,6 +667,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const selectionListenersRef = useRef(new Set());
   const getTerminalSelectionText = useCallback(() => xtermRef.current?.getSelection?.() || '', []);
   const clearTerminalSelection = useCallback(() => { xtermRef.current?.clearSelection?.(); }, []);
+  const selectTerminalLineAtPoint = useCallback(({ x, y } = {}) => {
+    const term = xtermRef.current;
+    if (!term || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+    if (term.hasSelection()) return true;
+    const screen = term.element?.querySelector('.xterm-screen');
+    const bounds = screen?.getBoundingClientRect();
+    if (!bounds || !bounds.width || !bounds.height || !term.rows || !term.cols
+      || x < bounds.left || x >= bounds.right || y < bounds.top || y >= bounds.bottom) return false;
+    const row = Math.floor((y - bounds.top) * term.rows / bounds.height) + term.buffer.active.viewportY;
+    const line = term.buffer.active.getLine(row);
+    if (!line?.translateToString(true).trim()) return false;
+    term.select(0, row, term.cols);
+    return term.hasSelection();
+  }, []);
   const subscribeTerminalSelection = useCallback((listener) => {
     selectionListenersRef.current.add(listener);
     return () => selectionListenersRef.current.delete(listener);
@@ -1561,13 +1575,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       copySelection: copyTerminalSelection,
       getSelectionText: getTerminalSelectionText,
       clearSelection: clearTerminalSelection,
+      selectLineAtPoint: selectTerminalLineAtPoint,
       subscribe: subscribeTerminalSelection
     });
 
     return () => {
       onRegisterSelectionActions(null);
     };
-  }, [onRegisterSelectionActions, sessionId, hasTerminalSelection, copyTerminalSelection, getTerminalSelectionText, clearTerminalSelection, subscribeTerminalSelection]);
+  }, [onRegisterSelectionActions, sessionId, hasTerminalSelection, copyTerminalSelection, getTerminalSelectionText, clearTerminalSelection, selectTerminalLineAtPoint, subscribeTerminalSelection]);
 
   // Register focus terminal trigger for iOS keyboard activation
   useEffect(() => {

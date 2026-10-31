@@ -12,6 +12,11 @@ use std::{fs::File, path::Path, sync::Mutex};
 pub(super) const MAX_RETIRED_SESSIONS: i64 = 4096;
 pub(super) const MIN_RETAINED_PER_SESSION: i64 = 8;
 const MAX_PENDING_PAGE: usize = 64;
+const INPUT_GUARD_V2: &[u8] = b"v4-background-ledger-v2-ready\n";
+const INPUT_GUARD_V3: &[u8] = b"v4-background-ledger-v3-ready\n";
+const MAX_INPUT_RECEIPTS: i64 = 32768;
+const MAX_OWNER_INPUT_RECEIPTS: i64 = 4096;
+const MAX_SESSION_INPUT_RECEIPTS: i64 = 1024;
 #[cfg(unix)]
 pub(super) const LEDGER_BUSY: &str = "Background receipt ledger already in use";
 
@@ -25,6 +30,20 @@ pub(super) struct Ledger {
     quiescence_root: Option<std::path::PathBuf>,
     #[cfg(unix)]
     owner_pid: libc::pid_t,
+    instance_id: uuid::Uuid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InputReceiptState {
+    Uncertain,
+    Delivered,
+    NotWritten,
+}
+
+#[derive(Debug)]
+pub(super) struct InputClaim {
+    key: Vec<u8>,
+    instance_id: uuid::Uuid,
 }
 
 #[cfg(unix)]
@@ -131,6 +150,7 @@ impl Ledger {
         if unsafe { libc::flock(guard.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(LEDGER_BUSY.into());
         }
+        let mut input_guard_v3 = false;
         if created {
             guard
                 .write_all(GUARD_PENDING)
@@ -150,7 +170,9 @@ impl Ledger {
             guard
                 .read_exact(&mut magic)
                 .map_err(|_| "Cannot read background receipt guard")?;
-            if magic != GUARD_READY {
+            if magic == INPUT_GUARD_V3 {
+                input_guard_v3 = true;
+            } else if magic != GUARD_READY {
                 return Err("Background receipt guard is invalid".into());
             }
         }
@@ -202,6 +224,22 @@ impl Ledger {
             db.prepare("SELECT session_key FROM retired_sessions LIMIT 0")
                 .map_err(|_| "Background retirement ledger is missing or requires migration")?;
         }
+        let action_column: Option<String> = db
+            .query_row(
+                "SELECT type FROM pragma_table_info('receipts') WHERE name='action_id'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|_| "Cannot inspect background receipt index")?;
+        match action_column.as_deref() {
+            None => {
+                db.execute("ALTER TABLE receipts ADD COLUMN action_id TEXT", [])
+                    .map_err(|_| "Cannot upgrade background receipt index")?;
+            }
+            Some(kind) if kind.eq_ignore_ascii_case("TEXT") => {}
+            Some(_) => return Err("Background receipt index is invalid".into()),
+        }
         let review_tables: i64 = db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('owner_reviewed_receipts','owner_review_operations')", [], |row| row.get(0)).map_err(|_| "Cannot inspect background reviews")?;
         if review_tables == 0 {
             db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE owner_reviewed_receipts(key BLOB PRIMARY KEY,owner_key BLOB NOT NULL,request TEXT NOT NULL,operation TEXT NOT NULL); CREATE TABLE owner_review_operations(owner_key BLOB NOT NULL,request TEXT NOT NULL,operation TEXT NOT NULL,count INTEGER NOT NULL,PRIMARY KEY(owner_key,operation)); COMMIT;")
@@ -213,12 +251,26 @@ impl Ledger {
             .map_err(|_| "Background review ledger is invalid")?;
         db.prepare("SELECT owner_key,request,operation,count FROM owner_review_operations LIMIT 0")
             .map_err(|_| "Background review ledger is invalid")?;
+        if input_guard_v3 {
+            db.prepare("SELECT key,owner_key,session_key,action_key,state FROM background_input_receipts LIMIT 0")
+                .map_err(|_| "Background input receipt ledger is missing or invalid")?;
+        }
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS launched_processes(key BLOB PRIMARY KEY, session_key BLOB NOT NULL, owner TEXT NOT NULL, session TEXT NOT NULL, workspace TEXT NOT NULL, incarnation TEXT, action_id TEXT NOT NULL, pid INTEGER NOT NULL, pgid INTEGER NOT NULL, started_sec INTEGER, started_usec INTEGER);
              CREATE TABLE IF NOT EXISTS recovery_outcomes(key BLOB PRIMARY KEY, session_key BLOB NOT NULL, outcome TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS pending_completions(seq INTEGER PRIMARY KEY AUTOINCREMENT, key BLOB NOT NULL UNIQUE, session_key BLOB NOT NULL, owner TEXT NOT NULL, session TEXT NOT NULL, workspace TEXT NOT NULL, incarnation TEXT, action_id TEXT NOT NULL, state TEXT NOT NULL, code INTEGER);",
         )
         .map_err(|_| "Cannot initialize background recovery tables")?;
+        db.execute_batch(
+            "UPDATE receipts SET action_id = COALESCE(
+                (SELECT action_id FROM launched_processes WHERE launched_processes.key=receipts.key AND incarnation IS NOT NULL AND length(action_id)=64 AND action_id NOT GLOB '*[^0-9a-f]*'),
+                (SELECT action_id FROM pending_completions WHERE pending_completions.key=receipts.key AND incarnation IS NOT NULL AND length(action_id)=64 AND action_id NOT GLOB '*[^0-9a-f]*')
+             ) WHERE action_id IS NULL AND (
+                EXISTS (SELECT 1 FROM launched_processes WHERE launched_processes.key=receipts.key AND incarnation IS NOT NULL AND length(action_id)=64 AND action_id NOT GLOB '*[^0-9a-f]*') OR
+                EXISTS (SELECT 1 FROM pending_completions WHERE pending_completions.key=receipts.key AND incarnation IS NOT NULL AND length(action_id)=64 AND action_id NOT GLOB '*[^0-9a-f]*')
+             );",
+        )
+        .map_err(|_| "Cannot recover background receipt index")?;
         for dir in [Some(path), path.parent()].into_iter().flatten() {
             File::open(dir)
                 .and_then(|file| file.sync_all())
@@ -250,6 +302,7 @@ impl Ledger {
                 None
             },
             owner_pid: unsafe { libc::getpid() },
+            instance_id: uuid::Uuid::new_v4(),
         })
     }
 
@@ -320,6 +373,211 @@ impl Ledger {
             workspace,
             action_id,
         ]))
+    }
+    fn listable_action_id(action_id: &str) -> bool {
+        action_id.len() == 64
+            && action_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    }
+
+    #[cfg(unix)]
+    fn input_guard_version(&self) -> Result<bool, String> {
+        use std::os::unix::fs::FileExt;
+        if self
+            ._guard
+            .metadata()
+            .map_err(|_| "Background guard unavailable")?
+            .len()
+            != INPUT_GUARD_V2.len() as u64
+        {
+            return Err("Background input guard is invalid".into());
+        }
+        let mut magic = vec![0; INPUT_GUARD_V2.len()];
+        self._guard
+            .read_exact_at(&mut magic, 0)
+            .map_err(|_| "Background guard unavailable")?;
+        match magic.as_slice() {
+            INPUT_GUARD_V2 => Ok(false),
+            INPUT_GUARD_V3 => Ok(true),
+            _ => Err("Background input guard is invalid".into()),
+        }
+    }
+
+    #[cfg(unix)]
+    fn ensure_input_table(&self, db: &mut Connection) -> Result<(), String> {
+        use std::os::unix::fs::FileExt;
+        if !self.input_guard_version()? {
+            let tx = db
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|_| "Cannot initialize input receipts")?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS background_input_receipts(key BLOB PRIMARY KEY, owner_key BLOB NOT NULL, session_key BLOB NOT NULL, action_key BLOB NOT NULL, state TEXT NOT NULL); CREATE INDEX IF NOT EXISTS background_input_receipts_owner ON background_input_receipts(owner_key,session_key);")
+                .map_err(|_| "Cannot initialize input receipts")?;
+            tx.prepare("SELECT key,owner_key,session_key,action_key,state FROM background_input_receipts LIMIT 0")
+                .map_err(|_| "Background input receipts are invalid")?;
+            tx.commit()
+                .map_err(|_| "Cannot commit input receipt initialization")?;
+            self._guard
+                .write_all_at(INPUT_GUARD_V3, 0)
+                .and_then(|_| self._guard.sync_all())
+                .map_err(|_| "Cannot commit background input guard")?;
+        }
+        db.prepare("SELECT key,owner_key,session_key,action_key,state FROM background_input_receipts LIMIT 0")
+            .map_err(|_| "Background input receipt ledger is missing or invalid")?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn input_key(scope: &BackgroundScope, operation_id: &str) -> Result<Vec<u8>, String> {
+        if scope.incarnation.is_none_or(|id| id.is_nil()) || !Self::listable_action_id(operation_id)
+        {
+            return Err("Invalid background input identity".into());
+        }
+        let workspace = scope.workspace.to_str().ok_or("Invalid workspace path")?;
+        Ok(Self::hash_parts(&[
+            "background-input-v1",
+            &scope.owner,
+            &scope.session,
+            workspace,
+            &scope.incarnation.unwrap().to_string(),
+            operation_id,
+        ]))
+    }
+
+    /// Commit the operation identity before any input is sent. A reused ID is
+    /// rejected even if its command or payload has changed.
+    #[cfg(unix)]
+    pub(super) fn claim_input(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        operation_id: &str,
+    ) -> Result<InputClaim, String> {
+        if !Self::listable_action_id(action_id)
+            || scope.owner.is_empty()
+            || scope.session.is_empty()
+        {
+            return Err("Invalid background input scope".into());
+        }
+        let key = Self::input_key(scope, operation_id)?;
+        let action_key = Self::key(scope, action_id)?;
+        let owner_key = Self::hash_parts(&[&scope.owner]);
+        let session_key = Self::hash_parts(&[&scope.owner, &scope.session]);
+        let mut db = self
+            .db
+            .try_lock()
+            .map_err(|_| "Background receipt ledger is busy")?;
+        let eligible: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM receipts WHERE key=?1 AND owner_key=?2 AND session_key=?3 AND state='unknown') AND NOT EXISTS(SELECT 1 FROM retired_sessions WHERE session_key=?3)", params![action_key, owner_key, session_key], |row| row.get(0)).map_err(|_| "Cannot check background action")?;
+        if !eligible {
+            return Err("Background action is unavailable".into());
+        }
+        self.ensure_input_table(&mut db)?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| "Cannot claim background input")?;
+        let retired: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM retired_sessions WHERE session_key=?1)",
+                params![session_key],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Cannot check background session")?;
+        if retired {
+            return Err("Background session is retired".into());
+        }
+        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM receipts WHERE key=?1 AND owner_key=?2 AND session_key=?3 AND state='unknown')", params![action_key, owner_key, session_key], |row| row.get(0)).map_err(|_| "Cannot check background action")?;
+        if !active {
+            return Err("Background action is unavailable".into());
+        }
+        let duplicate: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM background_input_receipts WHERE key=?1)",
+                params![key],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Cannot check background input")?;
+        if duplicate {
+            return Err("Background input already claimed; replay rejected".into());
+        }
+        let (total, owner_count, session_count): (i64, i64, i64) = tx.query_row("SELECT COUNT(*), COALESCE(SUM(owner_key=?1),0), COALESCE(SUM(session_key=?2),0) FROM background_input_receipts", params![owner_key, session_key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).map_err(|_| "Cannot check input capacity")?;
+        if total >= MAX_INPUT_RECEIPTS
+            || owner_count >= MAX_OWNER_INPUT_RECEIPTS
+            || session_count >= MAX_SESSION_INPUT_RECEIPTS
+        {
+            return Err("Background input receipt capacity exhausted".into());
+        }
+        tx.execute("INSERT INTO background_input_receipts(key,owner_key,session_key,action_key,state) VALUES(?1,?2,?3,?4,'uncertain')", params![key, owner_key, session_key, action_key]).map_err(|_| "Cannot claim background input")?;
+        tx.commit()
+            .map_err(|_| "Background input claim outcome is uncertain")?;
+        Ok(InputClaim {
+            key,
+            instance_id: self.instance_id,
+        })
+    }
+
+    #[cfg(unix)]
+    pub(super) fn finish_input(
+        &self,
+        claim: InputClaim,
+        state: InputReceiptState,
+    ) -> Result<(), String> {
+        if claim.instance_id != self.instance_id {
+            return Err("Background input claim belongs to another ledger instance".into());
+        }
+        let value = match state {
+            InputReceiptState::Delivered => "delivered",
+            InputReceiptState::NotWritten => "not_written",
+            InputReceiptState::Uncertain => return Err("Cannot confirm an uncertain input".into()),
+        };
+        let db = self
+            .db
+            .try_lock()
+            .map_err(|_| "Background receipt ledger is busy")?;
+        if !self.input_guard_version()? {
+            return Err("Background input receipt ledger is unavailable".into());
+        }
+        let changed = db
+            .execute(
+                "UPDATE background_input_receipts SET state=?2 WHERE key=?1 AND state='uncertain'",
+                params![claim.key, value],
+            )
+            .map_err(|_| "Background input outcome is uncertain")?;
+        if changed != 1 {
+            return Err("Background input claim is missing or already resolved".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    pub(super) fn input_state(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        operation_id: &str,
+    ) -> Result<InputReceiptState, String> {
+        let key = Self::input_key(scope, operation_id)?;
+        let action_key = Self::key(scope, action_id)?;
+        let db = self
+            .db
+            .try_lock()
+            .map_err(|_| "Background receipt ledger is busy")?;
+        if !self.input_guard_version()? {
+            return Err("Background input receipt ledger is unavailable".into());
+        }
+        let state: String = db
+            .query_row(
+                "SELECT state FROM background_input_receipts WHERE key=?1 AND action_key=?2",
+                params![key, action_key],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Background input receipt is unavailable")?;
+        match state.as_str() {
+            "uncertain" => Ok(InputReceiptState::Uncertain),
+            "delivered" => Ok(InputReceiptState::Delivered),
+            "not_written" => Ok(InputReceiptState::NotWritten),
+            _ => Err("Background input receipt is invalid".into()),
+        }
     }
     pub(super) fn has_unknown(&self, session: Option<(&str, &str)>) -> Result<bool, String> {
         let db = self
@@ -518,8 +776,8 @@ impl Ledger {
             );
         }
         tx.execute(
-            "INSERT INTO receipts(key,owner_key,session_key,state) VALUES(?1,?2,?3,'unknown')",
-            params![key, owner_key, session_key],
+            "INSERT INTO receipts(key,owner_key,session_key,state,action_id) VALUES(?1,?2,?3,'unknown',?4)",
+            params![key, owner_key, session_key, (scope.incarnation.is_some() && Self::listable_action_id(action_id)).then_some(action_id)],
         )
         .map_err(|_| "Cannot claim background action")?;
         tx.commit()
@@ -573,6 +831,20 @@ impl Ledger {
             params![session_key],
         )
         .map_err(|_| "Cannot release background receipts")?;
+        #[cfg(unix)]
+        {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='background_input_receipts')", [], |row| row.get(0)).map_err(|_| "Cannot check background input receipts")?;
+            if self.input_guard_version()? && !exists {
+                return Err("Background input receipt ledger is missing or invalid".into());
+            }
+            if exists {
+                tx.execute(
+                    "DELETE FROM background_input_receipts WHERE session_key=?1",
+                    params![session_key],
+                )
+                .map_err(|_| "Cannot release background input receipts")?;
+            }
+        }
         for table in [
             "pending_completions",
             "recovery_outcomes",
@@ -849,6 +1121,56 @@ impl Ledger {
             Some((state, code)) => Self::state_from(&state, code),
             None => Err("Background action not found".into()),
         }
+    }
+    /// Action IDs are recoverable only for claims written with the scoped index.
+    /// Verify every stored ID against the complete scope before returning it.
+    #[cfg(unix)]
+    pub(super) fn list(
+        &self,
+        scope: &BackgroundScope,
+    ) -> Result<Vec<(String, BackgroundState)>, String> {
+        if scope
+            .incarnation
+            .is_none_or(|incarnation| incarnation.is_nil())
+        {
+            return Err("Background session identity is required".into());
+        }
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        let mut statement = db.prepare("SELECT key,action_id,state,code FROM receipts WHERE owner_key=?1 AND session_key=?2 AND action_id IS NOT NULL ORDER BY rowid DESC LIMIT ?3")
+            .map_err(|_| "Cannot read background receipt index")?;
+        let rows = statement
+            .query_map(
+                params![
+                    Self::hash_parts(&[&scope.owner]),
+                    Self::hash_parts(&[&scope.owner, &scope.session]),
+                    MAX_SESSION_ACTIONS as i64
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, Vec<u8>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<i32>>(3)?,
+                    ))
+                },
+            )
+            .map_err(|_| "Cannot read background receipt index")?;
+        let mut results = Vec::new();
+        for row in rows {
+            let (key, action_id, state, code) =
+                row.map_err(|_| "Invalid background receipt index")?;
+            if !Self::listable_action_id(&action_id) {
+                return Err("Invalid background receipt index".into());
+            }
+            if Self::key(scope, &action_id)? != key {
+                continue;
+            }
+            results.push((action_id, Self::state_from(&state, code)?));
+        }
+        Ok(results)
     }
     fn state_from(state: &str, code: Option<i32>) -> Result<BackgroundState, String> {
         match state {

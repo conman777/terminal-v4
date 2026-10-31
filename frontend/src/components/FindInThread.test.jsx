@@ -2,8 +2,20 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest';
 import { FindInThread } from './FindInThread';
 import { DesktopConversationView } from './DesktopConversationView';
+import { LightweightMarkdown } from './LightweightMarkdown';
 
 describe('FindInThread', () => {
+  it('reveals matching text inside nested Markdown sections without reopening unrelated ones', async () => {
+    const content = '<details>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\nHidden needle\n\n</details>\n\n</details>\n\n<details>\n<summary>Other</summary>\n\nNot here\n\n</details>';
+    const view = render(<div><div className="desktop-conversation-view"><div className="cc-transcript-message"><div className="cc-assistant-content"><LightweightMarkdown content={content} /></div></div></div><FindInThread open /></div>);
+    const sections = view.container.querySelectorAll('.md-details');
+    expect([...sections].map(section => section.open)).toEqual([false, false, false]);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Find in thread' }), { target: { value: 'hidden needle' } });
+    await waitFor(() => expect([...sections].map(section => section.open)).toEqual([true, true, false]));
+    expect(screen.getByText('Hidden needle')).toBeVisible();
+    expect(screen.getByRole('searchbox', { name: 'Find in thread' })).toHaveFocus();
+  });
+
   it('counts and steps through matching messages, then clears its marks', () => {
     Element.prototype.scrollIntoView = vi.fn();
     const onClose = vi.fn();

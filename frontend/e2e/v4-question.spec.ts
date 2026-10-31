@@ -42,5 +42,47 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 1280, height: 800 
       await expect(composer).toHaveValue('Keep this draft.');
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width);
     });
+
+    test('answers a multi-select question with choices and custom text', async ({ page }, testInfo) => {
+      const session = { id: 'ss-multi-question', provider: 'deepseek', runtime: 'v4', title: 'Question fixture', cwd: '/tmp/question-fixture', status: 'running', model: 'fixture-model', createdAt: '2026-10-25T10:00:00Z' };
+      const decisions: unknown[] = [];
+      await page.route('**/api/agent/catalog*', route => route.fulfill({ json: { agents: [{ id: 'deepseek', label: 'DeepSeek', runtime: 'v4', available: true, models: [{ id: 'fixture-model', default: true }] }] } }));
+      await page.route(/\/api\/structured\/sessions(?:\?.*)?$/, route => route.fulfill({ json: [session] }));
+      await page.route(`**/api/structured/sessions/${session.id}`, route => route.fulfill({ json: session }));
+      await page.route(`**/api/structured/sessions/${session.id}/approve`, async route => {
+        decisions.push(route.request().postDataJSON());
+        await route.fulfill({ json: { status: 'accepted', approvalId: 'question-multi', approved: true } });
+      });
+      await page.routeWebSocket(`**/api/structured/sessions/${session.id}/ws*`, socket => {
+        for (const event of [
+          { type: 'turn_started', turnId: 'turn', seq: 1 },
+          { type: 'approval_required', approvalId: 'question-multi', turnId: 'turn', toolCallId: 'call-1', toolName: 'ask_user', description: 'The agent has a question for you.', toolInput: { questions: [
+            { id: 'devices', question: 'Which devices?', multiSelect: true, options: [{ label: 'Phone' }, { label: 'Desktop' }] },
+            { id: 'reason', question: 'What should I check?' },
+          ] }, seq: 2 },
+        ]) socket.send(JSON.stringify({ __terminal_meta: true, type: 'structured_event', event }));
+      });
+      await page.goto('/');
+      await page.getByLabel('Username', { exact: true }).fill(`multi-${randomUUID()}`);
+      await page.getByRole('button', { name: 'Open workspace', exact: true }).click();
+      const composer = page.getByRole('textbox', { name: 'Command composer', exact: true });
+      await composer.fill('Keep the unsent draft.');
+      const card = page.getByRole('group', { name: 'Agent question', exact: true });
+      await expect(card.getByText('Select all that apply.')).toBeVisible();
+      const phone = card.getByRole('checkbox', { name: 'Phone', exact: true });
+      await phone.check();
+      await card.getByRole('checkbox', { name: 'Desktop', exact: true }).check();
+      await card.getByRole('checkbox', { name: 'Something else', exact: true }).check();
+      await card.getByRole('textbox', { name: 'Your answer to: Which devices?' }).fill('Tablet');
+      await card.getByRole('textbox', { name: 'What should I check?' }).fill('The keyboard');
+      if (viewport.width < 768) expect((await phone.locator('..').boundingBox())!.height).toBeGreaterThanOrEqual(44);
+      await card.getByRole('button', { name: 'Send answers' }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: testInfo.outputPath('multi-question.png') });
+      await card.getByRole('button', { name: 'Send answers' }).click();
+      await expect.poll(() => decisions).toEqual([{ approvalId: 'question-multi', approved: true, answers: { devices: ['Phone', 'Desktop', 'Tablet'], reason: ['The keyboard'] } }]);
+      await expect(card).toHaveCount(0);
+      await expect(composer).toHaveValue('Keep the unsent draft.');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width);
+    });
   });
 }

@@ -101,6 +101,23 @@ function createStore(sessionId, home, signal) {
       dirtyText = true;
       save({ ...record, text, revision: createUuid() });
     },
+    ensureSavedForPaste(text, revision) {
+      if (signal.aborted || imageLatched || corrupt || record.pending || record.text !== text || record.revision !== revision) return false;
+      return save({ ...record }, true, record);
+    },
+    finalizeLargePaste({ baseText, baseRevision, localText, localRevision, remaining }) {
+      if (signal.aborted || imageLatched || corrupt || record.pending || record.text !== localText || record.revision !== localRevision || typeof remaining !== 'string') return false;
+      try {
+        const raw = storage.getItem(key);
+        if (raw === null || raw !== savedRaw) return false;
+        const base = read(raw);
+        if (base.pending || base.text !== baseText || base.revision !== baseRevision) return false;
+        return save({ ...record, text: remaining, revision: createUuid() }, true, record);
+      } catch { return false; }
+    },
+    finalizeSavedPaste({ baseText, baseRevision, remaining }) {
+      return store.finalizeLargePaste({ baseText, baseRevision, localText: baseText, localRevision: baseRevision, remaining });
+    },
     clearIfUnchanged(revision, submittedText) {
       if (imageLatched) {
         const current = imageStore?.getSnapshot();

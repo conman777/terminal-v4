@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import AttachmentDraftStatus from './AttachmentDraftStatus';
 import { useComposerFileAttachments } from '../hooks/useComposerFileAttachments';
-import { clearTokens, setUser } from '../utils/auth';
+import { captureAuthScope, clearTokens, setUser } from '../utils/auth';
+import { getEnvironmentCacheScope, getEnvironmentSignal } from '../utils/remoteEnvironments';
+import { setComposerScrollPreference } from '../utils/composerScrollPreference';
+import { createTransferReviewStore } from '../utils/transferReviewStore';
 
 const toggleAutocorrectMock = vi.fn();
 const mockMicCallbacks = new Map();
@@ -70,6 +73,139 @@ function buildProps(overrides = {}) {
 }
 
 describe('DesktopStatusBar', () => {
+  it('compacts on a real timeline scroll and expands for editing without changing the draft', () => {
+    mobileDetectMock.mockReturnValue(false);
+    const onComposerChange = vi.fn();
+    const props = buildProps({ compactConversation: true, composerValue: 'Keep my draft', onComposerChange });
+    const view = render(<div className="desktop-terminal-stack"><div className="desktop-thread"><p>Conversation</p></div><DesktopStatusBar {...props} /></div>);
+    const thread = view.container.querySelector('.desktop-thread');
+    const shell = view.container.querySelector('.status-composer-shell');
+    Object.defineProperties(thread, { scrollHeight: { value: 1200 }, clientHeight: { value: 400 }, scrollTop: { value: 600, writable: true } });
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).toHaveClass('scroll-compact');
+    expect(screen.getByRole('textbox', { name: 'Command composer' })).toHaveValue('Keep my draft');
+    fireEvent.focus(screen.getByRole('textbox', { name: 'Command composer' }));
+    expect(shell).not.toHaveClass('scroll-compact');
+    expect(onComposerChange).not.toHaveBeenCalled();
+  });
+
+  it('does not compact a phone, a narrow pane, multiline text, or a timeline already at its end', () => {
+    mobileDetectMock.mockReturnValue(false);
+    const props = buildProps({ compactConversation: true });
+    const view = render(<div className="desktop-terminal-stack"><div className="desktop-thread">Conversation</div><DesktopStatusBar {...props} /></div>);
+    const thread = view.container.querySelector('.desktop-thread');
+    const shell = view.container.querySelector('.status-composer-shell');
+    Object.defineProperties(thread, { scrollHeight: { value: 1200 }, clientHeight: { value: 400 }, scrollTop: { value: 800, writable: true } });
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    fireEvent.wheel(thread, { deltaY: 30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+    thread.scrollTop = 600;
+    shell.getBoundingClientRect = () => ({ width: 500 });
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    view.rerender(<div className="desktop-terminal-stack"><div className="desktop-thread">Conversation</div><DesktopStatusBar {...props} composerValue={'First line\nSecond line'} /></div>);
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+    mobileDetectMock.mockReturnValue(true);
+    view.rerender(<div className="desktop-terminal-stack"><div className="desktop-thread">Conversation</div><DesktopStatusBar {...props} /></div>);
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+  });
+
+  it('compacts for timeline keyboard navigation while retaining visible attachments and nested scrolling', () => {
+    mobileDetectMock.mockReturnValue(false);
+    const props = buildProps({ compactConversation: true });
+    const view = render(<div className="desktop-terminal-stack"><div className="desktop-thread" tabIndex={0}><div data-testid="nested" style={{ overflowY: 'auto' }}>Nested content</div></div><DesktopStatusBar {...props} /></div>);
+    const thread = view.container.querySelector('.desktop-thread');
+    const shell = view.container.querySelector('.status-composer-shell');
+    const nested = screen.getByTestId('nested');
+    Object.defineProperties(thread, { scrollHeight: { value: 1200 }, clientHeight: { value: 400 }, scrollTop: { value: 600, writable: true } });
+    Object.defineProperties(nested, { scrollHeight: { value: 500 }, clientHeight: { value: 100 }, scrollTop: { value: 100, writable: true } });
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    fireEvent.wheel(nested, { deltaY: -30 });
+    fireEvent.keyDown(nested, { key: 'PageUp' });
+    expect(shell).not.toHaveClass('scroll-compact');
+    fireEvent.keyDown(thread, { key: 'PageUp' });
+    expect(shell).toHaveClass('scroll-compact');
+    thread.scrollTop = 800;
+    fireEvent.scroll(thread);
+    expect(shell).not.toHaveClass('scroll-compact');
+    thread.scrollTop = 600;
+    view.rerender(<div className="desktop-terminal-stack"><div className="desktop-thread" tabIndex={0}><div data-testid="nested" style={{ overflowY: 'auto' }}>Nested content</div></div><DesktopStatusBar {...props} composerAttachments={[{ path: '/tmp/example', name: 'example' }]} /></div>);
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+    expect(screen.getByLabelText('Composer attachments')).toBeVisible();
+  });
+
+  it('does not compact beneath an open model control even when focus is outside the composer', () => {
+    mobileDetectMock.mockReturnValue(false);
+    const props = buildProps({ compactConversation: true, composerPrimaryAction: <button type="button" aria-expanded="true">Model</button> });
+    const view = render(<div className="desktop-terminal-stack"><div className="desktop-thread">Conversation</div><DesktopStatusBar {...props} /></div>);
+    const thread = view.container.querySelector('.desktop-thread');
+    const shell = view.container.querySelector('.status-composer-shell');
+    Object.defineProperties(thread, { scrollHeight: { value: 1200 }, clientHeight: { value: 400 }, scrollTop: { value: 600, writable: true } });
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+  });
+
+  it('immediately expands and stops compacting when the scrolling preference is disabled in another tab', () => {
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+    mobileDetectMock.mockReturnValue(false);
+    const view = render(<div className="desktop-terminal-stack"><div className="desktop-thread">Conversation</div><DesktopStatusBar {...buildProps({ compactConversation: true })} /></div>);
+    const thread = view.container.querySelector('.desktop-thread');
+    const shell = view.container.querySelector('.status-composer-shell');
+    Object.defineProperties(thread, { scrollHeight: { value: 1200 }, clientHeight: { value: 400 }, scrollTop: { value: 600, writable: true } });
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).toHaveClass('scroll-compact');
+    localStorage.setItem('tv4.composerCollapseOnScroll', 'false');
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: 'tv4.composerCollapseOnScroll', newValue: 'false' })));
+    expect(shell).not.toHaveClass('scroll-compact');
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+    view.unmount();
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+  });
+
+  it('updates open composers immediately when the preference changes in this tab', () => {
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+    mobileDetectMock.mockReturnValue(false);
+    const view = render(<div className="desktop-terminal-stack"><div className="desktop-thread">Conversation</div><DesktopStatusBar {...buildProps({ compactConversation: true })} /></div>);
+    const thread = view.container.querySelector('.desktop-thread');
+    const shell = view.container.querySelector('.status-composer-shell');
+    Object.defineProperties(thread, { scrollHeight: { value: 1200 }, clientHeight: { value: 400 }, scrollTop: { value: 600, writable: true } });
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).toHaveClass('scroll-compact');
+    act(() => { setComposerScrollPreference(false); });
+    expect(shell).not.toHaveClass('scroll-compact');
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).not.toHaveClass('scroll-compact');
+    act(() => { setComposerScrollPreference(true); });
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).toHaveClass('scroll-compact');
+    view.unmount();
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+  });
+
+  it('expands a compact composer when its model menu opens', async () => {
+    mobileDetectMock.mockReturnValue(false);
+    const props = buildProps({ compactConversation: true });
+    const content = open => <div className="desktop-terminal-stack"><div className="desktop-thread">Conversation</div><DesktopStatusBar {...props} composerPrimaryAction={<button type="button" aria-expanded={open}>Model</button>} /></div>;
+    const view = render(content(false));
+    const thread = view.container.querySelector('.desktop-thread');
+    const shell = view.container.querySelector('.status-composer-shell');
+    Object.defineProperties(thread, { scrollHeight: { value: 1200 }, clientHeight: { value: 400 }, scrollTop: { value: 600, writable: true } });
+    shell.getBoundingClientRect = () => ({ width: 800 });
+    fireEvent.wheel(thread, { deltaY: -30 });
+    expect(shell).toHaveClass('scroll-compact');
+    view.rerender(content(true));
+    await waitFor(() => expect(shell).not.toHaveClass('scroll-compact'));
+  });
+
   it.each(['isInterrupting', 'requiresCleanup'])('keeps typed and slash-command Enter behind the %s cancellation gate', gate => {
     const props = buildProps({ [gate]: true, composerValue: 'Keep this unsent follow-up', onInterrupt: vi.fn() });
     const view = render(<DesktopStatusBar {...props} />);
@@ -228,6 +364,16 @@ describe('DesktopStatusBar', () => {
     expect(trigger).toHaveFocus();
   });
 
+  it('shows the last reported phone context reading without changing the More control name', () => {
+    render(<DesktopStatusBar {...buildProps({ compactInputOptions: true,
+      composerContext: { percent: 25, detail: '50,000 of 200,000 tokens' } })} />);
+    const more = screen.getByLabelText('More composer actions');
+    expect(more).toHaveTextContent('25%');
+    expect(more).toHaveAccessibleDescription('Last provider-reported context: 50,000 of 200,000 tokens.');
+    fireEvent.click(more);
+    expect(screen.getAllByText('Last provider-reported context: 50,000 of 200,000 tokens.').some(element => element.closest('.composer-input-options-menu'))).toBe(true);
+  });
+
   it('keeps session context and branch switching reachable through compact mobile actions', () => {
     mobileDetectMock.mockReturnValue(true);
     const onSelectGitBranch = vi.fn();
@@ -278,9 +424,11 @@ describe('DesktopStatusBar', () => {
     expect(onComposerSubmit).not.toHaveBeenCalled();
   });
   beforeEach(() => {
+    Object.keys(localStorage).filter(key => key.startsWith('tv4:file-transfer-review:v1:')).forEach(key => localStorage.removeItem(key));
     mobileDetectMock.mockReturnValue(false);
     toggleAutocorrectMock.mockClear();
     uploadScreenshotMock.mockReset();
+    uploadAttachmentMock.mockReset();
     getImageFileFromDataTransferMock.mockReset();
     getSpellCheckerMock.mockReset();
     getAutocorrectSuggestionMock.mockReset();
@@ -490,6 +638,265 @@ describe('DesktopStatusBar', () => {
     expect([input.getAttribute('accept'), uploadAttachmentMock.mock.calls.length, onComposerAttachmentAdd.mock.calls]).toEqual([
       null, 1, [[{ name: 'spec.pdf', path: '/home/me/terminal-v4-uploads/1/spec.pdf' }]],
     ]);
+  });
+
+  it('attaches image formats that are not supported by the screenshot uploader as ordinary files', async () => {
+    const onComposerAttachmentAdd = vi.fn();
+    uploadAttachmentMock.mockResolvedValue('/fixture/diagram.svg');
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, onComposerAttachmentAdd })} />);
+    const input = view.container.querySelector('.status-composer-image-input');
+    fireEvent.click(screen.getByRole('button', { name: 'Attach file' }));
+    await act(async () => { fireEvent.change(input, { target: { files: [new File(['<svg/>'], 'diagram.svg', { type: 'image/svg+xml' })] } }); });
+    expect(onComposerAttachmentAdd.mock.calls).toEqual([[{ name: 'diagram.svg', path: '/fixture/diagram.svg' }]]);
+    expect(uploadScreenshotMock).not.toHaveBeenCalled();
+  });
+
+  it('drops multiple files in order and blocks submission until their uploads finish', async () => {
+    const onComposerAttachmentAdd = vi.fn(), onComposerSubmit = vi.fn();
+    let finishFirst;
+    uploadAttachmentMock.mockImplementation(() => new Promise(resolve => { finishFirst = resolve; }));
+    uploadScreenshotMock.mockResolvedValue('/fixture/two.png');
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, composerValue: 'Keep my draft', onComposerAttachmentAdd, onComposerSubmit })} />);
+    const files = [new File(['first'], 'one.txt', { type: 'text/plain' }), new File(['image'], 'two.png', { type: 'image/png' })];
+    fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files, items: [] } });
+    await waitFor(() => expect(uploadAttachmentMock).toHaveBeenCalledOnce());
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    await act(async () => finishFirst('/fixture/one.txt'));
+    await waitFor(() => expect(onComposerAttachmentAdd).toHaveBeenCalledTimes(2));
+    expect(onComposerAttachmentAdd.mock.calls).toEqual([[{ name: 'one.txt', path: '/fixture/one.txt' }], [{ name: 'two.png', path: '/fixture/two.png' }]]);
+    expect(screen.getByRole('textbox', { name: 'Command composer' })).toHaveValue('Keep my draft');
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+  });
+
+  it('retains the upload recovery record until the selected file is saved', async () => {
+    let finishSave;
+    const waitForAttachmentPersistence = vi.fn(() => new Promise(resolve => { finishSave = resolve; }));
+    uploadAttachmentMock.mockResolvedValue('/fixture/one.txt');
+    const view = render(<DesktopStatusBar {...buildProps({ sessionId: 'pending-save', allowAnyFile: true, composerValue: 'Keep my draft', onComposerAttachmentAdd: vi.fn(), waitForAttachmentPersistence })} />);
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [new File(['a'], 'one.txt', { type: 'text/plain' })], items: [] } }); });
+    await waitFor(() => expect(waitForAttachmentPersistence).toHaveBeenCalledOnce());
+    expect(Object.keys(localStorage).filter(key => key.startsWith('tv4:file-transfer-review:v1:'))).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    await act(async () => finishSave(true));
+    expect(Object.keys(localStorage).filter(key => key.startsWith('tv4:file-transfer-review:v1:'))).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeEnabled();
+  });
+
+  it('holds file selection for review if saving it cannot be confirmed', async () => {
+    uploadAttachmentMock.mockResolvedValue('/fixture/one.txt');
+    const view = render(<DesktopStatusBar {...buildProps({ sessionId: 'failed-save', allowAnyFile: true, composerValue: 'Keep my draft', onComposerAttachmentAdd: vi.fn(), waitForAttachmentPersistence: async () => false })} />);
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [new File(['a'], 'one.txt', { type: 'text/plain' })], items: [] } }); });
+    expect(screen.getByRole('alert')).toHaveTextContent(/could not be saved/i);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    expect(Object.keys(localStorage).filter(key => key.startsWith('tv4:file-transfer-review:v1:'))).toHaveLength(1);
+  });
+
+  it('accepts multiple selected files for file-capable conversations', async () => {
+    const onComposerAttachmentAdd = vi.fn();
+    uploadAttachmentMock.mockImplementation(async file => `/fixture/${file.name}`);
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, onComposerAttachmentAdd })} />);
+    const input = view.container.querySelector('.status-composer-image-input');
+    expect(input).toHaveAttribute('multiple');
+    fireEvent.click(screen.getByRole('button', { name: 'Attach file' }));
+    await act(async () => { fireEvent.change(input, { target: { files: [new File(['a'], 'one.txt', { type: 'text/plain' }), new File(['b'], 'two.pdf', { type: 'application/pdf' })] } }); });
+    expect(onComposerAttachmentAdd.mock.calls).toEqual([[{ name: 'one.txt', path: '/fixture/one.txt' }], [{ name: 'two.pdf', path: '/fixture/two.pdf' }]]);
+  });
+
+  it('pastes files and preserves pasted text at the current selection', async () => {
+    const onComposerAttachmentAdd = vi.fn(), onComposerChange = vi.fn();
+    uploadAttachmentMock.mockImplementation(async file => `/fixture/${file.name}`);
+    render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, composerValue: 'left RIGHT tail', onComposerAttachmentAdd, onComposerChange })} />);
+    const input = screen.getByRole('textbox', { name: 'Command composer' });
+    input.setSelectionRange(5, 10);
+    const files = [new File(['a'], 'one.txt', { type: 'text/plain' }), new File(['b'], 'two.pdf', { type: 'application/pdf' })];
+    await act(async () => { fireEvent.paste(input, { clipboardData: { files, items: [], getData: type => type === 'text/plain' ? 'pasted text' : '' } }); });
+    expect(onComposerChange).toHaveBeenCalledExactlyOnceWith('left pasted text tail');
+    expect(onComposerAttachmentAdd.mock.calls).toEqual([[{ name: 'one.txt', path: '/fixture/one.txt' }], [{ name: 'two.pdf', path: '/fixture/two.pdf' }]]);
+  });
+
+  it('stops a batch if the file selection changes while an upload is pending', async () => {
+    let selection = {}, finishFirst;
+    const onComposerAttachmentAdd = vi.fn();
+    uploadAttachmentMock.mockImplementation(() => new Promise(resolve => { finishFirst = resolve; }));
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, onComposerAttachmentAdd,
+      getAttachmentSelectionToken: () => selection, isAttachmentSelectionTokenCurrent: value => value === selection })} />);
+    const files = [new File(['a'], 'one.txt', { type: 'text/plain' }), new File(['b'], 'two.txt', { type: 'text/plain' })];
+    fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files, items: [] } });
+    await waitFor(() => expect(uploadAttachmentMock).toHaveBeenCalledOnce());
+    selection = {};
+    await act(async () => finishFirst('/fixture/one.txt'));
+    expect(uploadAttachmentMock).toHaveBeenCalledOnce();
+    expect(onComposerAttachmentAdd).not.toHaveBeenCalled();
+    expect(screen.getByText(/file selections changed/i)).toBeVisible();
+  });
+
+  it('rejects a second drop while a file batch is still uploading', async () => {
+    let finish;
+    uploadAttachmentMock.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const onComposerAttachmentAdd = vi.fn();
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, onComposerAttachmentAdd })} />);
+    const shell = view.container.querySelector('.status-composer-shell');
+    const drop = name => fireEvent.drop(shell, { dataTransfer: { types: ['Files'], files: [new File(['a'], name, { type: 'text/plain' })], items: [] } });
+    drop('first.txt');
+    await waitFor(() => expect(uploadAttachmentMock).toHaveBeenCalledOnce());
+    drop('second.txt');
+    expect(uploadAttachmentMock).toHaveBeenCalledOnce();
+    expect(screen.getByRole('alert')).toHaveTextContent(/wait.*upload/i);
+    await act(async () => finish('/fixture/first.txt'));
+    expect(onComposerAttachmentAdd.mock.calls).toEqual([[{ name: 'first.txt', path: '/fixture/first.txt' }]]);
+  });
+
+  it('stops at a failed file and reports files already attached', async () => {
+    const onComposerAttachmentAdd = vi.fn(), onComposerSubmit = vi.fn();
+    uploadAttachmentMock.mockResolvedValueOnce('/fixture/one.txt').mockRejectedValueOnce(new Error('Synthetic upload failed'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, composerValue: 'Keep my draft', onComposerAttachmentAdd, onComposerSubmit })} />);
+    const files = ['one.txt', 'two.txt', 'three.txt'].map(name => new File(['a'], name, { type: 'text/plain' }));
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files, items: [] } }); });
+    expect(uploadAttachmentMock).toHaveBeenCalledTimes(2);
+    expect(onComposerAttachmentAdd.mock.calls).toEqual([[{ name: 'one.txt', path: '/fixture/one.txt' }]]);
+    expect(screen.getByRole('alert')).toHaveTextContent(/Synthetic upload failed.*1 file was already attached/i);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command composer' }), { key: 'Enter' });
+    fireEvent.submit(view.container.querySelector('form'));
+    expect(onComposerSubmit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
+    expect(onComposerSubmit).toHaveBeenCalledExactlyOnceWith('Keep my draft');
+    consoleError.mockRestore();
+  });
+
+  it('rejects an oversized file batch before uploading any file', async () => {
+    const onComposerAttachmentAdd = vi.fn();
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, onComposerAttachmentAdd })} />);
+    const files = Array.from({ length: 101 }, (_, index) => new File(['a'], `${index}.txt`, { type: 'text/plain' }));
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files, items: [] } }); });
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/up to 100 files/i);
+  });
+
+  it('rejects a folder drop without uploading any files or changing the draft', async () => {
+    const onComposerAttachmentAdd = vi.fn(), onComposerChange = vi.fn();
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true, composerValue: 'Keep this', onComposerAttachmentAdd, onComposerChange })} />);
+    const file = new File(['a'], 'one.txt', { type: 'text/plain' });
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [file], items: [{ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }] } }); });
+    expect(screen.getByRole('alert')).toHaveTextContent(/folders.*cannot.*attached/i);
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(onComposerAttachmentAdd).not.toHaveBeenCalled();
+    expect(onComposerChange).not.toHaveBeenCalled();
+  });
+
+  it('does not carry an incomplete file selection into a different session', async () => {
+    const props = buildProps({ sessionId: 'first-session', allowAnyFile: true, composerValue: 'First draft' });
+    const view = render(<DesktopStatusBar {...props} />);
+    const file = new File(['a'], 'one.txt', { type: 'text/plain' });
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [file], items: [{ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }] } }); });
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    view.rerender(<DesktopStatusBar {...props} sessionId="next-session" composerValue="Next draft" />);
+    expect(screen.queryByRole('button', { name: 'Continue with current files' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Command composer' })).toHaveValue('Next draft');
+  });
+
+  it('restores an incomplete-selection hold when the composer remounts in the same session', async () => {
+    const props = buildProps({ sessionId: 'review-session', allowAnyFile: true, composerValue: 'Keep my draft' });
+    const view = render(<DesktopStatusBar {...props} />);
+    const file = new File(['a'], 'one.txt', { type: 'text/plain' });
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [file], items: [{ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }] } }); });
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    view.unmount();
+    render(<DesktopStatusBar {...props} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/previous file selection.*check/i);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Command composer' })).toHaveValue('Keep my draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeEnabled();
+  });
+
+  it('keeps another tab\'s newer review after acknowledging the local selection', async () => {
+    const props = buildProps({ sessionId: 'two-reviews', allowAnyFile: true, composerValue: 'Keep my draft' });
+    const view = render(<DesktopStatusBar {...props} />);
+    const file = new File(['a'], 'one.txt', { type: 'text/plain' });
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [file], items: [{ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }] } }); });
+    const other = createTransferReviewStore({ sessionId: 'two-reviews', auth: captureAuthScope(), environment: getEnvironmentCacheScope(), signal: getEnvironmentSignal() });
+    act(() => { expect(other.mark()).toBeTruthy(); });
+    expect(screen.getByText(/1 other selection needs review/i)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/previous file selection.*check/i);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeEnabled();
+  });
+
+  it('holds sending if saved selection warnings cannot be read on first open', () => {
+    const length = vi.spyOn(Storage.prototype, 'length', 'get').mockImplementation(() => { throw new Error('storage unavailable'); });
+    render(<DesktopStatusBar {...buildProps({ sessionId: 'review-unreadable', allowAnyFile: true, composerValue: 'Keep my draft' })} />);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent(/could not save or read the review warning/i);
+    length.mockRestore();
+    act(() => window.dispatchEvent(new StorageEvent('storage', { key: null })));
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeEnabled();
+  });
+
+  it('reports when the review warning cannot be saved on the device', async () => {
+    const original = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (key.startsWith('tv4:file-transfer-review:v1:')) throw new Error('storage unavailable');
+      return original.call(this, key, value);
+    });
+    const view = render(<DesktopStatusBar {...buildProps({ sessionId: 'review-storage', allowAnyFile: true, composerValue: 'Keep my draft' })} />);
+    const file = new File(['a'], 'one.txt', { type: 'text/plain' });
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [file], items: [{ kind: 'file', webkitGetAsEntry: () => ({ isDirectory: true }) }] } }); });
+    expect(screen.getByRole('status')).toHaveTextContent(/could not save.*keep this tab open/i);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+  });
+
+  it('does not upload files when the recovery record cannot be saved', async () => {
+    const original = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (key.startsWith('tv4:file-transfer-review:v1:')) throw new Error('storage unavailable');
+      return original.call(this, key, value);
+    });
+    const view = render(<DesktopStatusBar {...buildProps({ sessionId: 'claim-storage', allowAnyFile: true, composerValue: 'Keep my draft' })} />);
+    const file = new File(['a'], 'one.txt', { type: 'text/plain' });
+    await act(async () => { fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files: [file], items: [] } }); });
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/no files were uploaded/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/could not save.*keep this tab open/i);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+  });
+
+  it('fails closed when dropped items cannot be inspected and clears drag highlighting on leave', async () => {
+    const view = render(<DesktopStatusBar {...buildProps({ allowAnyFile: true, attachmentsEnabled: true })} />);
+    const shell = view.container.querySelector('.status-composer-shell');
+    const transfer = { types: ['Files'], files: [new File(['a'], 'one.txt', { type: 'text/plain' })], items: [{ kind: 'file', webkitGetAsEntry: () => { throw new Error('unavailable'); } }] };
+    fireEvent.dragOver(shell, { dataTransfer: transfer });
+    expect(shell).toHaveClass('image-drag-over');
+    fireEvent.dragLeave(shell, { relatedTarget: null });
+    expect(shell).not.toHaveClass('image-drag-over');
+    await act(async () => { fireEvent.drop(shell, { dataTransfer: transfer }); });
+    expect(screen.getByRole('alert')).toHaveTextContent(/could not be inspected.*no files were attached/i);
+    expect(uploadAttachmentMock).not.toHaveBeenCalled();
+  });
+
+  it('does not continue an old upload batch after the active session changes', async () => {
+    let finish;
+    uploadAttachmentMock.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const firstAdd = vi.fn(), nextAdd = vi.fn();
+    const props = buildProps({ sessionId: 'first-session', allowAnyFile: true, attachmentsEnabled: true, onComposerAttachmentAdd: firstAdd });
+    const view = render(<DesktopStatusBar {...props} />);
+    const files = [new File(['a'], 'one.txt', { type: 'text/plain' }), new File(['b'], 'two.txt', { type: 'text/plain' })];
+    fireEvent.drop(view.container.querySelector('.status-composer-shell'), { dataTransfer: { types: ['Files'], files, items: [] } });
+    await waitFor(() => expect(uploadAttachmentMock).toHaveBeenCalledOnce());
+    view.rerender(<DesktopStatusBar {...props} sessionId="next-session" onComposerAttachmentAdd={nextAdd} />);
+    await act(async () => finish('/fixture/one.txt'));
+    expect(uploadAttachmentMock).toHaveBeenCalledOnce();
+    expect(firstAdd).not.toHaveBeenCalled();
+    expect(nextAdd).not.toHaveBeenCalled();
+    view.rerender(<DesktopStatusBar {...props} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/previous file selection.*check/i);
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
   });
 
   it('does not add a completed upload to a replacement file selection', async () => {

@@ -223,7 +223,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
 
   const processEvent = useCallback((event) => {
     if (controlScopeRef.current !== controlScope || controlScope.signal.aborted) return;
-    if (event.type === 'context_usage' && event.usage && typeof event.usage === 'object') setContextUsage({ sessionId, usage: event.usage });
+    if (event.type === 'context_usage' && event.usage && typeof event.usage === 'object') setContextUsage({ scope: controlScope, usage: event.usage });
     if (isV4 && Number.isSafeInteger(event.seq) && event.seq > 0) {
       setControlProjection(previous => controlScopeRef.current === controlScope && !controlScope.signal.aborted
         ? appendControl(previous, controlScope, event) : previous);
@@ -447,6 +447,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
     const remote = Boolean(getActiveEnvironment());
     const resetModel = () => {
       resetControls();
+      setContextUsage(null);
       lastSeqRef.current = 0;
       isReconnectRef.current = false;
       setMessages([]);
@@ -968,7 +969,7 @@ export function useStructuredSession({ sessionId, active = true, runtime, status
 
   return {
     messages,
-    contextUsage: contextUsage?.sessionId === sessionId ? contextUsage.usage : null,
+    contextUsage: contextUsage?.scope === controlScope && !environmentSignal.aborted ? contextUsage.usage : null,
     controlState, controlError,
     currentToolCalls,
     pendingApproval,

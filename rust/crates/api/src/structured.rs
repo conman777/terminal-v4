@@ -314,6 +314,7 @@ struct SessionReadAdmission<'a> {
     app: &'a crate::state::AppState,
     local: Option<&'a crate::auth::LocalAuthority>,
     paired: Option<&'a crate::auth::PairedInputAuthority>,
+    nonblocking: bool,
 }
 
 impl SessionReadAdmission<'_> {
@@ -352,6 +353,24 @@ impl SessionReadAdmission<'_> {
         owner: &str,
         action: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, String>,
     ) -> Result<T, ThreadUpdateFailure> {
+        #[cfg(unix)]
+        if self.nonblocking {
+            let review = |_: &rusqlite::Transaction<'_>, check: &dyn Fn() -> Result<(), String>| {
+                let result = action(check)?;
+                check()?;
+                Ok(result)
+            };
+            let result = if let Some(local) = self.local {
+                self.app.try_with_owner_review(owner, local, review)
+            } else if let Some(paired) = self.paired {
+                self.app.try_with_paired_owner_review(owner, paired, review)
+            } else {
+                return Err(ThreadUpdateFailure::Unauthorized(
+                    "Credential scope mismatch".into(),
+                ));
+            };
+            return result.map_err(read_authority_error);
+        }
         #[cfg(unix)]
         if let Some(local) = self.local {
             let (result, confirmed) = self
@@ -640,6 +659,25 @@ pub(crate) trait StructuredProcessController: Send + Sync {
         _answers: Value,
     ) -> Result<DecisionReceipt, String> {
         Err("This agent cannot receive answers to questions".into())
+    }
+    #[cfg(unix)]
+    async fn private_output_preview(
+        &self,
+        _approval_id: &str,
+        _action_id: &str,
+        _context: &PairedDecisionContext,
+    ) -> Result<(String, Value), String> {
+        Err("This provider does not support private output review".into())
+    }
+    #[cfg(unix)]
+    async fn private_output_decision(
+        &self,
+        _approval_id: &str,
+        _action_id: &str,
+        _token: &str,
+        _context: &PairedDecisionContext,
+    ) -> Result<DecisionReceipt, String> {
+        Err("This provider does not support private output review".into())
     }
     #[cfg(unix)]
     async fn send_paired_decision(
@@ -1798,6 +1836,7 @@ impl StructuredSessionManager {
             );
             let item = StructuredSessionInventory {
                 id: metadata.id,
+                session_incarnation: state.session_incarnation,
                 title: metadata.title,
                 cwd: metadata.cwd,
                 provider: metadata.provider,
@@ -1903,7 +1942,12 @@ impl StructuredSessionManager {
         paired: Option<&crate::auth::PairedInputAuthority>,
         method: &str,
     ) -> Result<Value, StructuredControlError> {
-        let admission = SessionReadAdmission { app, local, paired };
+        let admission = SessionReadAdmission {
+            app,
+            local,
+            paired,
+            nonblocking: false,
+        };
         admission
             .validate_scope(self, method, "/api/structured/sessions")
             .map_err(ThreadUpdateFailure::control)?;
@@ -1932,7 +1976,12 @@ impl StructuredSessionManager {
         paired: Option<&crate::auth::PairedInputAuthority>,
         method: &str,
     ) -> Result<Option<StructuredSessionSnapshot>, StructuredControlError> {
-        let admission = SessionReadAdmission { app, local, paired };
+        let admission = SessionReadAdmission {
+            app,
+            local,
+            paired,
+            nonblocking: false,
+        };
         admission
             .validate_scope(self, method, &format!("/api/structured/sessions/{id}"))
             .map_err(ThreadUpdateFailure::control)?;
@@ -2300,7 +2349,7 @@ impl StructuredSessionManager {
         id: &str,
         updates: StructuredThreadUpdate,
     ) -> Result<Option<StructuredThreadMetadata>, String> {
-        self.update_thread_inner(user_id, id, updates, None)
+        self.update_thread_inner(user_id, id, updates, None, None)
             .await
             .map_err(ThreadUpdateFailure::message)
     }
@@ -2347,6 +2396,7 @@ impl StructuredSessionManager {
             id,
             updates,
             Some(ThreadPatchAdmission { app, local, paired }),
+            None,
         )
         .await
         .map_err(ThreadUpdateFailure::control)
@@ -2358,6 +2408,7 @@ impl StructuredSessionManager {
         id: &str,
         updates: StructuredThreadUpdate,
         admission: Option<ThreadPatchAdmission<'_>>,
+        expected_auto_settle: Option<&StructuredSessionInventory>,
     ) -> Result<Option<StructuredThreadMetadata>, ThreadUpdateFailure> {
         let Some(session) = self.owned_session(user_id, id).await? else {
             return Ok(None);
@@ -2442,6 +2493,20 @@ impl StructuredSessionManager {
         }
         if state.deleting || state.retiring {
             return Err("Session is being retired".into());
+        }
+        if let Some(expected) = expected_auto_settle {
+            let unchanged = expected.id == state.id
+                && expected.session_incarnation == state.session_incarnation
+                && expected.latest_seq
+                    == state.events.last().map_or(0, StructuredSessionEvent::seq)
+                && expected
+                    .thread
+                    .as_ref()
+                    .map(|thread| &thread.last_activity_at)
+                    == state.thread.as_ref().map(|thread| &thread.last_activity_at);
+            if !unchanged {
+                return Ok(None);
+            }
         }
         let mut snapshot = snapshot_from_state(&state);
         let mut thread = snapshot.thread.unwrap_or_else(|| {
@@ -4658,7 +4723,7 @@ impl StructuredSessionManager {
             ));
         }
         #[cfg(unix)]
-        let queued_authority = if queued {
+        let (queued_authority, queued_paired_grant) = if queued {
             let proof =
                 queue::verify_queue_authority_for_admission(self, &state, &request_id, &text)?;
             if proof.is_none() && (cfg!(not(test)) || self.inner.local_admission.get().is_some()) {
@@ -4666,9 +4731,21 @@ impl StructuredSessionManager {
                     "Queued message needs authorization. Sign in locally, edit and save the message, then resume the queue",
                 ));
             }
-            proof.map(crate::auth::LocalAuthority::from_verified_queue)
+            match proof {
+                Some(crate::followup_queue::VerifiedQueueAuthority::Paired(grant)) => {
+                    (None, Some(grant))
+                }
+                Some(local) => (
+                    Some(
+                        crate::auth::LocalAuthority::from_verified_queue(local)
+                            .map_err(StructuredControlError::conflict)?,
+                    ),
+                    None,
+                ),
+                None => (None, None),
+            }
         } else {
-            None
+            (None, None)
         };
         #[cfg(unix)]
         let authority = if queued {
@@ -4721,6 +4798,32 @@ impl StructuredSessionManager {
                         "Credential admission unavailable",
                     ));
                 }
+            }
+        }
+        #[cfg(unix)]
+        if let Some(grant) = &queued_paired_grant {
+            self.validate_live_owner(user_id)
+                .map_err(StructuredControlError::internal)?;
+            let admission = self.inner.local_admission.get().ok_or_else(|| {
+                StructuredControlError::internal("Paired credential admission unavailable")
+            })?;
+            let (checked, confirmed) = admission
+                .accept_paired(user_id, grant, |check| check())
+                .map_err(|message| {
+                    if message == "Owner input is busy" {
+                        StructuredControlError {
+                            code: "paired_owner_busy",
+                            message,
+                        }
+                    } else {
+                        StructuredControlError::conflict(message)
+                    }
+                })?;
+            checked.map_err(StructuredControlError::conflict)?;
+            if !confirmed {
+                return Err(StructuredControlError::internal(
+                    "Paired credential admission unavailable",
+                ));
             }
         }
         if state.events.iter().any(|event|matches!(event,StructuredSessionEvent::CommandAccepted{request_id:id,..} if id==&request_id)){return Err(StructuredControlError::conflict("requestId was accepted as a different command"));}
@@ -4868,11 +4971,15 @@ impl StructuredSessionManager {
             return Err(StructuredControlError::conflict("Conversation storage is full; start a new conversation. Existing request receipts are preserved."));
         }
         #[cfg(unix)]
+        let mut paired_grant = queued_paired_grant.clone();
+        #[cfg(unix)]
         if let Some(paired) = paired {
             let app_state = app_state
                 .ok_or_else(|| StructuredControlError::internal("Paired admission unavailable"))?;
             crate::paired_environments::validate_message_authority(app_state, paired, user_id)
                 .map_err(StructuredControlError::conflict)?;
+            paired_grant =
+                crate::paired_environments::capture_paired_grant(app_state, paired, user_id).ok();
             self.validate_live_owner(user_id)
                 .map_err(StructuredControlError::internal)?;
         }
@@ -4925,6 +5032,36 @@ impl StructuredSessionManager {
                 }
                 Err(error) => Err(error.to_string()),
             }
+        } else if let Some(grant) = &queued_paired_grant {
+            let admission_result = self
+                .inner
+                .local_admission
+                .get()
+                .ok_or_else(|| "Paired credential admission unavailable".to_string())
+                .and_then(|admission| {
+                    admission.accept_paired(user_id, grant, |check| {
+                        self.persist_snapshot_with_mode(
+                            user_id,
+                            &snapshot,
+                            state.session_incarnation,
+                            false,
+                            false,
+                            true,
+                            Some(check),
+                        )
+                    })
+                });
+            match admission_result {
+                Ok((result, confirmed)) => {
+                    if !confirmed && result.is_ok() {
+                        tracing::warn!(
+                            "Paired credential outcome uncertain after canonical acceptance"
+                        );
+                    }
+                    result
+                }
+                Err(error) => Err(error),
+            }
         } else {
             self.persist_snapshot(user_id, &snapshot, state.session_incarnation)
         };
@@ -4939,6 +5076,13 @@ impl StructuredSessionManager {
                     code: e.code,
                     message: e.message,
                 })?;
+            }
+            #[cfg(unix)]
+            if queued_paired_grant.is_some() && error == "Owner input is busy" {
+                return Err(StructuredControlError {
+                    code: "paired_owner_busy",
+                    message: error,
+                });
             }
             return Err(StructuredControlError::internal(error));
         }
@@ -4982,6 +5126,8 @@ impl StructuredSessionManager {
                         .is_some()
                 })
                 .cloned(),
+            #[cfg(unix)]
+            paired_authority: paired_grant,
         };
         state.events = snapshot.events;
         state.updated_at = snapshot.updated_at;
@@ -7416,6 +7562,8 @@ const MAX_STRUCTURED_EVENTS: usize = 32768;
 #[serde(rename_all = "camelCase")]
 pub struct StructuredSessionInventory {
     id: String,
+    #[serde(skip)]
+    session_incarnation: Option<SessionIncarnation>,
     title: String,
     cwd: String,
     provider: String,
@@ -7974,6 +8122,35 @@ impl StructuredProcessController for V4StructuredController {
         answers: Value,
     ) -> Result<DecisionReceipt, String> {
         self.gate.answer(id, answers, self.sink.as_ref()).await
+    }
+    #[cfg(unix)]
+    async fn private_output_preview(
+        &self,
+        approval_id: &str,
+        action_id: &str,
+        context: &PairedDecisionContext,
+    ) -> Result<(String, Value), String> {
+        let actor = self
+            .resources
+            .background_actor(self.gate.scope())
+            .ok_or("Private output review is unavailable")?;
+        actor.private_preview(approval_id, action_id, context).await
+    }
+    #[cfg(unix)]
+    async fn private_output_decision(
+        &self,
+        approval_id: &str,
+        action_id: &str,
+        token: &str,
+        context: &PairedDecisionContext,
+    ) -> Result<DecisionReceipt, String> {
+        let actor = self
+            .resources
+            .background_actor(self.gate.scope())
+            .ok_or("Private output review is unavailable")?;
+        actor
+            .private_decision(approval_id, action_id, token, context)
+            .await
     }
     #[cfg(unix)]
     async fn send_paired_decision(
@@ -9810,7 +9987,7 @@ impl V4Job {
                 _ => None,
             };
             #[cfg(unix)]
-            let _delegation_turn = if matches!(&work, V4Work::Turn(_)) {
+            let _delegation_turn = if let V4Work::Turn(options) = &work {
                 manager
                     .inner
                     .delegation_supervisor
@@ -9828,7 +10005,8 @@ impl V4Job {
                                 scope,
                                 generation,
                             )
-                            .ok()?,
+                            .ok()?
+                            .with_paired_authority(options.paired_authority.clone()),
                         );
                         controller.resources.bind_delegation(&turn).ok()?;
                         Some(turn)
@@ -9959,6 +10137,13 @@ impl V4Job {
                         .err();
             }
             let mut blocked = !healthy || terminal.is_err() || settlement_error.is_some();
+            // A new turn may be admitted as soon as finalization releases the
+            // session barrier. Retire the old turn-scoped actors first.
+            #[cfg(unix)]
+            {
+                drop(_background_turn);
+                drop(_delegation_turn);
+            }
             if !blocked {
                 if let Err(error) = manager
                     .settle_finalization(&owner, &session_id, generation, owns_barrier)

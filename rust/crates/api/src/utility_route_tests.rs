@@ -11,6 +11,75 @@ fn state_at(path: &std::path::Path) -> AppState {
     .unwrap()
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn vault_mutations_return_actionable_conflict_while_image_request_is_admitted() {
+    let data = tempfile::tempdir().unwrap();
+    let state = state_at(data.path());
+    let user = AuthenticatedUser {
+        user_id: "utility-fixture".into(),
+        username: "synthetic".into(),
+    };
+    let legacy = vault::encrypt_secret("synthetic secret", "dev-vault-key-change-in-production")
+        .unwrap()
+        .replacen("enc:v2:", "enc:v1:", 1);
+    state
+        .add_vault_key(&user, "previous", "old", &legacy, "2020-01-01")
+        .unwrap();
+    let lease = crate::vault_admission::shared(data.path(), &user.user_id).unwrap();
+    for (method, path, body) in [
+        (
+            "POST",
+            "/api/vault",
+            json!({"keyName":"new","keyValue":"synthetic"}),
+        ),
+        ("DELETE", "/api/vault/previous", Value::Null),
+        ("GET", "/api/vault/previous/reveal", Value::Null),
+    ] {
+        let (status, body) = request(&state, method, path, body).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], crate::vault_admission::BUSY);
+    }
+    drop(lease);
+    assert_eq!(
+        request(&state, "GET", "/api/vault/previous/reveal", Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn vault_routes_report_retryable_conflict_for_unrelated_sqlite_writer() {
+    let data = tempfile::tempdir().unwrap();
+    let state = state_at(data.path());
+    state
+        .lock_db()
+        .unwrap()
+        .busy_timeout(std::time::Duration::from_millis(10))
+        .unwrap();
+    drop(crate::vault_admission::exclusive(data.path(), "utility-fixture").unwrap());
+    let db = rusqlite::Connection::open(data.path().join("terminal.db")).unwrap();
+    db.execute_batch("BEGIN IMMEDIATE").unwrap();
+    for (path, body) in [
+        (
+            "/api/vault",
+            json!({"keyName":"new", "keyValue":"synthetic"}),
+        ),
+        (
+            "/api/agent/auth/openai-api/api-key",
+            json!({"apiKey":"synthetic-credential"}),
+        ),
+    ] {
+        let method = if path == "/api/vault" { "POST" } else { "PUT" };
+        let (status, body) = request(&state, method, path, body).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], crate::vault_admission::BUSY);
+    }
+    db.execute_batch("ROLLBACK").unwrap();
+}
+
 async fn request(state: &AppState, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
     let token =
         auth::issue_access_token(&state.config().jwt_secret, "utility-fixture", "synthetic");

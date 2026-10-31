@@ -1,11 +1,11 @@
 import { useRef } from 'react';
 import './PaneSeparator.css';
 
-export function PaneSeparator({ orientation = 'vertical', label, value, min, max, step, largeStep, format = String, onChange, measure, onDragChange }) {
+export function PaneSeparator({ orientation = 'vertical', label, value, min, max, step, largeStep, format = String, onChange, measure, onDragChange, reverseKeyboard = false }) {
   const dragging = useRef(false);
   const horizontalKeys = orientation === 'vertical';
-  const grow = horizontalKeys ? 'ArrowRight' : 'ArrowUp';
-  const shrink = horizontalKeys ? 'ArrowLeft' : 'ArrowDown';
+  const grow = horizontalKeys ? (reverseKeyboard ? 'ArrowLeft' : 'ArrowRight') : (reverseKeyboard ? 'ArrowDown' : 'ArrowUp');
+  const shrink = horizontalKeys ? (reverseKeyboard ? 'ArrowRight' : 'ArrowLeft') : (reverseKeyboard ? 'ArrowUp' : 'ArrowDown');
 
   function onKeyDown(event) {
     if (event.altKey || event.ctrlKey || event.metaKey) return;

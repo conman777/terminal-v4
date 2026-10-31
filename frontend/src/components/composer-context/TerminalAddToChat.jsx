@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { captureAuthScope, isAuthScopeCurrent } from '../../utils/auth';
+import { getEnvironmentSignal } from '../../utils/remoteEnvironments';
 import { describeAddToChat } from './addToChatState';
 import { addTerminalSelectionToDraft } from './terminalSelection';
 
@@ -10,8 +12,9 @@ export function useTerminalAddToChat({ terminalId, owner, label = 'Terminal' }) 
   const [registered, setRegistered] = useState(null);
   const [text, setText] = useState('');
   const [added, setAdded] = useState(null);
-  const register = useCallback(actions => setRegistered(actions || null), []);
-  const actions = registered && registered.sessionId === terminalId ? registered : null;
+  const register = useCallback(actions => setRegistered(actions ? { actions, auth: captureAuthScope(), environment: getEnvironmentSignal() } : null), []);
+  const registrationCurrent = () => registered && !registered.environment.aborted && isAuthScopeCurrent(registered.auth);
+  const actions = registered?.actions?.sessionId === terminalId && registrationCurrent() ? registered.actions : null;
 
   useEffect(() => {
     setText('');
@@ -27,23 +30,30 @@ export function useTerminalAddToChat({ terminalId, owner, label = 'Terminal' }) 
   const ownerTitle = owner?.title;
 
   const add = useCallback(() => {
+    if (!registered || registered.environment.aborted || !isAuthScopeCurrent(registered.auth)) return false;
     const current = readText(actions);
     if (!ownerId || !addTerminalSelectionToDraft(ownerId, current, label)) return false;
     setAdded({ title: ownerTitle });
     actions.clearSelection?.();
     return true;
-  }, [actions, label, ownerId, ownerTitle]);
+  }, [actions, label, ownerId, ownerTitle, registered]);
 
-  const menuItems = useMemo(() => {
+  const makeMenuItems = useCallback(() => {
     if (!actions?.hasSelection?.()) return [];
     const check = describeAddToChat({ owner: ownerId ? { threadId: ownerId, title: ownerTitle } : null, text: readText(actions) });
     return [
       { label: 'Copy selection', onClick: () => actions.copySelection?.() },
       { label: check.disabled ? `Add to chat (${check.reason.replace(/\.$/, '').replace(/^./, c => c.toLowerCase())})` : `Add to chat: ${ownerTitle}`, disabled: check.disabled, onClick: add },
     ];
-  }, [actions, add, ownerId, ownerTitle, text]);
+  }, [actions, add, ownerId, ownerTitle]);
+  const menuItems = useMemo(() => makeMenuItems(), [makeMenuItems, text]);
+  const menuItemsAtPoint = useCallback((coords) => {
+    if (!registered || registered.environment.aborted || !isAuthScopeCurrent(registered.auth)) return [];
+    if (!actions?.hasSelection?.()) actions?.selectLineAtPoint?.(coords);
+    return makeMenuItems();
+  }, [actions, makeMenuItems, registered]);
 
-  return { ...state, owner, added, register, add, menuItems, hasSelection: Boolean(text) };
+  return { ...state, owner, added, register, add, menuItems, menuItemsAtPoint, hasSelection: Boolean(text) };
 }
 
 export function TerminalAddToChat({ state, className = 'terminal-add-to-chat' }) {

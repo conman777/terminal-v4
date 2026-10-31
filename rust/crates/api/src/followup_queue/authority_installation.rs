@@ -989,6 +989,7 @@ mod tests {
             text_digest: digest(item.text.as_bytes()),
             generation: 0,
             expires_at_ms: now_ms() + 60_000,
+            paired_grant: None,
         };
         let proof = legacy_proof(&serde_json::to_string(&claims).unwrap());
         envelope.queue_identity = Some(id(12));

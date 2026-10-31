@@ -66,6 +66,7 @@
 .pro-file-manager .file-size { flex-shrink: 0; color: var(--text-muted); font: 12px/1.4 var(--font-ui); font-variant-numeric: tabular-nums; }
 .pro-file-manager .file-actions { display: flex; gap: 2px; flex-shrink: 0; opacity: 1; }
 .pro-file-manager .file-actions button { display: inline-flex; align-items: center; justify-content: center; width: 28px; min-height: 28px; height: 28px; padding: 0; border: 0; color: var(--text-secondary); background: transparent; }
+.pro-file-manager .file-actions .scoped-file-open { width: auto; gap: 5px; padding: 0 8px; font: 12px var(--font-ui); }
 .pro-file-manager .file-actions .file-delete:hover { color: var(--error); }
 .pro-file-manager .file-manager-empty, .pro-file-manager .file-manager-loading { padding: 32px 16px; text-align: center; color: var(--text-secondary); font-size: 13px; }
 .pro-file-manager .file-manager-dialog { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border-subtle); }

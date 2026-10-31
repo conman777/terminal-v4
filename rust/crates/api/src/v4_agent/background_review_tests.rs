@@ -3,6 +3,7 @@ use std::time::Duration;
 
 fn action(root: &std::path::Path, id: &str, command: &str) -> BackgroundRequest {
     BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: "owner".into(),
             session: "session".into(),

@@ -38,13 +38,15 @@ impl LocalAuthority {
     #[cfg(unix)]
     pub(crate) fn from_verified_queue(
         proof: crate::followup_queue::VerifiedQueueAuthority,
-    ) -> Self {
-        let (owner, generation, expires_at_ms) = proof.into_parts();
-        Self {
+    ) -> Result<Self, String> {
+        let (owner, generation, expires_at_ms) = proof
+            .into_local_parts()
+            .ok_or("Paired queued authority is not supported by this dispatch path")?;
+        Ok(Self {
             owner,
             generation,
             expires_at_ms,
-        }
+        })
     }
 
     #[cfg(unix)]
@@ -604,7 +606,7 @@ mod revocation_tests {
             .verify_reservation_authority(&scope, incarnation, &reservation)
             .unwrap()
             .unwrap();
-        let restored = LocalAuthority::from_verified_queue(proof);
+        let restored = LocalAuthority::from_verified_queue(proof).unwrap();
         assert_eq!(
             restored.valid_for("alice", expiration - 1),
             Some((4, expiration))

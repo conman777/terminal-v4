@@ -26,6 +26,8 @@
 .lightweight-markdown .inline-code { padding: 1px 4px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-primary); font: 12px/1.6 var(--font-mono); }
 .lightweight-markdown a { color: var(--accent-primary); text-underline-offset: 3px; }
 .lightweight-markdown a:hover { text-decoration: underline; }
+.lightweight-markdown .md-file-link { display: inline; padding: 0; border: 0; background: none; color: var(--accent-primary); font: inherit; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; overflow-wrap: anywhere; }
+.lightweight-markdown .md-file-link:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 .lightweight-markdown .md-code-block { overflow: hidden; margin: 12px 0; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-surface); }
 .lightweight-markdown .md-code-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; min-height: 32px; padding: 2px 8px 2px 12px; border-bottom: 1px solid var(--border-subtle); }
 .lightweight-markdown .md-code-language { color: var(--text-secondary); font: 12px/1.4 var(--font-ui); }
@@ -51,6 +53,22 @@
 .lightweight-markdown .md-table th { color: var(--text-secondary); background: var(--bg-surface); font: 500 12px/1.5 var(--font-ui); }
 .lightweight-markdown .md-table tr:nth-child(even) { background: transparent; }
 .lightweight-markdown .md-blockquote { margin: 12px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--border-default); color: var(--text-secondary); }
+.lightweight-markdown .md-alert { margin: 12px 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--accent-primary); }
+.lightweight-markdown .md-alert-title { color: var(--accent-primary); font-weight: 600; }
+.lightweight-markdown .md-alert-tip { border-color: var(--success); }
+.lightweight-markdown .md-alert-tip .md-alert-title { color: var(--success); }
+.lightweight-markdown .md-alert-warning { border-color: var(--warning); }
+.lightweight-markdown .md-alert-warning .md-alert-title { color: var(--warning); }
+.lightweight-markdown .md-alert-caution { border-color: var(--error); }
+.lightweight-markdown .md-alert-caution .md-alert-title { color: var(--error); }
+.lightweight-markdown .md-details { margin: 12px 0; border-block: 1px solid var(--border-subtle); }
+.lightweight-markdown .md-details > summary { box-sizing: border-box; min-height: 44px; padding: 11px 2px; color: var(--text-primary); font-weight: 500; cursor: pointer; }
+.lightweight-markdown .md-details > summary:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+.lightweight-markdown .md-details-content { min-width: 0; padding: 0 0 8px 20px; }
+.lightweight-markdown .md-details-content > :last-child { margin-bottom: 0; }
+.lightweight-markdown .md-task-item { list-style: none; }
+.lightweight-markdown .md-task-item > input { margin: 0 7px 0 -20px; accent-color: var(--accent-primary); vertical-align: middle; }
+.lightweight-markdown .md-task-item > input + p { display: inline; }
 .lightweight-markdown .md-image { max-width: 100%; margin: 12px 0; }
 .lightweight-markdown .md-image img { display: block; max-width: 100%; max-height: 480px; height: auto; object-fit: contain; border: 1px solid var(--border-subtle); border-radius: 8px; }
 .lightweight-markdown .md-image figcaption { margin-top: 6px; color: var(--text-secondary); font: 12px/1.5 var(--font-ui); }

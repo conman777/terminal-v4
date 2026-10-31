@@ -1,4 +1,7 @@
 use super::{artifacts, browser, mcp};
+#[cfg(unix)]
+#[path = "image_generation.rs"]
+pub(super) mod image_generation;
 #[path = "web_extract.rs"]
 mod web_extract;
 #[path = "web_search.rs"]

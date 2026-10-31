@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { LightweightMarkdown } from './LightweightMarkdown';
 import ToolCallBlock from './ToolCallBlock';
@@ -11,6 +11,74 @@ function ownText(item) {
 }
 
 describe('LightweightMarkdown', () => {
+  it('opens project file references while keeping external links as links', () => {
+    const onFileClick = vi.fn();
+    render(<LightweightMarkdown content={'[Source](/work/project/src/app.js:12) and [range](src/app.js#L9-L15) and [outside](https://example.test/page) and [invalid](../secret.txt).'} workspacePath="/work/project" onFileClick={onFileClick} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open Source at line 12' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open range at line 9' }));
+    expect(onFileClick.mock.calls).toEqual([[{ path: 'src/app.js', line: 12 }], [{ path: 'src/app.js', line: 9 }]]);
+    expect(screen.getByRole('link', { name: 'outside' })).toHaveAttribute('href', 'https://example.test/page');
+    expect(screen.queryByRole('button', { name: /invalid/i })).toBeNull();
+  });
+
+  it('renders expandable sections with formatted content and preserves their state during streaming', () => {
+    const source = 'Before\n<details>\n<summary>Review **details**</summary>\n\n- First\n- Second\n\n```js\nconst done = true;\n```\n</details>\nAfter';
+    const view = render(<LightweightMarkdown content={source} />);
+    const summary = screen.getByText('Review', { exact: false }).closest('summary');
+    const details = summary.closest('details');
+    expect(summary).toHaveTextContent('Review details');
+    expect(details).not.toHaveAttribute('open');
+    expect(within(details).getByText('First')).toBeInTheDocument();
+    expect(within(details).getByRole('region', { name: 'js code', hidden: true })).toHaveTextContent('const done = true;');
+    details.open = true;
+    view.rerender(<LightweightMarkdown content={`${source}\nMore arrives.`} />);
+    expect(details).toHaveAttribute('open');
+    expect(screen.getByText('After More arrives.')).toBeInTheDocument();
+  });
+
+  it('supports nested and initially open sections without executing HTML, and leaves incomplete sections as text', () => {
+    const source = '<details open>\n<summary>Outer</summary>\n\n<details>\n<summary>Inner</summary>\n\n<img src="https://invalid.test/pixel" onerror="alert(1)">\n\n</details>\n\n</details>';
+    const view = render(<LightweightMarkdown content={source} />);
+    const outer = screen.getByText('Outer').closest('details');
+    const inner = screen.getByText('Inner').closest('details');
+    expect(outer).toHaveAttribute('open');
+    expect(inner).not.toHaveAttribute('open');
+    expect(outer).toContainElement(inner);
+    expect(inner).toHaveTextContent('<img src="https://invalid.test/pixel" onerror="alert(1)">');
+    expect(view.container.querySelector('img')).toBeNull();
+    view.rerender(<LightweightMarkdown content={'<details>\n<summary>Still streaming</summary>\nUnfinished'} />);
+    expect(view.container.querySelector('details')).toBeNull();
+    expect(view.container).toHaveTextContent('<details>');
+    expect(view.container).toHaveTextContent('Unfinished');
+  });
+
+  it('keeps closing tags in fenced examples and accepts a summary beside the opening tag', () => {
+    const source = '<details><summary>Example</summary>\n\n```html\n</details>\n```\n\nAfter the example.\n</details>\n\nOutside.';
+    const view = render(<LightweightMarkdown content={source} />);
+    const details = screen.getByText('Example').closest('details');
+    expect(within(details).getByRole('region', { name: 'html code', hidden: true })).toHaveTextContent('</details>');
+    expect(within(details).getByText('After the example.')).toBeInTheDocument();
+    expect(screen.getByText('Outside.').parentElement).toHaveClass('lightweight-markdown');
+    view.rerender(<LightweightMarkdown content={'```html\n<details>\n<summary>literal</summary>\n</details>\n```'} />);
+    expect(view.container.querySelector('.md-details')).toBeNull();
+    expect(screen.getByRole('region', { name: 'html code' })).toHaveTextContent('<summary>literal</summary>');
+  });
+
+  it('accepts a single-line section and HTML boolean open values', () => {
+    render(<LightweightMarkdown content={'<details open="true"><summary>Short</summary>**Done**</details>'} />);
+    const details = screen.getByText('Short').closest('details');
+    expect(details).toHaveAttribute('open');
+    expect(within(details).getByText('Done').tagName).toBe('STRONG');
+  });
+
+  it('keeps malformed nested disclosure markup literal instead of misplacing the outer body', () => {
+    const content = '<details>\n<summary>Outer</summary>\n\n<details onclick="alert(1)">\n<summary>Inner</summary>\n\nInside\n\n</details>\n\nStill inside\n\n</details>';
+    const view = render(<LightweightMarkdown content={content} />);
+    expect(view.container.querySelector('.md-details')).toBeNull();
+    expect(view.container).toHaveTextContent('Still inside');
+    expect(view.container).toHaveTextContent('<details onclick="alert(1)">');
+  });
+
   it('renders inline and block math accessibly while leaving code and currency literal', () => {
     const view = render(<LightweightMarkdown content={'The formula is $E=mc^2$. Price: $5 and $10.\n\n$$\n\\frac{1}{2}\n$$\n\n`$x$`\n\n```tex\n$x$\n```'} />);
     expect(view.container.querySelectorAll('.katex-mathml math')).toHaveLength(2);
@@ -344,6 +412,43 @@ describe('LightweightMarkdown', () => {
     expect(screen.queryByRole('img', { name: 'Unsafe' })).not.toBeInTheDocument();
     fireEvent.error(image);
     expect(screen.getByText('Image unavailable: Layout')).toBeVisible();
+  });
+
+  it('renders GitHub alerts with structured content while retaining safe link handling', () => {
+    const actions = vi.fn(() => null);
+    const view = render(<LightweightMarkdown content={'> [!WARNING]\n> Review **carefully** and [open](https://example.test/review); [unsafe](javascript:alert).\n>\n> - First check\n> - Second check\n>\n> ```sh\n> echo safe\n> ```\n\n> [!UNKNOWN]\n> Ordinary quote'} renderCodeActions={actions} />);
+    const alert = view.container.querySelector('.md-alert-warning');
+    expect(alert).toHaveTextContent('Warning');
+    expect(alert.querySelector('strong')).toHaveTextContent('carefully');
+    expect(within(alert).getByRole('link', { name: 'open' })).toHaveAttribute('href', 'https://example.test/review');
+    expect(within(alert).queryByRole('link', { name: 'unsafe' })).not.toBeInTheDocument();
+    expect(within(alert).getAllByRole('listitem').map(item => item.textContent)).toEqual(['First check', 'Second check']);
+    expect(within(alert).getByRole('region', { name: 'sh code' })).toHaveTextContent('echo safe');
+    expect(actions).toHaveBeenCalledWith('echo safe');
+    expect(view.container.querySelector('.md-blockquote')).toHaveTextContent('[!UNKNOWN] Ordinary quote');
+  });
+
+  it('shows read-only task-list status, including nested tasks, without changing transcript text', () => {
+    const view = render(<LightweightMarkdown content={'- [x] Done\n- [ ] Next\n  - [X] Nested\n- [maybe] Literal'} />);
+    const checks = screen.getAllByRole('checkbox');
+    expect(checks.map(input => [input.checked, input.disabled])).toEqual([[true, true], [false, true], [true, true]]);
+    fireEvent.click(checks[1]);
+    expect(checks[1]).not.toBeChecked();
+    expect(view.container.querySelector('.md-list')).toHaveTextContent('[maybe] Literal');
+  });
+
+  it.each(['NOTE', 'TIP', 'IMPORTANT', 'WARNING', 'CAUTION'])('renders the %s alert title', kind => {
+    const view = render(<LightweightMarkdown content={`> [!${kind}]\n> Detail`} />);
+    expect(view.container.querySelector(`.md-alert-${kind.toLowerCase()}`)).toHaveTextContent(`${kind[0]}${kind.slice(1).toLowerCase()}Detail`);
+  });
+
+  it('keeps alert markers in fenced code and incomplete markers as literal text', () => {
+    const view = render(<LightweightMarkdown content={'```markdown\n> [!WARNING]\n> - [x] literal\n```\n\n> [!WARNING]'} />);
+    expect(view.container.querySelector('pre code')).toHaveTextContent('> [!WARNING] > - [x] literal');
+    expect(view.container.querySelectorAll('.md-alert')).toHaveLength(1);
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    view.rerender(<LightweightMarkdown content={'> [!WARN'} />);
+    expect(view.container.querySelector('.md-blockquote')).toHaveTextContent('[!WARN');
   });
   it('preserves fenced code and Copy bytes between lists with line-start Unicode bullets', () => {
     const code = 'const label = "left • right";\n  // • keep indentation\n\nconst next = "x • y";';

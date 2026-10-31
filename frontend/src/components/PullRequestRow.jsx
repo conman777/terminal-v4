@@ -24,10 +24,11 @@ const scopeSnapshot = () => `${getUser()?.id || ''}\0${getActiveEnvironment()?.i
 
 export function PullRequestRow({ cwd, branch, refreshKey = 0 }) {
   const identity = useSyncExternalStore(subscribeScope, scopeSnapshot);
-  return <PullRequestScope key={`${identity}\0${cwd || ''}\0${branch || ''}`} cwd={cwd} branch={branch} refreshKey={refreshKey} />;
+  const scope = `${identity}\0${cwd || ''}\0${branch || ''}`;
+  return <PullRequestScope key={scope} recoveryKey={`terminal-pr-action:${JSON.stringify(scope)}`} cwd={cwd} branch={branch} refreshKey={refreshKey} />;
 }
 
-function PullRequestScope({ cwd, branch, refreshKey }) {
+function PullRequestScope({ cwd, branch, refreshKey, recoveryKey }) {
   const [pullRequest, setPullRequest] = useState(null);
   const [repository, setRepository] = useState('');
   const [problem, setProblem] = useState('');
@@ -36,6 +37,9 @@ function PullRequestScope({ cwd, branch, refreshKey }) {
   const [method, setMethod] = useState('squash');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [needsReview, setNeedsReview] = useState(() => {
+    try { return sessionStorage.getItem(recoveryKey) !== null; } catch { return true; }
+  });
   const [reload, setReload] = useState(0);
   const generation = useRef(0);
 
@@ -77,16 +81,33 @@ function PullRequestScope({ cwd, branch, refreshKey }) {
   const canMerge = open && !pullRequest.isDraft && !conflicting;
 
   const confirm = async () => {
+    if (pending || needsReview || !confirming) return;
+    try {
+      sessionStorage.setItem(recoveryKey, 'pending');
+    } catch {
+      setError('Cannot save the action recovery record. Enable session storage and try again.');
+      return;
+    }
     const token = ++generation.current;
     setPending(true);
     setError('');
     const body = { path: cwd, repository, action: confirming, number: pullRequest.number, headSha: pullRequest.headSha, url: pullRequest.url, confirm: confirmationFor(confirming, pullRequest.number, method, pullRequest.headSha) };
     if (confirming === 'merge') body.method = method;
     try {
-      await apiPost('/api/workspace/git/pull-request/action', body);
-      if (token === generation.current) { setConfirming(null); refresh(); }
+      const receipt = await apiPost('/api/workspace/git/pull-request/action', body);
+      if (receipt?.done !== true || receipt.action !== body.action || receipt.number !== body.number) {
+        throw new Error('The pull request action could not be confirmed. Check its status before retrying.');
+      }
+      if (token === generation.current) {
+        try { sessionStorage.removeItem(recoveryKey); } catch { throw new Error('The action completed, but its recovery record could not be cleared.'); }
+        setConfirming(null);
+        refresh();
+      }
     } catch (failure) {
-      if (token === generation.current) setError(failure?.message || 'The pull request action failed. Refresh to see its current state.');
+      if (token === generation.current) {
+        setError(failure?.message || 'The pull request action failed. Refresh to see its current state.');
+        setNeedsReview(true);
+      }
     } finally {
       if (token === generation.current) setPending(false);
     }
@@ -100,8 +121,8 @@ function PullRequestScope({ cwd, branch, refreshKey }) {
       {conflicting && <p className="thread-git-note thread-git-error thread-pr-conflict">Merge conflicts with the base branch</p>}
       {problem && <p role="status" className="thread-git-note">{problem}. Showing the last known state.</p>}
       {open && <div className="thread-pr-actions">
-        {canReady && <button type="button" disabled={pending} onClick={() => setConfirming('ready')}>Mark ready</button>}
-        {canMerge && <button type="button" disabled={pending} onClick={() => setConfirming('merge')}>Merge</button>}
+        {canReady && <button type="button" disabled={pending || needsReview} onClick={() => setConfirming('ready')}>Mark ready</button>}
+        {canMerge && <button type="button" disabled={pending || needsReview} onClick={() => setConfirming('merge')}>Merge</button>}
         <button type="button" aria-pressed={watching} onClick={() => setWatching(value => !value)}>{watching ? 'Watching' : 'Watch'}</button>
         <button type="button" disabled={pending} onClick={refresh}>Refresh</button>
       </div>}
@@ -110,12 +131,22 @@ function PullRequestScope({ cwd, branch, refreshKey }) {
           {METHODS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
         <p className="thread-git-note">{confirming === 'merge' ? `This ${method}s pull request #${pullRequest.number} into its base branch on GitHub using your gh login.` : `This marks pull request #${pullRequest.number} ready for review on GitHub.`} Reviewed commit {String(pullRequest.headSha || '').slice(0, 7)}.</p>
         <div className="thread-git-buttons">
-          <button type="button" className="thread-git-primary" disabled={pending} onClick={confirm}>{confirming === 'merge' ? `Confirm merge #${pullRequest.number}` : `Confirm ready #${pullRequest.number}`}</button>
+          <button type="button" className="thread-git-primary" disabled={pending || needsReview} onClick={confirm}>{confirming === 'merge' ? `Confirm merge #${pullRequest.number}` : `Confirm ready #${pullRequest.number}`}</button>
           <button type="button" disabled={pending} onClick={() => { setConfirming(null); setError(''); }}>Cancel</button>
         </div>
       </div>}
       {pending && <p role="status" className="thread-git-note">Working…</p>}
       {error && <p role="alert" className="thread-git-note thread-git-error">{error}</p>}
+      {needsReview && <div role="status" className="thread-git-note">
+        <p>The previous action may still complete. Check this pull request on GitHub before trying again.</p>
+        <button type="button" onClick={() => {
+          try { sessionStorage.removeItem(recoveryKey); } catch { setError('Cannot clear the action recovery record. Enable session storage and try again.'); return; }
+          setNeedsReview(false);
+          setConfirming(null);
+          setError('');
+          refresh();
+        }}>I've checked on GitHub</button>
+      </div>}
     </div>
   );
 }

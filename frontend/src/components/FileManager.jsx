@@ -5,10 +5,30 @@ import { apiGet, apiFetch } from '../utils/api';
 import { captureAuthScope, getAccessToken, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
 import { environmentAllows, requireEnvironmentCapability } from '../utils/runtimePermissions';
+import { validProjectFilePath } from '../utils/projectFileReference';
+import { ProjectFilePreview, validProjectFilePreview } from './ProjectFilePreview';
 import '../ProFileManager.css';
 
 function normalizeFilePath(path) {
   return /^[a-z]:[\\/]/i.test(path) || path.startsWith('\\\\') ? path.replaceAll('\\', '/') : path;
+}
+
+function scopedDirectory(root, path) {
+  if (typeof root !== 'string' || !root.startsWith('/') || typeof path !== 'string') return null;
+  const base = root === '/' ? '/' : root.replace(/\/+$/, '');
+  if (path === base) return '';
+  const prefix = base === '/' ? '/' : `${base}/`;
+  if (!path.startsWith(prefix)) return null;
+  const relative = path.slice(prefix.length);
+  return relative && !relative.includes('\\') && !/[\x00-\x1f\x7f-\x9f]/.test(relative)
+    && relative.split('/').every(part => part && part !== '.' && part !== '..') ? relative : null;
+}
+
+function scopedFile(root, directory, name) {
+  const relative = scopedDirectory(root, directory);
+  if (relative === null) return null;
+  const path = relative ? `${relative}/${name}` : name;
+  return validProjectFilePath(path, root) ? { path, line: 1 } : null;
 }
 
 function isRequestScopeCurrent(auth, environment) {
@@ -49,9 +69,16 @@ async function checkOperationResponse(response, fallback) {
   throw new Error(message);
 }
 
-export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath = '~', sessionId = null }) {
+export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath = '~', sessionId = null, projectTarget = null }) {
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
-  const canWrite = environmentAllows(environment, 'fileWrite');
+  const [searchScope, setSearchScope] = useState(null);
+  const currentSearchScope = searchScope?.sessionId === sessionId && isRequestScopeCurrent(searchScope.auth, searchScope.environment) ? searchScope : null;
+  const activeTarget = projectTarget || currentSearchScope;
+  const isScoped = Boolean(activeTarget);
+  const projectRoot = typeof activeTarget?.root === 'string' ? normalizeFilePath(activeTarget.root).replace(/\/+$/, '') || '/' : null;
+  const targetPath = typeof activeTarget?.path === 'string' ? activeTarget.path : '';
+  const validTarget = validProjectFilePath(targetPath, projectRoot) ? { path: targetPath } : null;
+  const canWrite = !isScoped && environmentAllows(environment, 'fileWrite');
   const canReadContents = environmentAllows(environment, 'transfer');
   const [actionMenu, setActionMenu] = useState(null);
   const menuRef = useRef(null);
@@ -89,14 +116,18 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
   const [linePreviewLoading, setLinePreviewLoading] = useState(false);
   const previewLineRef = useRef(null);
   const [previewImage, setPreviewImage] = useState(null);
+  const [scopedPreview, setScopedPreview] = useState(null);
   const [selectedFile, setSelectedFile] = useState('');
   const directoryGeneration = useRef(0);
+  const directoryRequest = useRef(null);
+  const initialSelectionPending = useRef(isScoped);
+  const scopeInvalidated = useRef(false);
   const navigationGeneration = useRef(0);
   const directoryScope = useRef({ sessionId, signal: getEnvironmentSignal() });
   const environmentSignal = useRef(getEnvironmentSignal());
   const panelRef = useRef(null);
   const breadcrumbsRef = useRef(null);
-  const atRoot = currentPath === '~' || currentPath === '/' || /^[a-z]:\/$/i.test(currentPath) || /^\/\/[^/]+\/[^/]+\/?$/.test(currentPath);
+  const atRoot = isScoped ? currentPath === projectRoot : currentPath === '~' || currentPath === '/' || /^[a-z]:\/$/i.test(currentPath) || /^\/\/[^/]+\/[^/]+\/?$/.test(currentPath);
 
   useLayoutEffect(() => {
     const breadcrumbs = breadcrumbsRef.current;
@@ -146,20 +177,22 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
     cancelContentSearch();
     cancelLinePreview();
     directoryGeneration.current += 1; navigationGeneration.current += 1;
-    setItems([]); setLoading(false); setSelectedFile('');
-    setContentResults(null); setContentError(''); setContentLoading(false); setSelectedContentMatch(null); setContentMode(false); setContentQuery('');
+    setItems([]); setLoading(false); setSelectedFile(''); setScopedPreview(null);
+    setContentResults(null); setContentError(''); setContentLoading(false); setSelectedContentMatch(null); setContentMode(false); setContentQuery(''); setSearchScope(null);
     return () => { cancelContentSearch(); cancelLinePreview(); };
-  }, [cancelContentSearch, cancelLinePreview, sessionId, isOpen]);
+  }, [cancelContentSearch, cancelLinePreview, sessionId, isOpen, projectTarget?.root, projectTarget?.path]);
   useEffect(() => subscribeEnvironment(() => {
+    directoryRequest.current?.abort();
     cancelContentSearch();
     cancelLinePreview();
     if (environmentSignal.current !== getEnvironmentSignal()) {
       environmentSignal.current = getEnvironmentSignal();
+      scopeInvalidated.current = true;
       directoryGeneration.current += 1; navigationGeneration.current += 1;
-      setItems([]); setLoading(false); setSelectedFile('');
+      setItems([]); setLoading(false); setSelectedFile(''); setScopedPreview(null);
       setCurrentPath('~');
       setError('Account or server changed. Close and reopen Files to load the current workspace.');
-      setContentMode(false); setContentQuery('');
+      setContentMode(false); setContentQuery(''); setSearchScope(null);
     }
     setContentResults(null); setContentError(''); setContentLoading(false); setSelectedContentMatch(null);
   }), [cancelContentSearch, cancelLinePreview]);
@@ -169,10 +202,12 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
       const next = captureAuthScope();
       if (isAuthScopeCurrent(scope) && scope.userId === next.userId) return;
       scope = next;
+      scopeInvalidated.current = true;
+      directoryRequest.current?.abort();
       cancelContentSearch(); cancelLinePreview();
       directoryGeneration.current += 1; navigationGeneration.current += 1;
-      setItems([]); setLoading(false); setSelectedFile(''); setSelectedContentMatch(null);
-      setCurrentPath('~'); setContentMode(false); setContentQuery(''); setContentResults(null);
+      setItems([]); setLoading(false); setSelectedFile(''); setSelectedContentMatch(null); setScopedPreview(null);
+      setCurrentPath('~'); setContentMode(false); setContentQuery(''); setContentResults(null); setSearchScope(null);
       setContentError(''); setContentLoading(false); setPreviewImage(null); setActionMenu(null); setRename(null);
       setNotice(''); setOperationError(null);
       setError('Account or server changed. Close and reopen Files to load the current workspace.');
@@ -205,14 +240,33 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
 
   function showContentMatch(root, match) {
     const relative = match.path;
-    if (typeof root !== 'string' || typeof relative !== 'string' || !relative || relative.split('/').some(part => !part || part === '.' || part === '..') || relative.includes('\\')) return;
+    if (!validProjectFilePath(relative, root) || !Number.isSafeInteger(match.line) || match.line < 1 || match.line > 1_000_000) {
+      setContentError('This result cannot be opened safely in the selected project.');
+      return;
+    }
     const parts = relative.split('/');
     const name = parts.pop();
-    const folder = `${root.replace(/[\\/]+$/, '')}/${parts.join('/')}`.replace(/\/$/, '');
+    const base = root === '/' ? '' : root.replace(/\/+$/, '');
+    const folder = `${base}/${parts.join('/')}`.replace(/\/$/, '') || '/';
+    directoryRequest.current?.abort();
+    directoryGeneration.current += 1; navigationGeneration.current += 1;
+    setItems([]); setError(null); setNotice(''); setSearchQuery('');
+    setSearchScope({ root, path: relative, sessionId, auth: captureAuthScope(), environment: getEnvironmentSignal(), previousPath: currentPath, match });
+    initialSelectionPending.current = true;
+    setCurrentPath(folder);
     setContentMode(false);
-    navigateTo(folder || '/');
     setSelectedFile(name);
     setSelectedContentMatch({ ...match, root });
+  }
+
+  function returnToContentResults() {
+    cancelLinePreview();
+    directoryRequest.current?.abort();
+    directoryGeneration.current += 1; navigationGeneration.current += 1;
+    restoreContentFocus.current = selectedContentMatch || currentSearchScope?.match;
+    setCurrentPath(currentSearchScope?.previousPath || normalizeFilePath(initialPath || '~'));
+    setSearchScope(null); setItems([]); setLoading(false); setError(null);
+    setContentMode(true); setSelectedContentMatch(null); setScopedPreview(null);
   }
 
   async function openCurrentLine() {
@@ -230,10 +284,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
       const response = await apiFetch(`/api/workspace/files/read-content?${params}`, { signal: controller.signal });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.error || 'Could not open this file.');
-      if (data?.root !== match.root || data?.path !== match.path || data?.line !== match.line
-        || !Number.isSafeInteger(data?.totalLines) || data.totalLines < match.line
-        || !Array.isArray(data?.lines) || data.lines.length > 15 || !data.lines.some(row => row?.line === match.line)
-        || data.lines.some((row, index) => !Number.isSafeInteger(row?.line) || row.line < 1 || row.line > data.totalLines || (index > 0 && row.line !== data.lines[index - 1].line + 1) || typeof row.text !== 'string' || row.text.length > 1000 || Array.from(row.text).length > 500 || typeof row.truncated !== 'boolean')) {
+      if (!validProjectFilePreview(data, match.root, { path: match.path, line: match.line })) {
         throw new Error('File preview returned an invalid response.');
       }
       if (current()) setLinePreview(data);
@@ -282,34 +333,66 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
   }, [previewImage]);
 
   const loadDirectory = useCallback(async (path) => {
+    if (scopeInvalidated.current) return;
     const generation = ++directoryGeneration.current;
+    directoryRequest.current?.abort();
+    const controller = new AbortController();
+    directoryRequest.current = controller;
     const auth = captureAuthScope();
     const environment = getEnvironmentSignal();
-    const current = () => generation === directoryGeneration.current && isRequestScopeCurrent(auth, environment);
+    const current = () => generation === directoryGeneration.current && !controller.signal.aborted && isRequestScopeCurrent(auth, environment);
     setLoading(true);
     setError(null);
     try {
-      const response = await apiGet(`/api/files/list?path=${encodeURIComponent(path)}`);
+      let response;
+      if (isScoped) {
+        const relative = scopedDirectory(projectRoot, path);
+        if (!sessionId || !validTarget || validTarget.path !== targetPath || relative === null || !canReadContents) throw new Error('Project folder is unavailable in this thread.');
+        const params = new URLSearchParams({ sessionId, root: projectRoot, path: relative });
+        const result = await apiFetch(`/api/workspace/files/list-directory?${params}`, { signal: controller.signal });
+        response = await result.json().catch(() => null);
+        if (!result.ok) throw new Error(response?.error || 'Could not load project files.');
+        if (response?.root !== projectRoot || response.path !== relative || typeof response.truncated !== 'boolean'
+          || !Array.isArray(response.items) || response.items.length > 2000
+          || response.items.some(item => typeof item?.name !== 'string' || !item.name || item.name === '.' || item.name === '..'
+            || /[\/\\\x00-\x1f\x7f-\x9f]/.test(item.name) || !['file', 'directory'].includes(item.type) || !Number.isFinite(item.size) || item.size < 0)
+          || new Set(response.items.map(item => item.name)).size !== response.items.length) throw new Error('Project directory returned an invalid response.');
+        response = { ...response, path };
+      } else response = await apiGet(`/api/files/list?path=${encodeURIComponent(path)}`);
       if (!current()) return;
       setCurrentPath(normalizeFilePath(response?.path || path));
       setItems(Array.isArray(response?.items) ? response.items : []);
+      if (isScoped) {
+        if (response.truncated) setNotice('Some project files may not be shown.');
+        if (initialSelectionPending.current) {
+          const parts = targetPath.split('/');
+          const name = parts.pop();
+          if (scopedDirectory(projectRoot, path) === parts.join('/')) {
+            initialSelectionPending.current = false;
+            if (response.items.some(item => item.type === 'file' && item.name === name)) setSelectedFile(name);
+            else setNotice('The referenced file is not listed; it may have changed or the folder is too large.');
+          }
+        }
+      }
     } catch (err) {
       if (current()) setError(err.message || 'Failed to load directory');
     } finally {
       if (generation === directoryGeneration.current) setLoading(false);
+      if (directoryRequest.current === controller) directoryRequest.current = null;
     }
-  }, []);
+  }, [isScoped, projectRoot, sessionId, targetPath, canReadContents, validTarget?.path]);
 
   useEffect(() => {
-    if (isOpen && initialPath !== null) {
+    if (!isOpen) scopeInvalidated.current = false;
+    if (isOpen && initialPath !== null && !contentMode && (!searchScope || currentSearchScope)) {
       const signal = getEnvironmentSignal();
       const sameScope = directoryScope.current.sessionId === sessionId && directoryScope.current.signal === signal;
       const requested = sameScope ? currentPath : normalizeFilePath(initialPath || '~');
       directoryScope.current = { sessionId, signal };
       loadDirectory(requested);
     }
-    return () => { directoryGeneration.current += 1; navigationGeneration.current += 1; };
-  }, [isOpen, loadDirectory, initialPath, sessionId]);
+    return () => { directoryGeneration.current += 1; navigationGeneration.current += 1; directoryRequest.current?.abort(); };
+  }, [isOpen, loadDirectory, initialPath, sessionId, contentMode, searchScope, currentSearchScope]);
 
   const navigateTo = useCallback((path) => {
     navigationGeneration.current += 1;
@@ -352,11 +435,11 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
   }, [buildItemPath, navigateTo]);
 
   const handleItemDoubleClick = useCallback((item) => {
-    if (item.type === 'directory' && onNavigateTerminal) {
+    if (!isScoped && item.type === 'directory' && onNavigateTerminal) {
       const fullPath = buildItemPath(item.name);
       onNavigateTerminal(fullPath);
     }
-  }, [buildItemPath, onNavigateTerminal]);
+  }, [buildItemPath, isScoped, onNavigateTerminal]);
 
   const handleCreateFolder = useCallback(async () => {
     if (!canWrite || !newFolderName.trim() || loading || folderRequest.current) return;
@@ -516,8 +599,8 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
-    setDragOver(true);
-  }, []);
+    if (canWrite) setDragOver(true);
+  }, [canWrite]);
 
   const handleDragLeave = useCallback(() => {
     setDragOver(false);
@@ -588,6 +671,13 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
   };
 
   const getBreadcrumbs = () => {
+    if (isScoped) {
+      const relative = scopedDirectory(projectRoot, currentPath);
+      const crumbs = [{ name: 'Project', path: projectRoot }];
+      let path = projectRoot === '/' ? '' : projectRoot;
+      for (const part of relative ? relative.split('/') : []) { path += `/${part}`; crumbs.push({ name: part, path }); }
+      return crumbs;
+    }
     if (!currentPath || currentPath === '~') return [{ name: 'Home', path: '~' }];
     if (currentPath.startsWith('~/')) {
       const parts = currentPath.split('/');
@@ -728,7 +818,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
         <button type="button" onClick={() => loadDirectory(currentPath)} title="Refresh" aria-label="Refresh" disabled={loading}>
           <FileIcon name="refresh" />
         </button>
-        <button type="button" ref={newFolderButtonRef} disabled={loading || !canWrite} onClick={() => { if (!showNewFolderDialog) folderDraftGeneration.current += 1; setShowNewFolderDialog(true); }} title="New folder" aria-label="New folder">
+        {!isScoped && <><button type="button" ref={newFolderButtonRef} disabled={loading || !canWrite} onClick={() => { if (!showNewFolderDialog) folderDraftGeneration.current += 1; setShowNewFolderDialog(true); }} title="New folder" aria-label="New folder">
           <FileIcon name="newFolder" />
         </button>
         <button type="button" onClick={() => fileInputRef.current?.click()} title="Upload" aria-label="Upload" disabled={loading || !!uploadProgress || !canWrite}>
@@ -736,11 +826,12 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
         </button>
         <button type="button" onClick={() => folderInputRef.current?.click()} title="Upload folder" aria-label="Upload folder" disabled={loading || !!uploadProgress || !canWrite}>
           <FileIcon name="uploadFolder" />
-        </button>
-        <button type="button" onClick={handleGoToPath} title="Go to path" aria-label="Go to path">
+        </button></>}
+        {!isScoped && <button type="button" onClick={handleGoToPath} title="Go to path" aria-label="Go to path">
           <FileIcon name="path" />
-        </button>
-        <button type="button" className="file-content-toggle" onClick={() => { cancelContentSearch(); setContentResults(null); setContentError(''); setContentLoading(false); setSelectedContentMatch(null); setContentMode(value => !value); }} aria-pressed={contentMode} aria-label="Search project contents">Content</button>
+        </button>}
+        {!isScoped && <button type="button" className="file-content-toggle" onClick={() => { cancelContentSearch(); setContentResults(null); setContentError(''); setContentLoading(false); setSelectedContentMatch(null); setContentMode(value => !value); }} aria-pressed={contentMode} aria-label="Search project contents">Content</button>}
+        {currentSearchScope && !selectedContentMatch && <button type="button" className="file-content-toggle" onClick={returnToContentResults} aria-label="Back to search results">Results</button>}
         <input
           type="search"
           aria-label="Search files"
@@ -788,7 +879,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
       {!contentMode && selectedContentMatch && <section className="file-manager-selected-result" aria-label="Selected search result" tabIndex={-1} ref={selectedContentRef}>
         <div className="file-manager-selected-heading">
           <strong>Search result · {selectedContentMatch.path}:{selectedContentMatch.line}</strong>
-          <button type="button" aria-label="Back to search results" onClick={() => { cancelLinePreview(); restoreContentFocus.current = selectedContentMatch; setContentMode(true); setSelectedContentMatch(null); }}>Results</button>
+          <button type="button" aria-label="Back to search results" onClick={returnToContentResults}>Results</button>
         </div>
         <pre>{selectedContentMatch.text}</pre>
         <p>File may have changed since search.</p>
@@ -796,13 +887,14 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
         {linePreviewLoading && <p role="status">Opening file…</p>}
         {linePreviewError && <p role="alert">{linePreviewError}</p>}
         {linePreview && <><p>Current file preview</p><div className="file-manager-live-preview" role="region" aria-label="Current file preview" tabIndex={0}>
+          {linePreview.totalLines === 0 && <p>This file is now empty.</p>}
           {linePreview.lines.map(row => <div key={row.line} ref={row.line === linePreview.line ? previewLineRef : undefined} aria-current={row.line === linePreview.line ? 'true' : undefined}>
             <span>{row.line}</span><code>{row.text}{row.truncated ? '…' : ''}</code>
           </div>)}
         </div></>}
       </section>}
 
-      {showNewFolderDialog && (
+      {!isScoped && showNewFolderDialog && (
         <form className="file-manager-dialog" aria-label="New folder" onSubmit={event => { event.preventDefault(); handleCreateFolder(); }} onKeyDown={event => { if (event.isComposing || event.keyCode === 229) return; if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelFolder(); } }}>
           <input
             type="text"
@@ -817,8 +909,8 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
         </form>
       )}
 
-      {!canWrite && <p className="file-manager-notice">File changes are not allowed on this server. Ask its owner for File changes permission.</p>}
-      {rename && <form className="file-manager-rename" aria-label={'Rename ' + rename.item.name} onSubmit={handleRename} onKeyDown={event => {
+      {isScoped ? <p className="file-manager-notice">Project files · read-only</p> : !canWrite && <p className="file-manager-notice">File changes are not allowed on this server. Ask its owner for File changes permission.</p>}
+      {!isScoped && rename && <form className="file-manager-rename" aria-label={'Rename ' + rename.item.name} onSubmit={handleRename} onKeyDown={event => {
         if (event.isComposing || event.keyCode === 229 || event.key !== 'Escape') return;
         event.preventDefault(); event.stopPropagation(); cancelRename();
       }}>
@@ -868,7 +960,14 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
                 <span className="file-name">{item.name}</span>
                 <span className="file-size">{item.type === 'directory' ? 'Folder' : formatSize(item.size)}</span>
               </button>
-              <div className="file-actions">
+              {isScoped && item.type === 'file' && <div className="file-actions">
+                <button type="button" className="scoped-file-open" aria-label={'Preview ' + item.name} title="Preview text file"
+                  disabled={!canReadContents || !scopedFile(projectRoot, currentPath, item.name)}
+                  onClick={() => { if (!scopeInvalidated.current) setScopedPreview(scopedFile(projectRoot, currentPath, item.name)); }}>
+                  <FileIcon name="preview" /> <span>Open</span>
+                </button>
+              </div>}
+              {!isScoped && <div className="file-actions">
                 {item.type === 'file' && isImage(item.name) && (
                   <button type="button" onClick={() => handlePreviewImage(item)} title="Preview" aria-label={'Preview ' + item.name}>
                     <FileIcon name="preview" />
@@ -891,7 +990,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
                 )}
                 <button type="button" title="More file actions" aria-label={'More actions for ' + item.name} aria-haspopup="menu" aria-expanded={actionMenu?.item.name === item.name}
                   onClick={event => { if (actionMenu?.item.name === item.name) closeActionMenu(); else setActionMenu({ item, trigger: event.currentTarget }); }}><FileIcon name="more" /></button>
-              </div>
+              </div>}
             </div>
           ))
         )}
@@ -902,6 +1001,8 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
           </div>
         )}
       </div>
+
+      {scopedPreview && <ProjectFilePreview sessionId={sessionId} root={projectRoot} file={scopedPreview} onClose={() => setScopedPreview(null)} />}
 
       {actionMenu && createPortal(<div ref={menuRef} className="file-manager-action-menu" role="menu" tabIndex={-1} aria-label={'Actions for ' + actionMenu.item.name} onKeyDown={event => {
         if (event.isComposing || event.keyCode === 229) return;

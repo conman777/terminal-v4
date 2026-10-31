@@ -2,18 +2,24 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as environments from '../utils/remoteEnvironments';
 import { setTokens, setUser } from '../utils/auth';
-import { WorkspaceStartView } from './WorkspaceStartView';
+import { WorkspaceStartView, worktreeNameFromPrompt } from './WorkspaceStartView';
+import { addContext, buildThreadContext } from './composer-context/composerContext';
 import { getComposerDraftStore } from '../utils/composerDraftStore';
 import { AutocorrectProvider } from '../contexts/AutocorrectContext';
+import { resetPullRequestMentionCache } from '../hooks/useCurrentPullRequest';
 const apiFetchMock = vi.fn();
+const apiGetMock = vi.fn();
 const uploadScreenshotMock = vi.fn();
 const uploadAttachmentMock = vi.fn();
-vi.mock('../utils/api', () => ({ apiFetch: (...args) => apiFetchMock(...args), uploadScreenshot: (...args) => uploadScreenshotMock(...args), uploadAttachment: (...args) => uploadAttachmentMock(...args) }));
+vi.mock('../utils/api', () => ({ apiFetch: (...args) => apiFetchMock(...args), apiGet: (...args) => apiGetMock(...args), uploadScreenshot: (...args) => uploadScreenshotMock(...args), uploadAttachment: (...args) => uploadAttachmentMock(...args) }));
 beforeEach(() => {
   localStorage.clear();
   setUser({ id: 'fixture-user' });
   uploadScreenshotMock.mockReset();
   uploadAttachmentMock.mockReset();
+  apiGetMock.mockReset();
+  resetPullRequestMentionCache();
+  apiGetMock.mockImplementation(async url => url === '/api/system/doctor' ? { ready: true, checks: [] } : { pullRequest: null });
   apiFetchMock.mockImplementation(async url => ({ ok: true, json: async () => String(url).startsWith('/api/agent/catalog')
     ? { agents: [{ id: 'codex', label: 'Codex', runtime: 'codex', available: true, status: 'ready', capabilities: { structured: true }, models: [{ id: 'test-model', label: 'Test model', default: true }], reasoningLevels: ['low', 'high'] }] } : {} }));
 });
@@ -28,6 +34,92 @@ vi.mock('../hooks/useAutocorrectInput', () => ({
 afterEach(() => vi.restoreAllMocks());
 
 describe('WorkspaceStartView', () => {
+  it('does not automatically focus the new-task composer on a phone', async () => {
+    const width = window.innerWidth;
+    const visualWidth = window.visualViewport.width;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 320 });
+    window.visualViewport.width = 320;
+    try {
+      render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" /></AutocorrectProvider>);
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Command composer' })).not.toHaveFocus());
+    } finally { Object.defineProperty(window, 'innerWidth', { configurable: true, value: width }); window.visualViewport.width = visualWidth; }
+  });
+  it('offers project files and installed skills before the first message', async () => {
+    apiFetchMock.mockImplementation(async url => ({ ok: true, json: async () => String(url).startsWith('/api/agent/catalog')
+      ? { agents: [{ id: 'codex', label: 'Codex', runtime: 'codex', available: true, models: [{ id: 'test-model', default: true }] }] }
+      : String(url).startsWith('/api/workspace/files?') ? { files: ['src/login.js'] }
+        : String(url).startsWith('/api/workspace/skills?') ? { skills: [{ name: 'review', path: '/project/.skills/review/SKILL.md' }] } : {} }));
+    render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" onSubmitPrompt={vi.fn()} /></AutocorrectProvider>);
+    const input = screen.getByRole('textbox', { name: 'Command composer' });
+    fireEvent.change(input, { target: { value: 'Inspect @log' } });
+    fireEvent.click(await screen.findByRole('option', { name: /src\/login.js/ }));
+    expect(input).toHaveValue('Inspect @src/login.js ');
+    fireEvent.change(input, { target: { value: '/review' } });
+    fireEvent.click(await screen.findByRole('option', { name: /\/review/ }));
+    expect(input).toHaveValue('Use the "review" skill (instructions: /project/.skills/review/SKILL.md). ');
+  });
+
+  it('offers owned thread and current pull request references before starting and sends their context', async () => {
+    apiGetMock.mockImplementation(async url => url === '/api/system/doctor' ? { ready: true, checks: [] } : { pullRequest: { number: 7, title: 'Login fix', url: 'https://github.com/example/repo/pull/7' } });
+    const submit = vi.fn().mockResolvedValue({ accepted: true });
+    render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" onSubmitPrompt={submit} sessions={[
+      { id: 'ss-prior', title: 'Earlier investigation' }, { id: 'ss-hidden', title: 'Archived investigation', thread: { archived: true } },
+    ]} /></AutocorrectProvider>);
+    const input = screen.getByRole('textbox', { name: 'Command composer' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeDisabled());
+    fireEvent.change(input, { target: { value: 'Follow @Earlier' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Earlier investigation/ }));
+    expect(screen.queryByRole('option', { name: /Archived investigation/ })).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: 'Follow @Login' } });
+    fireEvent.click(await screen.findByRole('option', { name: /#7 Login fix/ }));
+    fireEvent.change(input, { target: { value: 'Follow these references' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(expect.stringContaining('Reference to another thread of this user "Earlier investigation" (id ss-prior).'), expect.objectContaining({ path: '/project' })));
+    expect(submit.mock.calls[0][0]).toContain('Reference to a pull request "#7 Login fix" (id 7). URL: https://github.com/example/repo/pull/7');
+  });
+
+  it('keeps the start draft and blocks submission if a selected thread becomes unavailable', async () => {
+    const submit = vi.fn().mockResolvedValue({ accepted: true });
+    const thread = { id: 'ss-prior', title: 'Earlier investigation' };
+    const view = render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" sessions={[thread]} onSubmitPrompt={submit} /></AutocorrectProvider>);
+    const input = screen.getByRole('textbox', { name: 'Command composer' });
+    fireEvent.change(input, { target: { value: 'Follow @Earlier' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Earlier investigation/ }));
+    view.rerender(<AutocorrectProvider><WorkspaceStartView currentPath="/project" sessions={[]} onSubmitPrompt={submit} /></AutocorrectProvider>);
+    expect(screen.getByRole('list', { name: 'Attached context' })).toHaveTextContent('Unavailable');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Remove unavailable');
+    expect(input).toHaveValue('Follow ');
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('names new worktrees from the task text instead of serialized context metadata', () => {
+    const prompt = addContext('Investigate the login bug', buildThreadContext({ id: 'ss-prior', title: 'Earlier investigation' }));
+    expect(worktreeNameFromPrompt(prompt)).toBe('Investigate the login bug');
+  });
+
+  it('does not reuse a late file suggestion after changing projects and keeps the draft', async () => {
+    let resolveOld;
+    apiFetchMock.mockImplementation(async url => {
+      if (String(url).startsWith('/api/workspace/files?')) {
+        if (String(url).includes('path=%2Ffirst')) return new Promise(resolve => { resolveOld = resolve; });
+        return { ok: true, json: async () => ({ files: ['src/new.js'] }) };
+      }
+      return { ok: true, json: async () => String(url).startsWith('/api/agent/catalog')
+        ? { agents: [{ id: 'codex', label: 'Codex', runtime: 'codex', available: true, models: [{ id: 'test-model', default: true }] }] } : {} };
+    });
+    const view = render(<AutocorrectProvider><WorkspaceStartView currentPath="/first" /></AutocorrectProvider>);
+    const input = screen.getByRole('textbox', { name: 'Command composer' });
+    fireEvent.change(input, { target: { value: 'Check @src' } });
+    await waitFor(() => expect(resolveOld).toBeTypeOf('function'));
+    view.rerender(<AutocorrectProvider><WorkspaceStartView currentPath="/second" /></AutocorrectProvider>);
+    await act(async () => resolveOld({ ok: true, json: async () => ({ files: ['src/private-old.js'] }) }));
+    expect(await screen.findByRole('option', { name: /src\/new.js/ })).toBeVisible();
+    expect(screen.queryByRole('option', { name: /private-old/ })).not.toBeInTheDocument();
+    expect(input).toHaveValue('Check @src');
+  });
   it('opens an empty V4 conversation for a first image and carries the existing text', async () => {
     apiFetchMock.mockImplementation(async url => ({ ok: true, json: async () => String(url).startsWith('/api/agent/catalog')
       ? { agents: [{ id: 'codex', label: 'Codex', runtime: 'v4', available: true, capabilities: { structured: true }, models: [{ id: 'test-model', label: 'Test model', default: true }] }] } : {} }));
@@ -83,6 +175,8 @@ describe('WorkspaceStartView', () => {
     expect(view.container.querySelector('.status-composer-attachment-name')).toBeNull();
     expect(composer).toHaveValue('Use the screenshot to fix this');
     expect(submit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Start task' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
     expect(submit).toHaveBeenCalledWith('Use the screenshot to fix this', expect.objectContaining({ path: '/project' }));
   });
@@ -209,6 +303,8 @@ describe('WorkspaceStartView', () => {
     fireEvent.paste(composer, { clipboardData: { types: ['Files'], files: [new File(['synthetic'], 'image.png', { type: 'image/png' })], items: [], getData: () => '' } });
     expect(await screen.findByRole('alert')).toHaveTextContent('Upload failed');
     expect(composer).toHaveValue('Keep this task');
+    expect(screen.getByRole('button', { name: 'Start task' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
     expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled();
   });
 
@@ -231,6 +327,8 @@ describe('WorkspaceStartView', () => {
     expect(submit).not.toHaveBeenCalled();
     failSave = false;
     fireEvent.click(screen.getByRole('button', { name: 'Retry saving attachments' }));
+    expect(screen.getByRole('button', { name: 'Start task' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with current files' }));
     expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
     await waitFor(() => expect(submit).toHaveBeenCalledWith('Review this\n\nAttached files:\n- ~/screenshots/test.png', expect.anything()));

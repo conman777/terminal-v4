@@ -244,12 +244,178 @@ pub(crate) fn synthetic_input_grant(state: &AppState, owner: &str) -> (String, S
     (id, token)
 }
 
+#[cfg(unix)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Non-secret grant identity; a restored claim must first come from an
+/// integrity-protected binding before it is passed to admission.
+pub(crate) struct PairedGrantAuthority {
+    owner: String,
+    grant_id: uuid::Uuid,
+    created: i64,
+    expires_at_ms: i64,
+    revision: String,
+}
+
+#[cfg(unix)]
+impl PairedGrantAuthority {
+    pub(crate) fn valid_binding_for(&self, owner: &str) -> bool {
+        self.owner == owner
+            && !owner.is_empty()
+            && owner.len() <= 256
+            && !owner.chars().any(char::is_control)
+            && !self.grant_id.is_nil()
+            && self.created > 0
+            && self
+                .created
+                .checked_mul(1000)
+                .is_some_and(|created| created < self.expires_at_ms)
+            && self.expires_at_ms % 1000 == 0
+            && self.revision.len() == 64
+            && self
+                .revision
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
+
+    pub(crate) fn valid_for(&self, owner: &str, current_time: i64) -> bool {
+        self.valid_binding_for(owner)
+            && current_time > 0
+            && self
+                .created
+                .checked_mul(1000)
+                .is_some_and(|created| created <= current_time)
+            && self.expires_at_ms > current_time
+    }
+
+    pub(crate) fn expires_at_ms(&self) -> i64 {
+        self.expires_at_ms
+    }
+}
+
+#[cfg(unix)]
+fn grant_revision(id: &str, hash: &str, created: i64) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"terminal-v4-paired-grant-v1\0");
+    digest.update(id.as_bytes());
+    digest.update(b"\0");
+    digest.update(hash.as_bytes());
+    digest.update(b"\0");
+    digest.update(created.to_be_bytes());
+    hex::encode(digest.finalize())
+}
+
+#[cfg(unix)]
+pub(crate) fn capture_paired_grant_with_connection(
+    db: &rusqlite::Connection,
+    authority: &crate::auth::PairedInputAuthority,
+    owner: &str,
+) -> Result<PairedGrantAuthority, String> {
+    if !authority.token.starts_with("tv4pair.") || authority.token.len() != 72 {
+        return Err("Paired grant is invalid".into());
+    }
+    let token_hash = fingerprint(&authority.token);
+    let record: Option<(String, String, String, i64, i64)> = db.query_row(
+        "SELECT id,owner,capabilities,created,expires FROM paired_grants WHERE hash=?1 AND expires>?2",
+        params![token_hash, now()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    ).optional().map_err(|_| "Paired grant storage unavailable")?;
+    let (id, grant_owner, encoded, created, expires) =
+        record.ok_or("Paired grant expired or revoked")?;
+    let capabilities: Capabilities =
+        serde_json::from_str(&encoded).map_err(|_| "Paired grant is invalid")?;
+    if owner.is_empty()
+        || owner.len() > 256
+        || owner.chars().any(char::is_control)
+        || grant_owner != owner
+        || !capabilities.agent_execute
+        || !capabilities.allows_http(&authority.method, &authority.path)
+        || created <= 0
+        || expires <= created
+    {
+        return Err("Paired grant does not authorize this input".into());
+    }
+    let grant_id = uuid::Uuid::parse_str(&id).map_err(|_| "Paired grant is invalid")?;
+    if grant_id.is_nil() {
+        return Err("Paired grant is invalid".into());
+    }
+    Ok(PairedGrantAuthority {
+        owner: owner.into(),
+        grant_id,
+        created,
+        expires_at_ms: expires
+            .checked_mul(1000)
+            .ok_or("Paired grant expiry is invalid")?,
+        revision: grant_revision(&id, &token_hash, created),
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn capture_paired_grant(
+    state: &AppState,
+    authority: &crate::auth::PairedInputAuthority,
+    owner: &str,
+) -> Result<PairedGrantAuthority, String> {
+    let db = storage(state).map_err(|_| "Paired grant storage unavailable")?;
+    capture_paired_grant_with_connection(&db, authority, owner)
+}
+
+#[cfg(unix)]
+pub(crate) fn validate_paired_grant_with_connection(
+    db: &rusqlite::Connection,
+    grant: &PairedGrantAuthority,
+    owner: &str,
+) -> Result<(), String> {
+    let current_time = crate::v4_agent::interaction::now_ms();
+    if !grant.valid_for(owner, current_time) {
+        return Err("Paired grant expired or revoked".into());
+    }
+    let id = grant.grant_id.to_string();
+    let record: Option<(String, String, String, i64, i64)> = db
+        .query_row(
+            "SELECT owner,hash,capabilities,created,expires FROM paired_grants WHERE id=?1",
+            [&id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|_| "Paired grant storage unavailable")?;
+    let (grant_owner, hash, encoded, created, expires) =
+        record.ok_or("Paired grant expired or revoked")?;
+    let capabilities: Capabilities =
+        serde_json::from_str(&encoded).map_err(|_| "Paired grant is invalid")?;
+    if grant_owner != owner
+        || !capabilities.agent_execute
+        || created != grant.created
+        || expires.checked_mul(1000) != Some(grant.expires_at_ms)
+        || grant_revision(&id, &hash, created) != grant.revision
+    {
+        return Err("Paired grant expired, changed or revoked".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_input_authority(
     state: &AppState,
     authority: &crate::auth::PairedInputAuthority,
     owner: &str,
 ) -> Result<i64, String> {
     let db = storage(state).map_err(|_| "Paired grant storage unavailable")?;
+    validate_input_authority_with_connection(&db, authority, owner)
+}
+
+pub(crate) fn validate_input_authority_with_connection(
+    db: &rusqlite::Connection,
+    authority: &crate::auth::PairedInputAuthority,
+    owner: &str,
+) -> Result<i64, String> {
     let record: Option<(String, String, i64)> = db
         .query_row(
             "SELECT owner,capabilities,expires FROM paired_grants WHERE hash=?1 AND expires>?2",
@@ -1418,6 +1584,173 @@ async fn release(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_grant_claim_binds_owner_capability_and_original_grant_without_the_token() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE paired_grants (id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, owner TEXT NOT NULL, capabilities TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL)").unwrap();
+        let token = format!("tv4pair.{}", "a".repeat(64));
+        let id = uuid::Uuid::new_v4().to_string();
+        let created = now();
+        let expires = created + 3600;
+        db.execute(
+            "INSERT INTO paired_grants VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                id,
+                fingerprint(&token),
+                "owner",
+                serde_json::to_string(&Capabilities::operator()).unwrap(),
+                created,
+                expires
+            ],
+        )
+        .unwrap();
+        let authority = crate::auth::PairedInputAuthority {
+            token: token.clone(),
+            method: "POST".into(),
+            path: "/api/structured/sessions/ss-fixture/message".into(),
+        };
+        let grant = capture_paired_grant_with_connection(&db, &authority, "owner").unwrap();
+        assert_eq!(grant.grant_id.to_string(), id);
+        assert!(!format!("{grant:?}").contains(&token));
+        assert!(!format!("{grant:?}").contains(&fingerprint(&token)));
+        let encoded = serde_json::to_string(&grant).unwrap();
+        assert!(!encoded.contains(&token));
+        assert!(!encoded.contains(&fingerprint(&token)));
+        assert!(validate_paired_grant_with_connection(&db, &grant, "owner").is_ok());
+        let mut malformed = grant.clone();
+        malformed.revision = "g".repeat(64);
+        assert!(!malformed.valid_for("owner", crate::v4_agent::interaction::now_ms()));
+        assert!(validate_paired_grant_with_connection(&db, &grant, "other").is_err());
+        assert!(capture_paired_grant_with_connection(&db, &authority, "other").is_err());
+
+        db.execute(
+            "UPDATE paired_grants SET capabilities=?1 WHERE id=?2",
+            params![
+                serde_json::to_string(&Capabilities::observer()).unwrap(),
+                id
+            ],
+        )
+        .unwrap();
+        assert!(validate_paired_grant_with_connection(&db, &grant, "owner").is_err());
+        assert!(capture_paired_grant_with_connection(&db, &authority, "owner").is_err());
+        let observer_socket = crate::auth::PairedInputAuthority {
+            token: token.clone(),
+            method: "GET".into(),
+            path: "/api/structured/sessions/ss-fixture/ws".into(),
+        };
+        assert!(capture_paired_grant_with_connection(&db, &observer_socket, "owner").is_err());
+        db.execute(
+            "UPDATE paired_grants SET capabilities=?1, expires=?2 WHERE id=?3",
+            params![
+                serde_json::to_string(&Capabilities::operator()).unwrap(),
+                created,
+                id
+            ],
+        )
+        .unwrap();
+        assert!(validate_paired_grant_with_connection(&db, &grant, "owner").is_err());
+        db.execute(
+            "UPDATE paired_grants SET expires=?1, created=?2 WHERE id=?3",
+            params![expires, created + 1, id],
+        )
+        .unwrap();
+        assert!(validate_paired_grant_with_connection(&db, &grant, "owner").is_err());
+        db.execute(
+            "UPDATE paired_grants SET created=?1, hash=?2 WHERE id=?3",
+            params![created, fingerprint("replacement"), id],
+        )
+        .unwrap();
+        assert!(validate_paired_grant_with_connection(&db, &grant, "owner").is_err());
+        db.execute("DELETE FROM paired_grants WHERE id=?1", [&id])
+            .unwrap();
+        assert!(validate_paired_grant_with_connection(&db, &grant, "owner").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_claim_admission_respects_owner_lock_and_revocation() {
+        let data = tempfile::tempdir().unwrap();
+        let app = AppState::new(terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let (id, token) = synthetic_input_grant(&app, "owner");
+        let authority = crate::auth::PairedInputAuthority {
+            token,
+            method: "POST".into(),
+            path: "/api/structured/sessions/ss-fixture/message".into(),
+        };
+        let grant = {
+            let db = app.lock_db().unwrap();
+            capture_paired_grant_with_connection(&db, &authority, "owner").unwrap()
+        };
+        let admission = app.local_admission().unwrap();
+        let locked = app.acquire_input_guard("owner").unwrap();
+        assert!(admission
+            .accept_paired("owner", &grant, |_check| Ok::<_, String>(()))
+            .is_err());
+        drop(locked);
+        let (result, confirmed) = admission
+            .accept_paired("owner", &grant, |check| {
+                check()?;
+                Ok::<_, String>("admitted")
+            })
+            .unwrap();
+        assert_eq!((result.unwrap(), confirmed), ("admitted", true));
+        app.lock_db()
+            .unwrap()
+            .execute("DELETE FROM paired_grants WHERE id=?1", [&id])
+            .unwrap();
+        assert!(admission
+            .accept_paired("owner", &grant, |_check| Ok::<_, String>(()))
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paired_claim_expiry_during_publication_is_not_confirmed() {
+        let data = tempfile::tempdir().unwrap();
+        let app = AppState::new(terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let (id, token) = synthetic_input_grant(&app, "owner");
+        app.lock_db()
+            .unwrap()
+            .execute(
+                "UPDATE paired_grants SET expires=?1 WHERE id=?2",
+                params![now() + 2, id],
+            )
+            .unwrap();
+        let authority = crate::auth::PairedInputAuthority {
+            token,
+            method: "POST".into(),
+            path: "/api/structured/sessions/ss-fixture/message".into(),
+        };
+        let grant = {
+            let db = app.lock_db().unwrap();
+            capture_paired_grant_with_connection(&db, &authority, "owner").unwrap()
+        };
+        let admission = app.local_admission().unwrap();
+        let (result, confirmed) = admission
+            .accept_paired("owner", &grant, |_check| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                while crate::v4_agent::interaction::now_ms() < grant.expires_at_ms {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "grant expiry clock did not advance"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Ok::<_, String>("published")
+            })
+            .unwrap();
+        assert_eq!((result.unwrap(), confirmed), ("published", false));
+    }
     #[test]
     fn destination_requires_a_secure_origin_or_explicit_lan_trust() {
         assert_eq!(

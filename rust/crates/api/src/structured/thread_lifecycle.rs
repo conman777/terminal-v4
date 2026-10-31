@@ -192,11 +192,103 @@ pub(super) fn auto_settle_due(last_activity_at: &str, now_ms: i64, idle_ms: i64)
 }
 
 #[cfg(unix)]
-static LAST_AUTO_SETTLE_SWEEP_MS: std::sync::atomic::AtomicI64 =
-    std::sync::atomic::AtomicI64::new(0);
+type AutoSettleSweepKey = (std::path::PathBuf, String);
+
+#[cfg(unix)]
+struct AutoSettleSweep {
+    last_attempt: std::time::Instant,
+    running: bool,
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct AutoSettleSweeps {
+    entries: HashMap<AutoSettleSweepKey, AutoSettleSweep>,
+}
+
+#[cfg(unix)]
+impl AutoSettleSweeps {
+    fn claim(&mut self, key: AutoSettleSweepKey, now: std::time::Instant) -> bool {
+        if let Some(sweep) = self.entries.get_mut(&key) {
+            if sweep.running
+                || now.saturating_duration_since(sweep.last_attempt)
+                    < std::time::Duration::from_millis(AUTO_SETTLE_SWEEP_INTERVAL_MS as u64)
+            {
+                return false;
+            }
+            sweep.last_attempt = now;
+            sweep.running = true;
+            return true;
+        }
+
+        if self.entries.len() >= 4096 {
+            let oldest = self
+                .entries
+                .iter()
+                .filter(|(_, sweep)| !sweep.running)
+                .min_by_key(|(_, sweep)| sweep.last_attempt)
+                .map(|(key, _)| key.clone());
+            let Some(oldest) = oldest else {
+                return false;
+            };
+            self.entries.remove(&oldest);
+        }
+        self.entries.insert(
+            key,
+            AutoSettleSweep {
+                last_attempt: now,
+                running: true,
+            },
+        );
+        true
+    }
+
+    fn finish(&mut self, key: &AutoSettleSweepKey, now: std::time::Instant) {
+        if let Some(sweep) = self.entries.get_mut(key) {
+            sweep.last_attempt = now;
+            sweep.running = false;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn auto_settle_sweeps() -> &'static std::sync::Mutex<AutoSettleSweeps> {
+    static SWEEPS: std::sync::OnceLock<std::sync::Mutex<AutoSettleSweeps>> =
+        std::sync::OnceLock::new();
+    SWEEPS.get_or_init(Default::default)
+}
+
+#[cfg(unix)]
+struct AutoSettleSweepGuard(AutoSettleSweepKey);
+
+#[cfg(unix)]
+impl Drop for AutoSettleSweepGuard {
+    fn drop(&mut self) {
+        if let Ok(mut sweeps) = auto_settle_sweeps().lock() {
+            sweeps.finish(&self.0, std::time::Instant::now());
+        }
+    }
+}
 
 #[cfg(unix)]
 impl super::StructuredSessionManager {
+    async fn settle_inventory_candidate(
+        &self,
+        owner: &str,
+        item: &super::StructuredSessionInventory,
+    ) -> bool {
+        let update = super::StructuredThreadUpdate {
+            settled: Some(true),
+            pinned: Some(false),
+            ..Default::default()
+        };
+        matches!(
+            self.update_thread_inner(owner, &item.id, update, None, Some(item))
+                .await,
+            Ok(Some(_))
+        )
+    }
+
     pub(super) async fn auto_settle_idle_at(
         &self,
         owner: &str,
@@ -214,15 +306,7 @@ impl super::StructuredSessionManager {
             {
                 continue;
             }
-            let update = super::StructuredThreadUpdate {
-                settled: Some(true),
-                pinned: Some(false),
-                ..Default::default()
-            };
-            if matches!(
-                self.update_thread(owner, &item.id, update).await,
-                Ok(Some(_))
-            ) {
+            if self.settle_inventory_candidate(owner, &item).await {
                 settled.push(item.id);
             }
         }
@@ -230,28 +314,31 @@ impl super::StructuredSessionManager {
     }
 
     pub(super) fn schedule_auto_settle(&self, owner: &str) {
-        use std::sync::atomic::Ordering;
         let Some(idle_ms) =
             parse_auto_settle_idle_ms(std::env::var(AUTO_SETTLE_ENV).ok().as_deref())
         else {
             return;
         };
-        let now_ms = super::now_ts();
-        let last = LAST_AUTO_SETTLE_SWEEP_MS.load(Ordering::SeqCst);
-        if now_ms.saturating_sub(last) < AUTO_SETTLE_SWEEP_INTERVAL_MS
-            || LAST_AUTO_SETTLE_SWEEP_MS
-                .compare_exchange(last, now_ms, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-        {
-            return;
-        }
         let Ok(permit) = self.external_admission() else {
             return;
         };
+        let Ok(data_root) = self.inner.config.data_dir.canonicalize() else {
+            return;
+        };
+        let key = (data_root, owner.to_owned());
+        let Ok(mut sweeps) = auto_settle_sweeps().lock() else {
+            return;
+        };
+        if !sweeps.claim(key.clone(), std::time::Instant::now()) {
+            return;
+        }
+        drop(sweeps);
+        let sweep = AutoSettleSweepGuard(key);
         let manager = self.clone();
         let owner = owner.to_owned();
         tokio::spawn(async move {
             let _permit = permit;
+            let _sweep = sweep;
             if manager
                 .auto_settle_idle_at(&owner, idle_ms, super::now_ts())
                 .await
@@ -782,6 +869,44 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn automatic_settlement_sweeps_do_not_starve_other_owners_or_data_roots() {
+        let mut sweeps = AutoSettleSweeps::default();
+        let first = ("/fixture-a".into(), "owner-a".into());
+        let other_owner = ("/fixture-a".into(), "owner-b".into());
+        let other_root = ("/fixture-b".into(), "owner-a".into());
+        let now = std::time::Instant::now();
+        let interval = std::time::Duration::from_millis(AUTO_SETTLE_SWEEP_INTERVAL_MS as u64);
+        assert!(sweeps.claim(first.clone(), now));
+        assert!(!sweeps.claim(first.clone(), now + interval));
+        assert!(sweeps.claim(other_owner, now));
+        assert!(sweeps.claim(other_root, now));
+        sweeps.finish(&first, now);
+        assert!(!sweeps.claim(
+            first.clone(),
+            now + interval - std::time::Duration::from_millis(1)
+        ));
+        assert!(sweeps.claim(first, now + interval));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn automatic_settlement_sweep_capacity_preserves_running_entries() {
+        let mut sweeps = AutoSettleSweeps::default();
+        let now = std::time::Instant::now();
+        for number in 0..4096 {
+            assert!(sweeps.claim(("/fixture".into(), format!("owner-{number}")), now));
+        }
+        let newcomer = ("/fixture".into(), "newcomer".into());
+        assert!(!sweeps.claim(newcomer.clone(), now));
+        let finished = ("/fixture".into(), "owner-1".into());
+        sweeps.finish(&finished, now);
+        assert!(sweeps.claim(newcomer, now));
+        assert_eq!(sweeps.entries.len(), 4096);
+        assert!(!sweeps.entries.contains_key(&finished));
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn snooze_choices_use_server_clock_enforce_bounds_and_survive_restart() {
         use super::super::StructuredThreadUpdate;
@@ -840,6 +965,68 @@ mod tests {
         assert_eq!(lifecycle.snoozed_until_ms, Some(until));
         assert!(lifecycle.snoozed);
         reopened.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn automatic_settlement_rejects_an_inventory_snapshot_after_a_completed_turn() {
+        let data = tempfile::tempdir().unwrap();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        };
+        let state = crate::state::AppState::new_runtime(config).unwrap();
+        let manager = state.structured_session_manager();
+        let session = manager
+            .create_session(
+                "owner",
+                data.path().to_str().unwrap(),
+                Some("deepseek"),
+                Some("deepseek-chat"),
+                None,
+            )
+            .await
+            .unwrap();
+        let candidate = manager
+            .list_inventory("owner")
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(candidate.thread_lifecycle.can_settle);
+        assert!(serde_json::to_value(&candidate)
+            .unwrap()
+            .get("sessionIncarnation")
+            .is_none());
+        manager
+            .record_event(
+                "owner",
+                &session.id,
+                event(json!({"type":"turn_started","ts":1,"seq":1,"turnId":"new-turn"})),
+            )
+            .await
+            .unwrap();
+        manager
+            .record_event(
+                "owner",
+                &session.id,
+                event(json!({"type":"turn_completed","ts":2,"seq":2,"turnId":"new-turn","status":"completed"})),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !manager
+                .settle_inventory_candidate("owner", &candidate)
+                .await
+        );
+        assert!(manager
+            .get_thread("owner", &session.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .settlement
+            .is_none());
+        manager.shutdown().await.unwrap();
     }
 
     #[cfg(unix)]

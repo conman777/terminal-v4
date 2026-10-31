@@ -1,5 +1,724 @@
 use super::*;
 
+#[test]
+fn bounded_output_retains_original_prefix_and_most_recent_tail() {
+    let mut output = Output::default();
+    output.append(&vec![b'a'; OUTPUT_LIMIT]);
+    output.append(b"latest-output");
+    assert_eq!(output.text(), "a".repeat(OUTPUT_LIMIT));
+    assert_eq!(
+        output.tail_text(),
+        format!("{}latest-output", "a".repeat(OUTPUT_LIMIT - 13))
+    );
+    assert!(output.truncated);
+    assert!(output.tail_truncated);
+    assert_eq!(output.tail.len(), OUTPUT_LIMIT);
+}
+
+#[test]
+fn recent_output_remains_bounded_and_keeps_the_end_of_lossy_utf8() {
+    let mut output = Output::default();
+    output.append(&vec![0xff; OUTPUT_LIMIT]);
+    output.append("last π".as_bytes());
+    let (tail, truncated) = output.snapshot(OutputWindow::Tail);
+    assert!(tail.len() <= OUTPUT_LIMIT);
+    assert!(tail.ends_with("last π"));
+    assert!(truncated);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn interactive_manager_writes_only_to_its_owned_command_and_rejects_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let manager = BackgroundProcesses::create_controlled(
+        &root.path().canonicalize().unwrap().join("ledger"),
+        gate,
+    )
+    .unwrap();
+    let mut action = request(
+        root.path(),
+        &"ab".repeat(32),
+        "IFS= read -r line; printf 'received:%s' \"$line\"",
+        Duration::from_secs(5),
+    );
+    action.scope.incarnation = Some(uuid::Uuid::new_v4());
+    let noninteractive_approval = action.clone();
+    action.interactive = true;
+    assert!(manager
+        .start(action.clone(), Some(&noninteractive_approval))
+        .await
+        .is_err());
+    manager.start(action.clone(), Some(&action)).await.unwrap();
+    let cancellation = crate::v4_agent::interaction::Cancellation::default();
+    let auth = InputAuthorization {
+        generation: 0,
+        expires_at: i64::MAX,
+        cancellation: &cancellation,
+    };
+    let operation = "cd".repeat(32);
+    let stopped = crate::v4_agent::interaction::Cancellation::default();
+    stopped.cancel();
+    let stopped_auth = InputAuthorization {
+        generation: 0,
+        expires_at: i64::MAX,
+        cancellation: &stopped,
+    };
+    let expired_auth = InputAuthorization {
+        generation: 0,
+        expires_at: 0,
+        cancellation: &cancellation,
+    };
+    let revoked_auth = InputAuthorization {
+        generation: 1,
+        expires_at: i64::MAX,
+        cancellation: &cancellation,
+    };
+    for invalid_auth in [&stopped_auth, &expired_auth, &revoked_auth] {
+        assert!(manager
+            .write_input_for_actor(
+                &action.scope,
+                &action.action_id,
+                &operation,
+                b"wrong\n",
+                &action.command,
+                invalid_auth
+            )
+            .is_err());
+    }
+    let credentials = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    credentials
+        .execute(
+            "INSERT INTO auth_generations(user_id,generation) VALUES('owner',1)",
+            [],
+        )
+        .unwrap();
+    assert!(manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"wrong\n",
+            &action.command,
+            &revoked_auth
+        )
+        .is_err());
+    credentials
+        .execute(
+            "UPDATE auth_generations SET generation=0 WHERE user_id='owner'",
+            [],
+        )
+        .unwrap();
+    drop(credentials);
+    assert!(manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"wrong\n",
+            "different command",
+            &auth
+        )
+        .is_err());
+    assert!(manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            &vec![b'x'; 513],
+            &action.command,
+            &auth
+        )
+        .is_err());
+    assert!(manager
+        .ledger
+        .input_state(&action.scope, &action.action_id, &operation)
+        .is_err());
+    let mut other = action.scope.clone();
+    other.incarnation = Some(uuid::Uuid::new_v4());
+    assert!(manager
+        .write_input_for_actor(
+            &other,
+            &action.action_id,
+            &operation,
+            b"wrong\n",
+            &action.command,
+            &auth
+        )
+        .is_err());
+    manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"hello\n",
+            &action.command,
+            &auth,
+        )
+        .unwrap();
+    assert!(manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"hello\n",
+            &action.command,
+            &auth
+        )
+        .is_err());
+    let snapshot = manager
+        .wait(
+            &action.scope,
+            &action.action_id,
+            Duration::from_secs(5),
+            &cancellation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot.state, BackgroundState::Exited { code: Some(0) });
+    assert_eq!(
+        manager
+            .reviewable_output(&action.scope, &action.action_id)
+            .await
+            .unwrap()
+            .stdout,
+        "received:hello"
+    );
+    assert_eq!(
+        manager
+            .ledger
+            .input_state(&action.scope, &action.action_id, &operation)
+            .unwrap(),
+        ledger::InputReceiptState::Delivered
+    );
+    manager.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_refuses_cancelled_turns_and_noninteractive_commands_without_claiming() {
+    let root = tempfile::tempdir().unwrap();
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let manager = BackgroundProcesses::create_controlled(
+        &root.path().canonicalize().unwrap().join("ledger"),
+        gate,
+    )
+    .unwrap();
+    let mut action = request(
+        root.path(),
+        &"ab".repeat(32),
+        "sleep 5",
+        Duration::from_secs(10),
+    );
+    action.scope.incarnation = Some(uuid::Uuid::new_v4());
+    manager.start(action.clone(), Some(&action)).await.unwrap();
+    let cancellation = crate::v4_agent::interaction::Cancellation::default();
+    cancellation.cancel();
+    let auth = InputAuthorization {
+        generation: 0,
+        expires_at: i64::MAX,
+        cancellation: &cancellation,
+    };
+    let active = crate::v4_agent::interaction::Cancellation::default();
+    let active_auth = InputAuthorization {
+        generation: 0,
+        expires_at: i64::MAX,
+        cancellation: &active,
+    };
+    let operation = "cd".repeat(32);
+    assert!(manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"text",
+            &action.command,
+            &auth
+        )
+        .is_err());
+    assert!(manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"text",
+            &action.command,
+            &active_auth
+        )
+        .is_err());
+    assert!(manager
+        .ledger
+        .input_state(&action.scope, &action.action_id, &operation)
+        .is_err());
+    manager.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_close_receipt_stays_uncertain_after_eof_and_cannot_be_replayed() {
+    let root = tempfile::tempdir().unwrap();
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let manager = BackgroundProcesses::create_controlled(
+        &root.path().canonicalize().unwrap().join("ledger"),
+        gate,
+    )
+    .unwrap();
+    let mut action = request(
+        root.path(),
+        &"ab".repeat(32),
+        "cat > marker",
+        Duration::from_secs(10),
+    );
+    action.scope.incarnation = Some(uuid::Uuid::new_v4());
+    action.interactive = true;
+    manager.start(action.clone(), Some(&action)).await.unwrap();
+    let cancellation = crate::v4_agent::interaction::Cancellation::default();
+    let auth = InputAuthorization {
+        generation: 0,
+        expires_at: i64::MAX,
+        cancellation: &cancellation,
+    };
+    manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &"cd".repeat(32),
+            b"hello",
+            &action.command,
+            &auth,
+        )
+        .unwrap();
+    assert!(manager
+        .close_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &"cd".repeat(32),
+            &action.command,
+            &auth
+        )
+        .is_err());
+    let ledger_db =
+        rusqlite::Connection::open(root.path().join("ledger/receipts.sqlite3")).unwrap();
+    ledger_db.execute_batch("CREATE TRIGGER reject_close_receipt BEFORE UPDATE ON background_input_receipts BEGIN SELECT RAISE(FAIL, 'synthetic failure'); END;").unwrap();
+    let close_operation = "ef".repeat(32);
+    let error = manager
+        .close_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &close_operation,
+            &action.command,
+            &auth,
+        )
+        .unwrap_err();
+    assert!(error.contains("uncertain"));
+    assert_eq!(
+        manager
+            .wait(
+                &action.scope,
+                &action.action_id,
+                Duration::from_secs(5),
+                &cancellation
+            )
+            .await
+            .unwrap()
+            .state,
+        BackgroundState::Exited { code: Some(0) }
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("marker")).unwrap(),
+        "hello"
+    );
+    assert_eq!(
+        manager
+            .ledger
+            .input_state(&action.scope, &action.action_id, &close_operation)
+            .unwrap(),
+        ledger::InputReceiptState::Uncertain
+    );
+    assert!(manager
+        .close_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &close_operation,
+            &action.command,
+            &auth
+        )
+        .is_err());
+    drop(ledger_db);
+    manager.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn interactive_input_receipt_survives_shutdown_without_persisting_text_or_replaying() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let manager = BackgroundProcesses::create_controlled(&path, gate.clone()).unwrap();
+    let mut action = request(
+        root.path(),
+        &"ab".repeat(32),
+        "IFS= read -r line; printf '%s' \"$line\" > marker; sleep 30",
+        Duration::from_secs(40),
+    );
+    action.scope.incarnation = Some(uuid::Uuid::new_v4());
+    action.interactive = true;
+    manager.start(action.clone(), Some(&action)).await.unwrap();
+    let cancel = crate::v4_agent::interaction::Cancellation::default();
+    let auth = InputAuthorization {
+        generation: 0,
+        expires_at: i64::MAX,
+        cancellation: &cancel,
+    };
+    let operation = "cd".repeat(32);
+    manager
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"synthetic-private-input\n",
+            &action.command,
+            &auth,
+        )
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while std::fs::read_to_string(root.path().join("marker"))
+            .ok()
+            .as_deref()
+            != Some("synthetic-private-input")
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    manager.shutdown().await.unwrap();
+    drop(manager);
+    assert!(!std::fs::read(path.join("receipts.sqlite3"))
+        .unwrap()
+        .windows(b"synthetic-private-input".len())
+        .any(|window| window == b"synthetic-private-input"));
+    let reopened = BackgroundProcesses::open_controlled(&path, gate).unwrap();
+    assert_eq!(
+        reopened
+            .ledger
+            .input_state(&action.scope, &action.action_id, &operation)
+            .unwrap(),
+        ledger::InputReceiptState::Delivered
+    );
+    assert!(reopened
+        .write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"synthetic-private-input\n",
+            &action.command,
+            &auth
+        )
+        .is_err());
+    reopened.shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_receipts_prevent_replay_across_restart_and_session_retirement() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let manager = BackgroundProcesses::create(&path).unwrap();
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let action = "ab".repeat(32);
+    let operation = "cd".repeat(32);
+    let command_key = manager.ledger.claim(&scope, &action).unwrap();
+    let other_action = "12".repeat(32);
+    let other_key = manager.ledger.claim(&scope, &other_action).unwrap();
+    let stale_claim = manager
+        .ledger
+        .claim_input(&scope, &action, &operation)
+        .unwrap();
+    assert_eq!(
+        manager
+            .ledger
+            .input_state(&scope, &action, &operation)
+            .unwrap(),
+        ledger::InputReceiptState::Uncertain
+    );
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &action, &operation)
+        .is_err());
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &other_action, &operation)
+        .is_err());
+    let mut foreign = scope.clone();
+    foreign.owner = "other".into();
+    assert!(manager
+        .ledger
+        .input_state(&foreign, &action, &operation)
+        .is_err());
+    drop(manager);
+
+    let manager = BackgroundProcesses::open(&path).unwrap();
+    assert_eq!(
+        manager
+            .ledger
+            .input_state(&scope, &action, &operation)
+            .unwrap(),
+        ledger::InputReceiptState::Uncertain
+    );
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &action, &operation)
+        .is_err());
+    assert!(manager
+        .ledger
+        .finish_input(stale_claim, ledger::InputReceiptState::Delivered)
+        .is_err());
+    let second = "ef".repeat(32);
+    let claim = manager
+        .ledger
+        .claim_input(&scope, &action, &second)
+        .unwrap();
+    manager
+        .ledger
+        .finish_input(claim, ledger::InputReceiptState::Delivered)
+        .unwrap();
+    assert_eq!(
+        manager
+            .ledger
+            .input_state(&scope, &action, &second)
+            .unwrap(),
+        ledger::InputReceiptState::Delivered
+    );
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &action, &second)
+        .is_err());
+    manager
+        .ledger
+        .finish(&command_key, &BackgroundState::Cancelled)
+        .unwrap();
+    manager
+        .ledger
+        .finish(&other_key, &BackgroundState::Cancelled)
+        .unwrap();
+    manager
+        .ledger
+        .retire_session(&scope.owner, &scope.session)
+        .unwrap();
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &action, &operation)
+        .is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_receipt_migration_is_durable_and_missing_upgraded_table_fails_closed() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let manager = BackgroundProcesses::create(&path).unwrap();
+    let guard = root.path().join(".ledger.background-guard");
+    assert_eq!(
+        std::fs::read(&guard).unwrap(),
+        b"v4-background-ledger-v2-ready\n"
+    );
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let action = "ab".repeat(32);
+    manager.ledger.claim(&scope, &action).unwrap();
+    manager
+        .ledger
+        .claim_input(&scope, &action, &"cd".repeat(32))
+        .unwrap();
+    drop(manager);
+    assert_eq!(
+        std::fs::read(&guard).unwrap(),
+        b"v4-background-ledger-v3-ready\n"
+    );
+    let db = rusqlite::Connection::open(path.join("receipts.sqlite3")).unwrap();
+    db.execute("DROP TABLE background_input_receipts", [])
+        .unwrap();
+    drop(db);
+    assert!(BackgroundProcesses::open(&path).is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn invalid_input_scope_does_not_upgrade_the_ledger() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let manager = BackgroundProcesses::create(&path).unwrap();
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &"ab".repeat(32), &"cd".repeat(32))
+        .is_err());
+    assert_eq!(
+        std::fs::read(root.path().join(".ledger.background-guard")).unwrap(),
+        b"v4-background-ledger-v2-ready\n"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_input_outcome_commit_stays_uncertain_and_rejects_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let manager = BackgroundProcesses::create(&path).unwrap();
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let action = "ab".repeat(32);
+    let operation = "cd".repeat(32);
+    manager.ledger.claim(&scope, &action).unwrap();
+    let claim = manager
+        .ledger
+        .claim_input(&scope, &action, &operation)
+        .unwrap();
+    let db = rusqlite::Connection::open(path.join("receipts.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_input_update BEFORE UPDATE ON background_input_receipts BEGIN SELECT RAISE(FAIL, 'test failure'); END;").unwrap();
+    assert!(manager
+        .ledger
+        .finish_input(claim, ledger::InputReceiptState::Delivered)
+        .is_err());
+    drop(db);
+    drop(manager);
+    let manager = BackgroundProcesses::open(&path).unwrap();
+    assert_eq!(
+        manager
+            .ledger
+            .input_state(&scope, &action, &operation)
+            .unwrap(),
+        ledger::InputReceiptState::Uncertain
+    );
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &action, &operation)
+        .is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_receipt_capacity_rejects_new_operations_until_session_retirement() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let manager = BackgroundProcesses::create(&path).unwrap();
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let action = "ab".repeat(32);
+    let command_key = manager.ledger.claim(&scope, &action).unwrap();
+    let first = "cd".repeat(32);
+    let claim = manager.ledger.claim_input(&scope, &action, &first).unwrap();
+    manager
+        .ledger
+        .finish_input(claim, ledger::InputReceiptState::Delivered)
+        .unwrap();
+    let db = rusqlite::Connection::open(path.join("receipts.sqlite3")).unwrap();
+    db.execute_batch("WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<1023) INSERT INTO background_input_receipts(key,owner_key,session_key,action_key,state) SELECT CAST('filler-' || n AS BLOB), owner_key, session_key, action_key, 'delivered' FROM background_input_receipts CROSS JOIN seq WHERE length(key)=32;").unwrap();
+    drop(db);
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &action, &"ef".repeat(32))
+        .unwrap_err()
+        .contains("capacity"));
+    assert_eq!(
+        manager.ledger.input_state(&scope, &action, &first).unwrap(),
+        ledger::InputReceiptState::Delivered
+    );
+    manager
+        .ledger
+        .finish(&command_key, &BackgroundState::Cancelled)
+        .unwrap();
+    manager
+        .ledger
+        .retire_session(&scope.owner, &scope.session)
+        .unwrap();
+    assert!(manager.ledger.input_state(&scope, &action, &first).is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn input_replay_record_survives_pruning_of_the_command_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let manager = BackgroundProcesses::create(&path).unwrap();
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let action = "ab".repeat(32);
+    let operation = "cd".repeat(32);
+    let key = manager.ledger.claim(&scope, &action).unwrap();
+    let claim = manager
+        .ledger
+        .claim_input(&scope, &action, &operation)
+        .unwrap();
+    manager
+        .ledger
+        .finish_input(claim, ledger::InputReceiptState::Delivered)
+        .unwrap();
+    manager
+        .ledger
+        .finish(&key, &BackgroundState::Cancelled)
+        .unwrap();
+    for index in 0..40 {
+        let key = manager
+            .ledger
+            .claim(&scope, &format!("{index:064x}"))
+            .unwrap();
+        manager
+            .ledger
+            .finish(&key, &BackgroundState::Cancelled)
+            .unwrap();
+    }
+    assert!(manager.ledger.read(&scope, &action).is_err());
+    assert_eq!(
+        manager
+            .ledger
+            .input_state(&scope, &action, &operation)
+            .unwrap(),
+        ledger::InputReceiptState::Delivered
+    );
+    let other = "ef".repeat(32);
+    manager.ledger.claim(&scope, &other).unwrap();
+    assert!(manager
+        .ledger
+        .claim_input(&scope, &other, &operation)
+        .is_err());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn receipt_keys_bind_session_incarnation_and_reject_legacy_replay() {
@@ -42,6 +761,467 @@ async fn receipt_keys_bind_session_incarnation_and_reject_legacy_replay() {
 use std::time::Duration;
 
 #[cfg(unix)]
+#[tokio::test]
+async fn output_notification_is_bounded_and_cancel_does_not_stop_command() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = Arc::new(
+        BackgroundProcesses::create(&root.path().canonicalize().unwrap().join("ledger")).unwrap(),
+    );
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let id = "ab".repeat(32);
+    let (cancel, _) = watch::channel(false);
+    let (done, _) = watch::channel(false);
+    let entry = Arc::new(Entry {
+        action_id: id.clone(),
+        scope: scope.clone(),
+        state: Mutex::new(BackgroundState::Running),
+        stdout: Mutex::new(Output::default()),
+        stderr: Mutex::new(Output::default()),
+        cancel,
+        done,
+        output_revision: watch::channel(0).0,
+        #[cfg(unix)]
+        input: Mutex::new(None),
+        authorization_generation: Some(0),
+    });
+    manager
+        .registry
+        .lock()
+        .await
+        .entries
+        .insert(Ledger::key(&scope, &id).unwrap(), entry.clone());
+    entry.output_revision.send_modify(|revision| *revision = 1);
+    let cancellation = crate::v4_agent::interaction::Cancellation::default();
+    assert_eq!(
+        manager
+            .wait_output_revision(&scope, &id, 0, Duration::from_secs(1), &cancellation)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(manager
+        .wait_output_revision(&scope, &id, 2, Duration::from_secs(1), &cancellation)
+        .await
+        .is_err());
+    let waiting = {
+        let manager = manager.clone();
+        let scope = scope.clone();
+        let id = id.clone();
+        let cancellation = cancellation.clone();
+        tokio::spawn(async move {
+            manager
+                .wait_output_revision(&scope, &id, 1, Duration::from_secs(5), &cancellation)
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    cancellation.cancel();
+    assert!(waiting.await.unwrap().is_err());
+    assert!(!*entry.cancel.borrow());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn list_for_actor_excludes_other_scopes_and_withholds_output() {
+    let root = tempfile::tempdir().unwrap();
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let manager = BackgroundProcesses::create_controlled(
+        &root.path().canonicalize().unwrap().join("ledger"),
+        gate,
+    )
+    .unwrap();
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let mut other_owner = scope.clone();
+    other_owner.owner = "other".into();
+    let mut other_session = scope.clone();
+    other_session.session = "other".into();
+    let mut other_workspace = scope.clone();
+    other_workspace.workspace = root.path().join("other");
+    let mut other_incarnation = scope.clone();
+    other_incarnation.incarnation = Some(uuid::Uuid::new_v4());
+    {
+        let mut registry = manager.registry.lock().await;
+        for (number, candidate) in [
+            scope.clone(),
+            other_owner,
+            other_session,
+            other_workspace,
+            other_incarnation,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let key = vec![number as u8];
+            let (cancel, _) = watch::channel(false);
+            let (done, _) = watch::channel(true);
+            registry.entries.insert(
+                key.clone(),
+                Arc::new(Entry {
+                    output_revision: watch::channel(0).0,
+                    #[cfg(unix)]
+                    input: Mutex::new(None),
+                    authorization_generation: Some(0),
+                    scope: candidate,
+                    action_id: format!("{number:064x}"),
+                    state: Mutex::new(BackgroundState::Exited { code: Some(0) }),
+                    stdout: Mutex::new(Output {
+                        bytes: b"sensitive output".to_vec(),
+                        ..Default::default()
+                    }),
+                    stderr: Mutex::new(Output::default()),
+                    cancel,
+                    done,
+                }),
+            );
+            registry.order.push_back(key);
+        }
+    }
+    let result = manager
+        .list_for_actor(
+            &scope,
+            0,
+            i64::MAX,
+            &crate::v4_agent::interaction::Cancellation::default(),
+        )
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0, format!("{:064x}", 0));
+    assert!(result[0].1.stdout.is_empty());
+    assert!(result[0].1.output_withheld);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn list_for_actor_recovers_bounded_receipts_without_crossing_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let first = "ab".repeat(32);
+    let second = "cd".repeat(32);
+    let manager = BackgroundProcesses::create_controlled(&path, gate.clone()).unwrap();
+    let key = manager.ledger.claim(&scope, &first).unwrap();
+    manager
+        .ledger
+        .finish(&key, &BackgroundState::Exited { code: Some(0) })
+        .unwrap();
+    let unknown = manager.ledger.claim(&scope, &second).unwrap();
+    let mut other_workspace = scope.clone();
+    other_workspace.workspace = root.path().join("other");
+    let other = manager
+        .ledger
+        .claim(&other_workspace, &"ef".repeat(32))
+        .unwrap();
+    manager
+        .ledger
+        .finish(&other, &BackgroundState::Cancelled)
+        .unwrap();
+    let mut other_owner = scope.clone();
+    other_owner.owner = "other".into();
+    let other = manager
+        .ledger
+        .claim(&other_owner, &"23".repeat(32))
+        .unwrap();
+    manager
+        .ledger
+        .finish(&other, &BackgroundState::Cancelled)
+        .unwrap();
+    let mut other_session = scope.clone();
+    other_session.session = "other".into();
+    let other = manager
+        .ledger
+        .claim(&other_session, &"45".repeat(32))
+        .unwrap();
+    manager
+        .ledger
+        .finish(&other, &BackgroundState::Cancelled)
+        .unwrap();
+    let mut other_incarnation = scope.clone();
+    other_incarnation.incarnation = Some(uuid::Uuid::new_v4());
+    let other = manager
+        .ledger
+        .claim(&other_incarnation, &"01".repeat(32))
+        .unwrap();
+    manager
+        .ledger
+        .finish(&other, &BackgroundState::Cancelled)
+        .unwrap();
+    drop(manager);
+    let manager = BackgroundProcesses::open_controlled(&path, gate.clone()).unwrap();
+    let cancel = crate::v4_agent::interaction::Cancellation::default();
+    let listed = manager
+        .list_for_actor(&scope, 0, i64::MAX, &cancel)
+        .unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(id, snapshot)| (id.clone(), snapshot.state.clone(), snapshot.output_withheld))
+            .collect::<Vec<_>>(),
+        vec![
+            (second, BackgroundState::Unknown, true),
+            (first, BackgroundState::Exited { code: Some(0) }, true),
+        ]
+    );
+    assert!(listed
+        .iter()
+        .all(|(_, snapshot)| snapshot.stdout.is_empty() && snapshot.stderr.is_empty()));
+    manager
+        .ledger
+        .finish(&unknown, &BackgroundState::FailedToStart)
+        .unwrap();
+    manager
+        .ledger
+        .retire_session(&scope.owner, &scope.session)
+        .unwrap();
+    assert!(manager
+        .list_for_actor(&scope, 0, i64::MAX, &cancel)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        manager.ledger.read(&other_owner, &"23".repeat(32)).unwrap(),
+        BackgroundState::Cancelled
+    );
+    assert_eq!(
+        manager
+            .ledger
+            .read(&other_session, &"45".repeat(32))
+            .unwrap(),
+        BackgroundState::Cancelled
+    );
+    cancel.cancel();
+    assert!(manager
+        .list_for_actor(&scope, 0, i64::MAX, &cancel)
+        .is_err());
+    gate.hold("owner", "logout-fixture").unwrap();
+    assert!(manager
+        .list_for_actor(
+            &scope,
+            0,
+            i64::MAX,
+            &crate::v4_agent::interaction::Cancellation::default()
+        )
+        .is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn receipt_index_migration_preserves_legacy_status_without_inventing_a_list_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let old_id = "ab".repeat(32);
+    let manager = BackgroundProcesses::create_controlled(&path, gate.clone()).unwrap();
+    let key = manager.ledger.claim(&scope, &old_id).unwrap();
+    manager
+        .ledger
+        .finish(&key, &BackgroundState::Exited { code: Some(7) })
+        .unwrap();
+    drop(manager);
+    let db = rusqlite::Connection::open(path.join("receipts.sqlite3")).unwrap();
+    db.execute("ALTER TABLE receipts DROP COLUMN action_id", [])
+        .unwrap();
+    drop(db);
+    let manager = BackgroundProcesses::open_controlled(&path, gate).unwrap();
+    assert_eq!(
+        manager.ledger.read(&scope, &old_id).unwrap(),
+        BackgroundState::Exited { code: Some(7) }
+    );
+    let cancel = crate::v4_agent::interaction::Cancellation::default();
+    assert!(manager
+        .list_for_actor(&scope, 0, i64::MAX, &cancel)
+        .unwrap()
+        .is_empty());
+    let new_id = "cd".repeat(32);
+    let key = manager.ledger.claim(&scope, &new_id).unwrap();
+    manager
+        .ledger
+        .finish(&key, &BackgroundState::Cancelled)
+        .unwrap();
+    let list = manager
+        .list_for_actor(&scope, 0, i64::MAX, &cancel)
+        .unwrap();
+    assert_eq!(
+        list.iter()
+            .map(|(id, snapshot)| (id.clone(), snapshot.state.clone()))
+            .collect::<Vec<_>>(),
+        vec![(new_id, BackgroundState::Cancelled)]
+    );
+    assert!(manager.ledger.claim(&scope, &old_id).is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn receipt_index_migration_recovers_identifiers_from_retained_launch_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let id = "ef".repeat(32);
+    let manager = BackgroundProcesses::create_controlled(&path, gate.clone()).unwrap();
+    let key = manager.ledger.claim(&scope, &id).unwrap();
+    manager
+        .ledger
+        .record_launch(&key, &scope, &id, 12345, 12345, None)
+        .unwrap();
+    let finished_id = "cd".repeat(32);
+    let finished_key = manager.ledger.claim(&scope, &finished_id).unwrap();
+    manager
+        .ledger
+        .record_launch(&finished_key, &scope, &finished_id, 12346, 12346, None)
+        .unwrap();
+    manager
+        .ledger
+        .finish_launched(
+            &finished_key,
+            &BackgroundState::Exited { code: Some(3) },
+            None,
+        )
+        .unwrap();
+    drop(manager);
+    let db = rusqlite::Connection::open(path.join("receipts.sqlite3")).unwrap();
+    db.execute("ALTER TABLE receipts DROP COLUMN action_id", [])
+        .unwrap();
+    drop(db);
+    let manager = BackgroundProcesses::open_controlled(&path, gate).unwrap();
+    let cancel = crate::v4_agent::interaction::Cancellation::default();
+    let listed = manager
+        .list_for_actor(&scope, 0, i64::MAX, &cancel)
+        .unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(id, snapshot)| (id.clone(), snapshot.state.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (finished_id, BackgroundState::Exited { code: Some(3) }),
+            (id, BackgroundState::Unknown),
+        ]
+    );
+    let mut other = scope.clone();
+    other.incarnation = Some(uuid::Uuid::new_v4());
+    assert!(manager
+        .list_for_actor(&other, 0, i64::MAX, &cancel)
+        .unwrap()
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn indexed_list_respects_pruning_and_failed_claim_rolls_back_everything() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("ledger");
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::new_v4()),
+    };
+    let manager = BackgroundProcesses::create_controlled(&path, gate).unwrap();
+    for index in 0..40 {
+        let id = format!("{index:064x}");
+        let key = manager.ledger.claim(&scope, &id).unwrap();
+        manager
+            .ledger
+            .finish(&key, &BackgroundState::Exited { code: Some(0) })
+            .unwrap();
+    }
+    let cancel = crate::v4_agent::interaction::Cancellation::default();
+    let ids = || {
+        manager
+            .list_for_actor(&scope, 0, i64::MAX, &cancel)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
+    };
+    let before = ids();
+    assert_eq!(
+        before,
+        (8..40)
+            .rev()
+            .map(|index| format!("{index:064x}"))
+            .collect::<Vec<_>>()
+    );
+    let db = rusqlite::Connection::open(path.join("receipts.sqlite3")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_index BEFORE INSERT ON receipts BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;").unwrap();
+    let rejected = format!("{:064x}", 40);
+    assert!(manager.ledger.claim(&scope, &rejected).is_err());
+    assert!(manager.ledger.read(&scope, &rejected).is_err());
+    assert_eq!(ids(), before);
+    db.execute_batch("DROP TRIGGER reject_index").unwrap();
+    manager.ledger.claim(&scope, &rejected).unwrap();
+    assert_eq!(
+        manager.ledger.read(&scope, &rejected).unwrap(),
+        BackgroundState::Unknown
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn indexed_list_rejects_nil_incarnation_even_when_no_receipts_exist() {
+    let root = tempfile::tempdir().unwrap();
+    let db = rusqlite::Connection::open(root.path().join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let manager = BackgroundProcesses::create_controlled(
+        &root.path().canonicalize().unwrap().join("ledger"),
+        gate,
+    )
+    .unwrap();
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "empty".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: Some(uuid::Uuid::nil()),
+    };
+    assert!(manager
+        .list_for_actor(
+            &scope,
+            0,
+            i64::MAX,
+            &crate::v4_agent::interaction::Cancellation::default()
+        )
+        .is_err());
+}
+
+#[cfg(unix)]
 fn initialize_controlled_gate(db: &rusqlite::Connection) {
     db.execute_batch("CREATE TABLE IF NOT EXISTS auth_generations (user_id TEXT PRIMARY KEY, generation INTEGER NOT NULL CHECK(generation >= 0))").unwrap();
     owner_gate::OwnerGate::initialize(db).unwrap();
@@ -54,6 +1234,7 @@ fn request(
     timeout: Duration,
 ) -> BackgroundRequest {
     BackgroundRequest {
+        interactive: false,
         scope: BackgroundScope {
             owner: "owner".into(),
             session: "session".into(),
@@ -1146,6 +2327,163 @@ async fn background_crash_fixture() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn background_input_crash_fixture() {
+    let Some(root) = std::env::var_os("V4_BACKGROUND_INPUT_CRASH_FIXTURE") else {
+        return;
+    };
+    let root = PathBuf::from(root);
+    let mode = std::env::var("V4_BACKGROUND_INPUT_CRASH_MODE").unwrap();
+    let db = rusqlite::Connection::open(root.join("app.sqlite")).unwrap();
+    initialize_controlled_gate(&db);
+    let gate = Arc::new(owner_gate::OwnerGate::open(db).unwrap());
+    let manager = BackgroundProcesses::create_controlled(&root.join("ledger"), gate).unwrap();
+    let mut action = request(
+        &root,
+        &"ab".repeat(32),
+        "IFS= read -r line; printf '%s' \"$line\" > marker; sleep 2; printf survived > after_crash",
+        Duration::from_secs(10),
+    );
+    action.scope.incarnation = Some(uuid::Uuid::from_u128(42));
+    action.interactive = true;
+    manager.start(action.clone(), Some(&action)).await.unwrap();
+    let cancellation = crate::v4_agent::interaction::Cancellation::default();
+    let auth = InputAuthorization {
+        generation: 0,
+        expires_at: i64::MAX,
+        cancellation: &cancellation,
+    };
+    if mode == "close" {
+        manager
+            .write_input_for_actor(
+                &action.scope,
+                &action.action_id,
+                &"01".repeat(32),
+                b"synthetic-private-input",
+                &action.command,
+                &auth,
+            )
+            .unwrap();
+    }
+    let marker = root.join("marker");
+    manager.after_input_effect_for_test(Box::new(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(&marker).ok().as_deref() != Some("synthetic-private-input") {
+            if std::time::Instant::now() >= deadline {
+                unsafe { libc::_exit(9) }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        unsafe { libc::_exit(0) }
+    }));
+    let operation = "cd".repeat(32);
+    if mode == "close" {
+        let _ = manager.close_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            &action.command,
+            &auth,
+        );
+    } else {
+        let _ = manager.write_input_for_actor(
+            &action.scope,
+            &action.action_id,
+            &operation,
+            b"synthetic-private-input\n",
+            &action.command,
+            &auth,
+        );
+    }
+    panic!("input crash hook was not invoked");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn crash_after_input_effect_keeps_receipt_uncertain_and_never_replays() {
+    for mode in ["write", "close"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut unrelated = tokio::process::Command::new("/bin/sleep")
+            .arg("10")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let module = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, path)| path);
+        let fixture = format!("{module}::background_input_crash_fixture");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &fixture, "--nocapture"])
+            .env(
+                "V4_BACKGROUND_INPUT_CRASH_FIXTURE",
+                root.path().canonicalize().unwrap(),
+            )
+            .env("V4_BACKGROUND_INPUT_CRASH_MODE", mode)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{mode}: fixture failed: {status}");
+        let path = root.path().canonicalize().unwrap().join("ledger");
+        let manager = BackgroundProcesses::open(&path).unwrap();
+        let mut action = request(
+            root.path(),
+            &"ab".repeat(32),
+            "unused",
+            Duration::from_secs(10),
+        );
+        action.scope.incarnation = Some(uuid::Uuid::from_u128(42));
+        let operation = "cd".repeat(32);
+        assert_eq!(
+            manager
+                .ledger
+                .input_state(&action.scope, &action.action_id, &operation)
+                .unwrap(),
+            ledger::InputReceiptState::Uncertain,
+            "{mode}"
+        );
+        let error = manager
+            .ledger
+            .claim_input(&action.scope, &action.action_id, &operation)
+            .err()
+            .expect("operation was replayed");
+        assert!(error.contains("replay rejected"), "{mode}: {error}");
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("marker")).unwrap(),
+            "synthetic-private-input"
+        );
+        assert!(!std::fs::read(path.join("receipts.sqlite3"))
+            .unwrap()
+            .windows(b"synthetic-private-input".len())
+            .any(|part| part == b"synthetic-private-input"));
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(
+            !root.path().join("after_crash").exists(),
+            "{mode}: command survived its supervisor"
+        );
+        manager.recover_unconfirmed().await.unwrap();
+        assert_eq!(
+            manager
+                .ledger
+                .input_state(&action.scope, &action.action_id, &operation)
+                .unwrap(),
+            ledger::InputReceiptState::Uncertain,
+            "{mode}: startup recovery changed the input outcome"
+        );
+        assert!(
+            manager
+                .ledger
+                .claim_input(&action.scope, &action.action_id, &operation)
+                .is_err(),
+            "{mode}: startup recovery allowed a replay"
+        );
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "{mode}: unrelated process stopped"
+        );
+        unrelated.kill().await.unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn crash_after_spawn_is_unknown_and_cannot_launch_again() {
     let root = tempfile::tempdir().unwrap();
     let mut unrelated = tokio::process::Command::new("/bin/sleep")
@@ -1395,6 +2733,11 @@ async fn renewed_logout_invalidates_inflight_cleanup_receipt() {
     let (cancel, mut cancelled) = watch::channel(false);
     let (done, _) = watch::channel(false);
     let entry = Arc::new(Entry {
+        output_revision: watch::channel(0).0,
+        #[cfg(unix)]
+        input: Mutex::new(None),
+        authorization_generation: Some(0),
+        action_id: "00".repeat(32),
         scope,
         state: Mutex::new(BackgroundState::Running),
         stdout: Mutex::new(Output::default()),
@@ -2304,6 +3647,11 @@ async fn stalled_owner_cleanup_does_not_block_another_owner_start() {
     manager.registry.lock().await.entries.insert(
         b"test-stalled".to_vec(),
         Arc::new(Entry {
+            output_revision: watch::channel(0).0,
+            #[cfg(unix)]
+            input: Mutex::new(None),
+            authorization_generation: Some(0),
+            action_id: "00".repeat(32),
             scope,
             state: Mutex::new(BackgroundState::Running),
             stdout: Mutex::new(Output::default()),
@@ -2376,6 +3724,11 @@ async fn stalled_owner_does_not_delay_an_independent_owner_hold() {
     manager.registry.lock().await.entries.insert(
         b"fixture-stalled".to_vec(),
         Arc::new(Entry {
+            output_revision: watch::channel(0).0,
+            #[cfg(unix)]
+            input: Mutex::new(None),
+            authorization_generation: Some(0),
+            action_id: "00".repeat(32),
             scope,
             state: Mutex::new(BackgroundState::Running),
             stdout: Mutex::new(Output::default()),
@@ -2436,6 +3789,11 @@ async fn stalled_owner_cleanup_does_not_prevent_another_owner_acknowledgment() {
     manager.registry.lock().await.entries.insert(
         b"test-stalled".to_vec(),
         Arc::new(Entry {
+            output_revision: watch::channel(0).0,
+            #[cfg(unix)]
+            input: Mutex::new(None),
+            authorization_generation: Some(0),
+            action_id: "00".repeat(32),
             scope,
             state: Mutex::new(BackgroundState::Running),
             stdout: Mutex::new(Output::default()),
@@ -2478,6 +3836,11 @@ async fn stalled_session_cleanup_does_not_block_other_owners_or_reopen_the_sessi
     let (cancel, mut cancellation) = watch::channel(false);
     let (done, _) = watch::channel(false);
     let entry = Arc::new(Entry {
+        output_revision: watch::channel(0).0,
+        #[cfg(unix)]
+        input: Mutex::new(None),
+        authorization_generation: Some(0),
+        action_id: "00".repeat(32),
         scope: first.scope.clone(),
         state: Mutex::new(BackgroundState::Running),
         stdout: Mutex::new(Output::default()),

@@ -41,6 +41,8 @@ use tokio::{
 };
 
 pub(super) const OUTPUT_LIMIT: usize = 64 * 1024;
+#[cfg(unix)]
+pub(crate) const BACKGROUND_INPUT_LIMIT: usize = watchdog::MAX_INPUT_BYTES;
 const MAX_ACTIONS: usize = 128;
 /// Finished commands whose bounded output stays in memory, per session; older
 /// ones are evicted and answer status from the durable ledger only.
@@ -80,6 +82,21 @@ pub(crate) struct BackgroundRequest {
     pub action_id: String,
     pub command: String,
     pub timeout: Duration,
+    pub interactive: bool,
+}
+
+#[cfg(unix)]
+pub(crate) struct InputAuthorization<'a> {
+    pub generation: i64,
+    pub expires_at: i64,
+    pub cancellation: &'a super::interaction::Cancellation,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum InputOperation<'a> {
+    Write(&'a [u8]),
+    Close,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BackgroundState {
@@ -118,12 +135,32 @@ pub(crate) struct RecoveryReport {
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
+    tail: std::collections::VecDeque<u8>,
     truncated: bool,
+    tail_truncated: bool,
     failed: bool,
 }
 impl Output {
-    fn text(&self) -> String {
-        let mut text = String::from_utf8_lossy(&self.bytes).into_owned();
+    fn append(&mut self, bytes: &[u8]) {
+        let retained = bytes
+            .len()
+            .min(OUTPUT_LIMIT.saturating_sub(self.bytes.len()));
+        self.bytes.extend_from_slice(&bytes[..retained]);
+        self.truncated |= retained < bytes.len();
+        let dropped = (self.tail.len() + bytes.len()).saturating_sub(OUTPUT_LIMIT);
+        self.tail_truncated |= dropped > 0;
+        if dropped >= self.tail.len() {
+            self.tail.clear();
+            self.tail
+                .extend(&bytes[bytes.len().saturating_sub(OUTPUT_LIMIT)..]);
+        } else {
+            self.tail.drain(..dropped);
+            self.tail.extend(bytes);
+        }
+    }
+
+    fn bounded_text(bytes: &[u8]) -> String {
+        let mut text = String::from_utf8_lossy(bytes).into_owned();
         if text.len() > OUTPUT_LIMIT {
             let mut end = OUTPUT_LIMIT;
             while !text.is_char_boundary(end) {
@@ -133,14 +170,62 @@ impl Output {
         }
         text
     }
+
+    fn text(&self) -> String {
+        Self::bounded_text(&self.bytes)
+    }
+
+    #[cfg(test)]
+    fn tail_text(&self) -> String {
+        self.snapshot(OutputWindow::Tail).0
+    }
+
+    fn snapshot(&self, window: OutputWindow) -> (String, bool) {
+        let (bytes, truncated) = match window {
+            OutputWindow::Head => (self.bytes.clone(), self.truncated),
+            OutputWindow::Tail => (self.tail.iter().copied().collect(), self.tail_truncated),
+        };
+        let decoded = String::from_utf8_lossy(&bytes);
+        let text = match window {
+            OutputWindow::Head => Self::bounded_text(&bytes),
+            OutputWindow::Tail if decoded.len() > OUTPUT_LIMIT => {
+                let mut start = decoded.len() - OUTPUT_LIMIT;
+                while !decoded.is_char_boundary(start) {
+                    start += 1;
+                }
+                decoded[start..].to_string()
+            }
+            OutputWindow::Tail => decoded.to_string(),
+        };
+        let truncated = truncated || self.failed || text.len() < decoded.len();
+        (text, truncated)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OutputWindow {
+    Head,
+    Tail,
+}
+
+#[cfg(unix)]
+pub(crate) struct OutputQuery<'a> {
+    pub scope: &'a BackgroundScope,
+    pub action_id: &'a str,
+    pub window: OutputWindow,
 }
 struct Entry {
     scope: BackgroundScope,
+    action_id: String,
+    authorization_generation: Option<i64>,
     state: Mutex<BackgroundState>,
     stdout: Mutex<Output>,
     stderr: Mutex<Output>,
     cancel: watch::Sender<bool>,
     done: watch::Sender<bool>,
+    output_revision: watch::Sender<u64>,
+    #[cfg(unix)]
+    input: Mutex<Option<(watchdog::InteractiveInput, String)>>,
 }
 #[derive(Default)]
 struct Launches {
@@ -220,6 +305,8 @@ pub(crate) struct BackgroundProcesses {
             std::sync::mpsc::Receiver<()>,
         )>,
     >,
+    #[cfg(all(test, unix))]
+    after_input_effect: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     ledger: Arc<Ledger>,
     completions: tokio::sync::broadcast::Sender<BackgroundCompletion>,
     recovery_blocked: std::sync::atomic::AtomicBool,
@@ -860,6 +947,8 @@ impl BackgroundProcesses {
             completion_worker: std::sync::atomic::AtomicBool::new(false),
             #[cfg(all(test, unix))]
             claim_pause: Mutex::new(None),
+            #[cfg(all(test, unix))]
+            after_input_effect: Mutex::new(None),
             ledger: Arc::new(Ledger::create(path)?),
             completions: tokio::sync::broadcast::channel(COMPLETION_BACKLOG).0,
             recovery_blocked: std::sync::atomic::AtomicBool::new(false),
@@ -902,6 +991,8 @@ impl BackgroundProcesses {
             completion_worker: std::sync::atomic::AtomicBool::new(false),
             #[cfg(all(test, unix))]
             claim_pause: Mutex::new(None),
+            #[cfg(all(test, unix))]
+            after_input_effect: Mutex::new(None),
             ledger,
             completions: tokio::sync::broadcast::channel(COMPLETION_BACKLOG).0,
             recovery_blocked: std::sync::atomic::AtomicBool::new(recovery_blocked),
@@ -1023,6 +1114,11 @@ impl BackgroundProcesses {
         *self.claim_pause.lock().unwrap() = Some((entered, release));
     }
 
+    #[cfg(all(test, unix))]
+    fn after_input_effect_for_test(&self, hook: Box<dyn FnOnce() + Send>) {
+        *self.after_input_effect.lock().unwrap() = Some(hook);
+    }
+
     #[cfg(unix)]
     pub(crate) async fn start_for_actor<F>(
         &self,
@@ -1060,6 +1156,10 @@ impl BackgroundProcesses {
     {
         if approved != Some(&request) {
             return Err("Exact action approval required".into());
+        }
+        #[cfg(not(unix))]
+        if request.interactive {
+            return Err("Interactive background commands are unavailable on this platform".into());
         }
         if self
             .recovery_blocked
@@ -1147,7 +1247,12 @@ impl BackgroundProcesses {
             }
         }
         #[cfg(unix)]
-        let (mut command, status) = match watchdog::prepare(&request.command) {
+        let (mut command, status, input) = match if request.interactive {
+            watchdog::prepare_interactive(&request.command)
+                .map(|(command, status, input)| (command, status, Some(input)))
+        } else {
+            watchdog::prepare(&request.command).map(|(command, status)| (command, status, None))
+        } {
             Ok(prepared) => prepared,
             Err(_) => {
                 self.finish_unstarted_claim(&key)?;
@@ -1288,6 +1393,7 @@ impl BackgroundProcesses {
         }
         let (cancel, cancel_rx) = watch::channel(false);
         let (done, _) = watch::channel(false);
+        let (output_revision, _) = watch::channel(0);
         let completion_scope = request.scope.clone();
         let (trim_owner, trim_session) = (
             completion_scope.owner.clone(),
@@ -1295,11 +1401,16 @@ impl BackgroundProcesses {
         );
         let entry = Arc::new(Entry {
             scope: request.scope,
+            action_id: request.action_id.clone(),
+            authorization_generation: request.authorization_generation,
             state: Mutex::new(BackgroundState::Running),
             stdout: Mutex::new(Output::default()),
             stderr: Mutex::new(Output::default()),
             cancel,
             done,
+            output_revision,
+            #[cfg(unix)]
+            input: Mutex::new(input.map(|input| (input, request.command.clone()))),
         });
         if admission == LaunchAdmission::Uncertain {
             if let Ok(mut unconfirmed) = self.unconfirmed.lock() {
@@ -1333,6 +1444,8 @@ impl BackgroundProcesses {
                 Ok(state) => state,
                 Err(_) => BackgroundState::CleanupUnconfirmed,
             };
+            #[cfg(unix)]
+            worker_entry.input.lock().unwrap().take();
             let state = match worker_unconfirmed.lock() {
                 Ok(mut unconfirmed) => {
                     if matches!(
@@ -1467,6 +1580,104 @@ impl BackgroundProcesses {
         })
     }
 
+    /// Lists indexed durable receipts and retained in-memory entries for this
+    /// exact scope. Older receipts may have no recoverable action ID.
+    #[cfg(unix)]
+    pub(crate) fn list_for_actor(
+        &self,
+        scope: &BackgroundScope,
+        generation: i64,
+        expires_at: i64,
+        cancellation: &super::interaction::Cancellation,
+    ) -> Result<Vec<(String, BackgroundSnapshot)>, String> {
+        if scope
+            .incarnation
+            .is_none_or(|incarnation| incarnation.is_nil())
+        {
+            return Err("Background session identity is required".into());
+        }
+        let registry = self
+            .registry
+            .try_lock()
+            .map_err(|_| "Background registry busy; retry")?;
+        if registry.closed
+            || registry
+                .closed_sessions
+                .contains(&(scope.owner.clone(), scope.session.clone()))
+        {
+            return Err("Background session is closed".into());
+        }
+        let gate = self
+            .owner_gate
+            .as_ref()
+            .ok_or("Background owner control unavailable")?;
+        let (actions, confirmed) = gate.admit_generation(&scope.owner, generation, || {
+            cancellation.admit(|| {
+                if super::interaction::now_ms() >= expires_at {
+                    return Err("Background authorization expired".into());
+                }
+                let mut memory = HashMap::new();
+                let mut memory_order = Vec::new();
+                for key in registry.order.iter().rev() {
+                    let Some(entry) = registry
+                        .entries
+                        .get(key)
+                        .filter(|entry| entry.scope == *scope)
+                    else {
+                        continue;
+                    };
+                    let state = entry
+                        .state
+                        .lock()
+                        .map_err(|_| "Background state unavailable")?
+                        .clone();
+                    let stdout = entry
+                        .stdout
+                        .lock()
+                        .map_err(|_| "Background output unavailable")?;
+                    let stderr = entry
+                        .stderr
+                        .lock()
+                        .map_err(|_| "Background output unavailable")?;
+                    memory_order.push(entry.action_id.clone());
+                    memory.insert(
+                        entry.action_id.clone(),
+                        BackgroundSnapshot {
+                            state,
+                            stdout: String::new(),
+                            stderr: String::new(),
+                            stdout_truncated: stdout.truncated,
+                            stderr_truncated: stderr.truncated,
+                            output_withheld: !stdout.bytes.is_empty() || !stderr.bytes.is_empty(),
+                        },
+                    );
+                }
+                let mut actions = Vec::new();
+                for (action_id, state) in self.ledger.list(scope)? {
+                    let snapshot = memory.remove(&action_id).unwrap_or(BackgroundSnapshot {
+                        state,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        stdout_truncated: false,
+                        stderr_truncated: false,
+                        output_withheld: true,
+                    });
+                    actions.push((action_id, snapshot));
+                }
+                for action_id in memory_order {
+                    if let Some(snapshot) = memory.remove(&action_id) {
+                        actions.push((action_id, snapshot));
+                    }
+                }
+                Ok(actions)
+            })
+        })?;
+        if !confirmed {
+            return Err("Background action outcome is uncertain".into());
+        }
+        Ok(actions)
+    }
+
     #[cfg(unix)]
     pub(crate) fn access_for_actor(
         &self,
@@ -1531,6 +1742,214 @@ impl BackgroundProcesses {
         Ok(snapshot)
     }
 
+    /// Preflight a running interactive action before requesting user approval.
+    #[cfg(unix)]
+    pub(crate) fn ensure_input_for_actor(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        auth: &InputAuthorization<'_>,
+    ) -> Result<String, String> {
+        if scope.incarnation.is_none_or(|id| id.is_nil()) {
+            return Err("Invalid background input scope".into());
+        }
+        let registry = self
+            .registry
+            .try_lock()
+            .map_err(|_| "Background registry busy; retry")?;
+        if registry.closed
+            || registry
+                .closed_sessions
+                .contains(&(scope.owner.clone(), scope.session.clone()))
+        {
+            return Err("Background session is closed".into());
+        }
+        let entry = registry
+            .entries
+            .get(&Ledger::key(scope, action_id)?)
+            .filter(|entry| entry.scope == *scope)
+            .ok_or("Background input is unavailable")?;
+        if entry.authorization_generation != Some(auth.generation) {
+            return Err("Background command authorization has changed".into());
+        }
+        let gate = self
+            .owner_gate
+            .as_ref()
+            .ok_or("Background owner control unavailable")?;
+        let (command, confirmed) = gate.admit_generation(&scope.owner, auth.generation, || {
+            auth.cancellation.admit(|| {
+                if super::interaction::now_ms() >= auth.expires_at {
+                    return Err("Background input authorization expired".into());
+                }
+                let state = entry
+                    .state
+                    .lock()
+                    .map_err(|_| "Background state unavailable")?;
+                if *state != BackgroundState::Running
+                    || *entry.cancel.borrow()
+                    || *entry.done.borrow()
+                {
+                    return Err("Background command is not running".into());
+                }
+                let input = entry
+                    .input
+                    .lock()
+                    .map_err(|_| "Background input is unavailable")?;
+                let (_, command) = input
+                    .as_ref()
+                    .ok_or("Background input is closed or was not enabled for this command")?;
+                Ok(command.clone())
+            })
+        })?;
+        if !confirmed {
+            return Err("Background input availability is uncertain".into());
+        }
+        Ok(command)
+    }
+
+    /// Caller must have obtained a separate approval for the exact text.
+    #[cfg(unix)]
+    pub(crate) fn write_input_for_actor(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        operation_id: &str,
+        bytes: &[u8],
+        approved_command: &str,
+        auth: &InputAuthorization<'_>,
+    ) -> Result<(), String> {
+        self.apply_input_for_actor(
+            scope,
+            action_id,
+            operation_id,
+            InputOperation::Write(bytes),
+            approved_command,
+            auth,
+        )
+    }
+
+    /// Caller must have obtained separate approval to close this command's input.
+    #[cfg(unix)]
+    pub(crate) fn close_input_for_actor(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        operation_id: &str,
+        approved_command: &str,
+        auth: &InputAuthorization<'_>,
+    ) -> Result<(), String> {
+        self.apply_input_for_actor(
+            scope,
+            action_id,
+            operation_id,
+            InputOperation::Close,
+            approved_command,
+            auth,
+        )
+    }
+
+    #[cfg(unix)]
+    fn apply_input_for_actor(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        operation_id: &str,
+        operation: InputOperation<'_>,
+        approved_command: &str,
+        auth: &InputAuthorization<'_>,
+    ) -> Result<(), String> {
+        if scope.incarnation.is_none_or(|id| id.is_nil())
+            || matches!(operation, InputOperation::Write(bytes) if bytes.is_empty() || bytes.len() > watchdog::MAX_INPUT_BYTES)
+        {
+            return Err("Invalid background input".into());
+        }
+        let registry = self
+            .registry
+            .try_lock()
+            .map_err(|_| "Background registry busy; retry")?;
+        if registry.closed
+            || registry
+                .closed_sessions
+                .contains(&(scope.owner.clone(), scope.session.clone()))
+        {
+            return Err("Background session is closed".into());
+        }
+        let entry = registry
+            .entries
+            .get(&Ledger::key(scope, action_id)?)
+            .filter(|entry| entry.scope == *scope)
+            .cloned()
+            .ok_or("Background input is unavailable")?;
+        if entry.authorization_generation != Some(auth.generation) {
+            return Err("Background command authorization has changed".into());
+        }
+        let gate = self
+            .owner_gate
+            .as_ref()
+            .ok_or("Background owner control unavailable")?;
+        let ((), confirmed) = gate.admit_generation(&scope.owner, auth.generation, || {
+            auth.cancellation.admit(|| {
+                if super::interaction::now_ms() >= auth.expires_at {
+                    return Err("Background input authorization expired".into());
+                }
+                let state = entry
+                    .state
+                    .lock()
+                    .map_err(|_| "Background state unavailable")?;
+                let stopped = entry.cancel.borrow();
+                if *state != BackgroundState::Running || *stopped || *entry.done.borrow() {
+                    return Err("Background command is not running".into());
+                }
+                let mut input = entry
+                    .input
+                    .lock()
+                    .map_err(|_| "Background input is unavailable")?;
+                let (_, command) = input
+                    .as_ref()
+                    .ok_or("Background input is closed or was not enabled for this command")?;
+                if command != approved_command {
+                    return Err("Background command changed after input approval".into());
+                }
+                let claim = self.ledger.claim_input(scope, action_id, operation_id)?;
+                if super::interaction::now_ms() >= auth.expires_at {
+                    self.ledger
+                        .finish_input(claim, ledger::InputReceiptState::NotWritten)?;
+                    return Err("Background input authorization expired".into());
+                }
+                let outcome = match operation {
+                    InputOperation::Write(bytes) => input.as_ref().unwrap().0.write(bytes),
+                    InputOperation::Close => {
+                        drop(input.take());
+                        Ok(())
+                    }
+                };
+                #[cfg(all(test, unix))]
+                if outcome.is_ok() {
+                    if let Some(hook) = self.after_input_effect.lock().unwrap().take() {
+                        hook();
+                    }
+                }
+                match outcome {
+                    Ok(()) => self
+                        .ledger
+                        .finish_input(claim, ledger::InputReceiptState::Delivered),
+                    Err(watchdog::InputError::Invalid | watchdog::InputError::Unavailable) => {
+                        self.ledger
+                            .finish_input(claim, ledger::InputReceiptState::NotWritten)?;
+                        Err("Background input was not written".into())
+                    }
+                    Err(watchdog::InputError::Uncertain) => Err(
+                        "Background input outcome is uncertain; do not retry automatically".into(),
+                    ),
+                }
+            })
+        })?;
+        if !confirmed {
+            return Err("Background input outcome is uncertain; do not retry automatically".into());
+        }
+        Ok(())
+    }
+
     /// Reads the bounded in-memory output under the same owner, credential,
     /// session-incarnation and cancellation fences as status. The caller must
     /// obtain explicit user approval of this exact snapshot before releasing it.
@@ -1543,6 +1962,46 @@ impl BackgroundProcesses {
         expires_at: i64,
         cancellation: &super::interaction::Cancellation,
     ) -> Result<BackgroundSnapshot, String> {
+        self.with_output_for_actor(scope, action_id, generation, expires_at, cancellation, Ok)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_output_for_actor<T>(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        generation: i64,
+        expires_at: i64,
+        cancellation: &super::interaction::Cancellation,
+        action: impl FnOnce(BackgroundSnapshot) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_output_window_for_actor(
+            OutputQuery {
+                scope,
+                action_id,
+                window: OutputWindow::Head,
+            },
+            generation,
+            expires_at,
+            cancellation,
+            action,
+        )
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_output_window_for_actor<T>(
+        &self,
+        query: OutputQuery<'_>,
+        generation: i64,
+        expires_at: i64,
+        cancellation: &super::interaction::Cancellation,
+        action: impl FnOnce(BackgroundSnapshot) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let OutputQuery {
+            scope,
+            action_id,
+            window,
+        } = query;
         if scope.incarnation.is_none() {
             return Err("Background session identity is required".into());
         }
@@ -1585,16 +2044,14 @@ impl BackgroundProcesses {
                     .stderr
                     .lock()
                     .map_err(|_| "Background output unavailable")?;
-                Ok(BackgroundSnapshot {
+                let (stdout, stdout_truncated) = stdout.snapshot(window);
+                let (stderr, stderr_truncated) = stderr.snapshot(window);
+                action(BackgroundSnapshot {
                     state,
-                    stdout: stdout.text(),
-                    stderr: stderr.text(),
-                    stdout_truncated: stdout.truncated
-                        || stdout.failed
-                        || stdout.text().len() < String::from_utf8_lossy(&stdout.bytes).len(),
-                    stderr_truncated: stderr.truncated
-                        || stderr.failed
-                        || stderr.text().len() < String::from_utf8_lossy(&stderr.bytes).len(),
+                    stdout,
+                    stderr,
+                    stdout_truncated,
+                    stderr_truncated,
                     output_withheld: false,
                 })
             })
@@ -1639,6 +2096,44 @@ impl BackgroundProcesses {
             output_withheld: false,
         })
     }
+    pub(crate) async fn wait_output_revision(
+        &self,
+        scope: &BackgroundScope,
+        action_id: &str,
+        after_revision: u64,
+        timeout: Duration,
+        cancellation: &super::interaction::Cancellation,
+    ) -> Result<u64, String> {
+        if timeout.is_zero() || timeout > Duration::from_secs(30) {
+            return Err("Invalid background wait timeout".into());
+        }
+        cancellation.check()?;
+        let entry = self.entry(scope, action_id).await.map_err(|_| {
+            "Background output notifications are unavailable after eviction or restart".to_string()
+        })?;
+        let mut revisions = entry.output_revision.subscribe();
+        let mut done = entry.done.subscribe();
+        let current = *revisions.borrow_and_update();
+        if after_revision > current {
+            return Err("Background output revision is invalid for this server".into());
+        }
+        if after_revision == current && !*done.borrow_and_update() {
+            let notification = async {
+                tokio::select! {
+                    result = revisions.changed() => result.map_err(|_| "Background output notification unavailable".to_string()),
+                    result = done.changed() => result.map_err(|_| "Background completion unavailable".to_string()),
+                }
+            };
+            match tokio::time::timeout(timeout, cancellation.run(notification)).await {
+                Ok(result) => result?,
+                Err(_) => cancellation.check()?,
+            }
+        }
+        cancellation.check()?;
+        let revision = *revisions.borrow();
+        Ok(revision)
+    }
+
     pub(crate) async fn wait(
         &self,
         scope: &BackgroundScope,
@@ -1879,12 +2374,18 @@ async fn drain(mut pipe: impl tokio::io::AsyncRead + Unpin, entry: Arc<Entry>, s
         match read {
             Ok(0) => break,
             Ok(count) => {
-                let retained = count.min(OUTPUT_LIMIT.saturating_sub(output.bytes.len()));
-                output.bytes.extend_from_slice(&buffer[..retained]);
-                output.truncated |= retained < count;
+                output.append(&buffer[..count]);
+                drop(output);
+                entry
+                    .output_revision
+                    .send_modify(|revision| *revision = revision.saturating_add(1));
             }
             Err(_) => {
                 output.failed = true;
+                drop(output);
+                entry
+                    .output_revision
+                    .send_modify(|revision| *revision = revision.saturating_add(1));
                 break;
             }
         }

@@ -39,6 +39,17 @@ fn accepts_key(provider: &str) -> bool {
 fn provider_name(provider: &str) -> String {
     format!("terminal-v4:provider:{provider}")
 }
+fn credential_database_error(error: rusqlite::Error, fallback: &str) -> ApiError {
+    #[cfg(unix)]
+    {
+        crate::vault_admission::api_database_error(error, fallback)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        ApiError::internal(fallback)
+    }
+}
 fn credentials(
     state: &AppState,
     user: &AuthenticatedUser,
@@ -95,6 +106,9 @@ async fn save_key(
             "API key must be 8-10000 characters without control characters",
         ));
     }
+    #[cfg(unix)]
+    let _lease = crate::vault_admission::exclusive(&state.config().data_dir, &user.user_id)
+        .map_err(crate::vault_admission::api_error)?;
     let encrypted = vault::VaultCipher::load(&state.config().data_dir)
         .and_then(|cipher| cipher.encrypt(secret))
         .map_err(|_| ApiError::internal("Could not encrypt credential"))?;
@@ -102,17 +116,17 @@ async fn save_key(
     let mut database = state.lock_db().map_err(ApiError::internal)?;
     let transaction = database
         .transaction()
-        .map_err(|_| ApiError::internal("Could not save credential"))?;
+        .map_err(|error| credential_database_error(error, "Could not save credential"))?;
     transaction
         .execute(
             "DELETE FROM api_key_vault WHERE user_id=?1 AND key_name=?2",
             rusqlite::params![user.user_id, name],
         )
-        .map_err(|_| ApiError::internal("Could not save credential"))?;
-    transaction.execute("INSERT INTO api_key_vault (id,user_id,key_name,key_value,created_at) VALUES (?1,?2,?3,?4,?5)",rusqlite::params![uuid::Uuid::new_v4().to_string(),user.user_id,name,encrypted,crate::iso_timestamp()]).map_err(|_|ApiError::internal("Could not save credential"))?;
+        .map_err(|error| credential_database_error(error, "Could not save credential"))?;
+    transaction.execute("INSERT INTO api_key_vault (id,user_id,key_name,key_value,created_at) VALUES (?1,?2,?3,?4,?5)",rusqlite::params![uuid::Uuid::new_v4().to_string(),user.user_id,name,encrypted,crate::iso_timestamp()]).map_err(|error| credential_database_error(error, "Could not save credential"))?;
     transaction
         .commit()
-        .map_err(|_| ApiError::internal("Could not save credential"))?;
+        .map_err(|error| credential_database_error(error, "Could not save credential"))?;
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
         Json(json!({"provider":provider,"configured":true,"masked":mask(secret)})),
@@ -129,6 +143,9 @@ async fn delete_key(
             message: "Provider does not accept API keys".into(),
         });
     }
+    #[cfg(unix)]
+    let _lease = crate::vault_admission::exclusive(&state.config().data_dir, &user.user_id)
+        .map_err(crate::vault_admission::api_error)?;
     state
         .lock_db()
         .map_err(ApiError::internal)?
@@ -136,7 +153,7 @@ async fn delete_key(
             "DELETE FROM api_key_vault WHERE user_id=?1 AND key_name=?2",
             rusqlite::params![user.user_id, provider_name(&provider)],
         )
-        .map_err(|_| ApiError::internal("Could not remove credential"))?;
+        .map_err(|error| credential_database_error(error, "Could not remove credential"))?;
     Ok(StatusCode::NO_CONTENT)
 }
 fn home() -> Option<PathBuf> {
@@ -340,6 +357,41 @@ mod tests {
             ..Default::default()
         })
         .unwrap()
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn provider_key_save_and_delete_report_busy_during_owner_image_request() {
+        let state = state();
+        let app = router(state.clone());
+        let lease = crate::vault_admission::shared(&state.config().data_dir, "owner").unwrap();
+        for (method, body) in [
+            ("PUT", r#"{"apiKey":"synthetic-credential"}"#),
+            ("DELETE", ""),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(
+                    method,
+                    "/api/agent/auth/openai-api/api-key",
+                    Some("owner"),
+                    body,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            assert_eq!(json(response).await["error"], crate::vault_admission::BUSY);
+        }
+        drop(lease);
+        let response = app
+            .oneshot(request(
+                "PUT",
+                "/api/agent/auth/openai-api/api-key",
+                Some("owner"),
+                r#"{"apiKey":"synthetic-credential"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
     #[cfg(unix)]
     #[tokio::test]

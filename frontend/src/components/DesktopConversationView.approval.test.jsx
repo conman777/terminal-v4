@@ -9,6 +9,28 @@ const approval = { approvalId: 'exact-approval', turnId: 'current-turn', toolCal
 const tool = { turnId: 'current-turn', toolCallId: 'tabs-call', toolName, toolInput: {} };
 
 describe('DesktopConversationView browser approvals', () => {
+  it.each(['background_start', 'background_write', 'background_write_bytes', 'background_close_input'])('shows a readable, exact %s approval', toolName => {
+    const description = 'Write interactive input\nCommand (escaped):\n"read value"\nExact text (escaped):\n"hello\\n"';
+    const pendingApproval = { approvalId: 'input-approval', toolName, description, toolInput: { actionId: 'a'.repeat(64), text: 'hello\n' } };
+    render(<DesktopConversationView {...props} pendingApproval={pendingApproval} onApprove={vi.fn()} allowApprovalForSession />);
+    expect(screen.getByLabelText('Background action review').textContent).toBe(description);
+    expect(screen.getByRole('button', { name: 'Approve', exact: true })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Allow for this session' })).not.toBeInTheDocument();
+  });
+  it('uses the private output review instead of ordinary or session-wide approval', () => {
+    const onApprove = vi.fn();
+    const pendingApproval = { approvalId: 'private-review', toolName: 'background_read_output', toolInput: { actionId: 'a'.repeat(64) } };
+    const { rerender } = render(<DesktopConversationView {...props} sessionId="session-1" pendingApproval={pendingApproval} onApprove={onApprove} allowApprovalForSession />);
+    expect(screen.getByRole('group', { name: 'Private output review' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review output' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Allow for this session' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    expect(onApprove).toHaveBeenCalledWith(false, pendingApproval);
+    rerender(<DesktopConversationView {...props} sessionId="session-1" pendingApproval={pendingApproval} onApprove={onApprove} privateReviewVisible={false} />);
+    expect(screen.queryByRole('group', { name: 'Private output review' })).not.toBeInTheDocument();
+  });
+
   it('shows a readable background investigation approval while retaining exact details', async () => {
     const user = userEvent.setup();
     const onApprove = vi.fn();
@@ -21,12 +43,31 @@ describe('DesktopConversationView browser approvals', () => {
     expect(screen.getByText('Inspect the project')).toBeVisible();
     expect(screen.getByText('/tmp/fixture-project')).toBeVisible();
     expect(screen.getByText('deepseek · deepseek-chat')).toBeVisible();
+    expect(screen.getByText(/If delivered, the result is held for review/)).toBeVisible();
     expect(screen.getByLabelText('Approval details')).not.toBeVisible();
     expect(screen.queryByText('Verbose internal description')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Approve', exact: true }));
     expect(onApprove).toHaveBeenCalledWith(true, pendingApproval);
     await user.click(screen.getByText('More details'));
     expect(screen.getByLabelText('Approval details')).toHaveTextContent('internal-operation-id');
+  });
+  it('explains automatic delivery for a locally authorized investigation', () => {
+    const pendingApproval = {
+      approvalId: 'local-delegation', toolName: 'delegate_task_background',
+      toolInput: { prompt: 'Inspect', workspace: '/tmp/fixture-project', provider: 'deepseek', model: 'deepseek-chat', permission: 'read_only_child', authorization: { generation: 1, expires_at_ms: 9999999999999, session_incarnation: 'fixture' } },
+    };
+    render(<DesktopConversationView {...props} pendingApproval={pendingApproval} onApprove={vi.fn()} />);
+    expect(screen.getByText(/can run the result automatically while your authorization remains valid/)).toBeVisible();
+    expect(screen.queryByText(/If delivered, the result is held for review/)).not.toBeInTheDocument();
+  });
+  it('explains conditional automatic delivery for a paired investigation', () => {
+    const pendingApproval = {
+      approvalId: 'paired-delegation', toolName: 'delegate_task_background',
+      toolInput: { prompt: 'Inspect', workspace: '/tmp/fixture-project', provider: 'deepseek', model: 'deepseek-chat', permission: 'read_only_child', paired_authorization: { owner: 'owner' } },
+    };
+    render(<DesktopConversationView {...props} pendingApproval={pendingApproval} onApprove={vi.fn()} />);
+    expect(screen.getByText(/can run the result automatically while your authorization remains valid/)).toBeVisible();
+    expect(screen.queryByText(/If delivered, the result is held for review/)).not.toBeInTheDocument();
   });
   it('falls back to the exact approval for an unrecognized permission', () => {
     const pendingApproval = { toolName: 'delegate_task_background', description: 'Review the unknown permission', toolInput: { prompt: 'Inspect', permission: 'unknown' } };

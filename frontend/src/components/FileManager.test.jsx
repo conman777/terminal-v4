@@ -142,7 +142,133 @@ describe('FileManager workspace initialization', () => {
 
 });
 
+describe('FileManager scoped project reveal', () => {
+  beforeEach(() => { apiGet.mockReset(); apiFetch.mockReset(); setUser({ id: 'scoped-file-owner' }); });
+
+  it('selects the referenced file using only a session-scoped directory listing', async () => {
+    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ root: '/work/project', path: 'src', truncated: false,
+      items: [{ name: 'app.js', type: 'file', size: 3 }, { name: 'sub', type: 'directory', size: 0 }] }) });
+    render(<FileManager isOpen initialPath="/work/project/src" sessionId="ss-owned" projectTarget={{ root: '/work/project', path: 'src/app.js' }} onClose={() => {}} />);
+    expect(await screen.findByRole('button', { name: 'Select file app.js' })).toHaveAttribute('aria-pressed', 'true');
+    const params = new URL(apiFetch.mock.calls[0][0], 'http://fixture.invalid').searchParams;
+    expect(Object.fromEntries(params)).toEqual({ sessionId: 'ss-owned', root: '/work/project', path: 'src' });
+    expect(apiGet).not.toHaveBeenCalled();
+    expect(screen.getByText('Project files · read-only')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Download app.js' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New folder' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Upload' })).toBeNull();
+  });
+
+  it('does not fall back to the unrestricted browser when the scoped request fails', async () => {
+    apiFetch.mockResolvedValue({ ok: false, json: async () => ({ error: 'Project directory is unavailable' }) });
+    render(<FileManager isOpen initialPath="/work/project/src" sessionId="ss-owned" projectTarget={{ root: '/work/project', path: 'src/app.js' }} onClose={() => {}} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Project directory is unavailable');
+    expect(apiGet).not.toHaveBeenCalled();
+  });
+
+  it('discards a scoped listing when the server changes while it is loading', async () => {
+    let finish;
+    apiFetch.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    try {
+      render(<FileManager isOpen initialPath="/work/project/src" sessionId="ss-owned" projectTarget={{ root: '/work/project', path: 'src/app.js' }} onClose={() => {}} />);
+      await waitFor(() => expect(finish).toBeTypeOf('function'));
+      act(() => setActiveEnvironment({ id: 'another-server' }));
+      await act(async () => finish({ ok: true, json: async () => ({ root: '/work/project', path: 'src', truncated: false, items: [{ name: 'app.js', type: 'file', size: 3 }] }) }));
+      expect(screen.queryByRole('button', { name: 'Select file app.js' })).toBeNull();
+      expect(screen.getByRole('alert')).toHaveTextContent('Close and reopen Files');
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      expect(apiGet).not.toHaveBeenCalled();
+    } finally { act(() => setActiveEnvironment(null)); }
+  });
+
+  it('opens a selected project file in a scoped text preview and restores focus', async () => {
+    apiFetch.mockImplementation(async url => {
+      if (url.includes('/list-directory?')) return { ok: true, json: async () => ({ root: '/work/project', path: 'src', truncated: false, items: [{ name: 'app.js', type: 'file', size: 3 }] }) };
+      if (url.includes('/read-content?')) return { ok: true, json: async () => ({ root: '/work/project', path: 'src/app.js', line: 1, totalLines: 1, lines: [{ line: 1, text: 'const x = 1;', truncated: false }] }) };
+      throw new Error(`Unexpected endpoint ${url}`);
+    });
+    render(<FileManager isOpen initialPath="/work/project/src" sessionId="ss-owned" projectTarget={{ root: '/work/project', path: 'src/app.js' }} onClose={() => {}} />);
+    const preview = await screen.findByRole('button', { name: 'Preview app.js' });
+    expect(preview).toHaveTextContent('Open');
+    preview.focus();
+    fireEvent.click(preview);
+    const dialog = await screen.findByRole('dialog', { name: 'File preview: src/app.js, line 1' });
+    expect(await screen.findByText('const x = 1;')).toBeVisible();
+    const request = apiFetch.mock.calls.find(([url]) => url.includes('/read-content?'))[0];
+    expect(Object.fromEntries(new URL(request, 'http://fixture.invalid').searchParams)).toEqual({ sessionId: 'ss-owned', root: '/work/project', path: 'src/app.js', line: '1', query: '' });
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(preview).toHaveFocus();
+    expect(apiGet).not.toHaveBeenCalled();
+  });
+
+  it('closes a project file preview when the active thread changes', async () => {
+    apiFetch.mockImplementation(async url => url.includes('/list-directory?')
+      ? { ok: true, json: async () => ({ root: '/work/project', path: 'src', truncated: false, items: [{ name: 'app.js', type: 'file', size: 3 }] }) }
+      : { ok: true, json: async () => ({ root: '/work/project', path: 'src/app.js', line: 1, totalLines: 1, lines: [{ line: 1, text: 'private data', truncated: false }] }) });
+    const props = { isOpen: true, initialPath: '/work/project/src', projectTarget: { root: '/work/project', path: 'src/app.js' }, onClose: () => {} };
+    const view = render(<FileManager {...props} sessionId="ss-first" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview app.js' }));
+    expect(await screen.findByText('private data')).toBeVisible();
+    view.rerender(<FileManager {...props} sessionId="ss-second" />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByText('private data')).toBeNull();
+  });
+
+  it('reports unreadable files without falling back to the unrestricted browser', async () => {
+    apiFetch.mockImplementation(async url => url.includes('/list-directory?')
+      ? { ok: true, json: async () => ({ root: '/work/project', path: 'src', truncated: false, items: [{ name: 'data.bin', type: 'file', size: 3 }, { name: 'bad?name', type: 'file', size: 0 }] }) }
+      : { ok: false, json: async () => ({ error: 'This file cannot be previewed as text.' }) });
+    render(<FileManager isOpen initialPath="/work/project/src" sessionId="ss-owned" projectTarget={{ root: '/work/project', path: 'src/app.js' }} onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview data.bin' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('This file cannot be previewed as text.');
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('button', { name: 'Preview bad?name' })).toBeDisabled();
+    expect(apiGet).not.toHaveBeenCalled();
+  });
+
+  it('closes a loading preview and discards its result when the server changes', async () => {
+    let finishPreview;
+    apiFetch.mockImplementation(async url => url.includes('/list-directory?')
+      ? { ok: true, json: async () => ({ root: '/work/project', path: 'src', truncated: false, items: [{ name: 'app.js', type: 'file', size: 3 }] }) }
+      : new Promise(resolve => { finishPreview = resolve; }));
+    try {
+      render(<FileManager isOpen initialPath="/work/project/src" sessionId="ss-owned" projectTarget={{ root: '/work/project', path: 'src/app.js' }} onClose={() => {}} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Preview app.js' }));
+      await waitFor(() => expect(finishPreview).toBeTypeOf('function'));
+      act(() => setActiveEnvironment({ id: 'another-server' }));
+      await act(async () => finishPreview({ ok: true, json: async () => ({ root: '/work/project', path: 'src/app.js', line: 1, totalLines: 1, lines: [{ line: 1, text: 'old server data', truncated: false }] }) }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByText('old server data')).toBeNull();
+      expect(apiGet).not.toHaveBeenCalled();
+    } finally { act(() => setActiveEnvironment(null)); }
+  });
+
+  it('keeps navigation inside the project and rejects malformed directory entries', async () => {
+    apiFetch.mockImplementation(async url => {
+      const path = new URL(url, 'http://fixture.invalid').searchParams.get('path');
+      return { ok: true, json: async () => ({ root: '/work/project', path, truncated: false,
+        items: path === 'src' ? [{ name: 'app.js', type: 'file', size: 3 }, { name: 'sub', type: 'directory', size: 0 }]
+          : path === 'src/sub' ? [{ name: '../escape', type: 'file', size: 0 }] : [] }) };
+    });
+    const openTerminal = vi.fn();
+    render(<FileManager isOpen initialPath="/work/project/src" sessionId="ss-owned" projectTarget={{ root: '/work/project', path: 'src/app.js' }} onNavigateTerminal={openTerminal} onClose={() => {}} />);
+    const folder = await screen.findByRole('button', { name: 'Open folder sub' });
+    fireEvent.doubleClick(folder);
+    expect(openTerminal).not.toHaveBeenCalled();
+    fireEvent.click(folder);
+    expect(await screen.findByRole('alert')).toHaveTextContent('invalid response');
+    expect(screen.queryByRole('button', { name: 'Select file ../escape' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Go to path' })).toBeNull();
+    expect(apiGet).not.toHaveBeenCalled();
+  });
+});
+
 describe('FileManager project content search', () => {
+  const listing = url => {
+    const params = new URL(url, 'http://fixture.invalid').searchParams;
+    return { ok: true, json: async () => ({ root: params.get('root'), path: params.get('path'), truncated: false, items: [{ name: 'main.js', type: 'file', size: 1 }] }) };
+  };
   beforeEach(() => {
     apiGet.mockReset().mockImplementation(async url => ({ path: new URL(url, 'http://fixture.invalid').searchParams.get('path'), items: [] }));
     apiFetch.mockReset();
@@ -157,7 +283,7 @@ describe('FileManager project content search', () => {
   });
 
   it('searches within the session and shows a result in its folder', async () => {
-    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'const needle = 1;' }], truncated: false }) });
+    apiFetch.mockImplementation(async url => url.includes('list-directory') ? listing(url) : { ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'const needle = 1;' }], truncated: false }) });
     render(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-owned" onClose={() => {}} />);
     await screen.findByText('Empty folder');
     fireEvent.click(screen.getByRole('button', { name: 'Search project contents' }));
@@ -166,11 +292,12 @@ describe('FileManager project content search', () => {
     const result = await screen.findByRole('button', { name: /src\/main.js:3/ });
     expect(apiFetch).toHaveBeenCalledWith(expect.stringContaining('sessionId=ss-owned'), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     fireEvent.click(result);
-    await waitFor(() => expect(apiGet).toHaveBeenLastCalledWith('/api/files/list?path=%2Fcanonical%2Fworkspace%2Fsrc'));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(expect.stringContaining('/api/workspace/files/list-directory?'), expect.objectContaining({ signal: expect.any(AbortSignal) })));
+    expect(apiGet).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the selected search line visible and returns to the existing results', async () => {
-    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [
+    apiFetch.mockImplementation(async url => url.includes('list-directory') ? listing(url) : { ok: true, json: async () => ({ root: '/canonical/workspace', matches: [
       { path: 'src/main.js', line: 3, text: 'const needle = 1;' },
       { path: 'src/other.js', line: 7, text: 'needle elsewhere' },
     ], truncated: false }) });
@@ -188,11 +315,11 @@ describe('FileManager project content search', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to search results' }));
     expect(screen.getByRole('button', { name: /src\/other.js:7/ })).toBeVisible();
     expect(screen.getByRole('button', { name: /src\/main.js:3/ })).toHaveFocus();
-    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch.mock.calls.filter(([url]) => url.includes('search-content'))).toHaveLength(1);
   });
 
   it('opens a session-scoped current file preview at the selected line', async () => {
-    apiFetch.mockImplementation(async url => url.includes('search-content')
+    apiFetch.mockImplementation(async url => url.includes('list-directory') ? listing(url) : url.includes('search-content')
       ? { ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) }
       : { ok: true, json: async () => ({ root: '/canonical/workspace', path: 'src/main.js', line: 3, totalLines: 4, lines: [{ line: 2, text: 'before', truncated: false }, { line: 3, text: 'needle now', truncated: false }, { line: 4, text: 'after', truncated: false }] }) });
     render(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-owned" onClose={() => {}} />);
@@ -212,7 +339,7 @@ describe('FileManager project content search', () => {
   });
 
   it('keeps the original search snapshot if the current file cannot be opened', async () => {
-    apiFetch.mockImplementation(async url => url.includes('search-content')
+    apiFetch.mockImplementation(async url => url.includes('list-directory') ? listing(url) : url.includes('search-content')
       ? { ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'original needle' }] }) }
       : { ok: false, json: async () => ({ error: 'That line no longer exists; search again' }) });
     render(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-owned" onClose={() => {}} />);
@@ -229,7 +356,7 @@ describe('FileManager project content search', () => {
 
   it('clears an already opened file preview when the account changes', async () => {
     setUser({ id: 'first-preview-account' });
-    apiFetch.mockImplementation(async url => url.includes('search-content')
+    apiFetch.mockImplementation(async url => url.includes('list-directory') ? listing(url) : url.includes('search-content')
       ? { ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) }
       : { ok: true, json: async () => ({ root: '/canonical/workspace', path: 'src/main.js', line: 3, totalLines: 3, lines: [{ line: 3, text: 'old account preview', truncated: false }] }) });
     try {
@@ -250,7 +377,7 @@ describe('FileManager project content search', () => {
   it.each(['session', 'environment', 'account'])('discards a late current-file preview after %s changes', async scope => {
     let finish;
     setEnvironmentIdentity('content-search-owner');
-    apiFetch.mockImplementation(url => url.includes('search-content')
+    apiFetch.mockImplementation(url => url.includes('list-directory') ? Promise.resolve(listing(url)) : url.includes('search-content')
       ? Promise.resolve({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) })
       : new Promise(resolve => { finish = resolve; }));
     try {
@@ -272,7 +399,7 @@ describe('FileManager project content search', () => {
 
   it('discards a late preview when authentication changes before the environment updates', async () => {
     let finish;
-    apiFetch.mockImplementation(url => url.includes('search-content')
+    apiFetch.mockImplementation(url => url.includes('list-directory') ? Promise.resolve(listing(url)) : url.includes('search-content')
       ? Promise.resolve({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) })
       : new Promise(resolve => { finish = resolve; }));
     render(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-owned" onClose={() => {}} />);
@@ -289,7 +416,7 @@ describe('FileManager project content search', () => {
   });
 
   it('clears the selected search snapshot when the active session changes', async () => {
-    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) });
+    apiFetch.mockImplementation(async url => url.includes('list-directory') ? listing(url) : { ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) });
     const view = render(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-owned" onClose={() => {}} />);
     await screen.findByText('Empty folder');
     fireEvent.click(screen.getByRole('button', { name: 'Search project contents' }));
@@ -304,7 +431,7 @@ describe('FileManager project content search', () => {
 
   it.each(['environment', 'account'])('clears the selected search snapshot when %s changes', async scope => {
     setEnvironmentIdentity('content-search-owner');
-    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) });
+    apiFetch.mockImplementation(async url => url.includes('list-directory') ? listing(url) : { ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) });
     try {
       render(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-owned" onClose={() => {}} />);
       await screen.findByText('Empty folder');
@@ -322,12 +449,9 @@ describe('FileManager project content search', () => {
   it.each(['session', 'environment', 'account'])('does not show a selected result folder response after the %s changes', async scope => {
     let finishFolder;
     setEnvironmentIdentity('content-search-owner');
-    apiGet.mockImplementation(url => {
-      const path = new URL(url, 'http://fixture.invalid').searchParams.get('path');
-      if (path.endsWith('/src')) return new Promise(resolve => { finishFolder = resolve; });
-      return Promise.resolve({ path, items: [] });
-    });
-    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) });
+    apiFetch.mockImplementation(url => url.includes('list-directory')
+      ? new Promise(resolve => { finishFolder = resolve; })
+      : Promise.resolve({ ok: true, json: async () => ({ root: '/canonical/workspace', matches: [{ path: 'src/main.js', line: 3, text: 'needle' }] }) }));
     try {
       const view = render(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-owned" onClose={() => {}} />);
       await screen.findByText('Empty folder');
@@ -335,9 +459,10 @@ describe('FileManager project content search', () => {
       fireEvent.change(screen.getByRole('searchbox', { name: 'Search project contents' }), { target: { value: 'needle' } });
       fireEvent.click(screen.getByRole('button', { name: 'Search project' }));
       fireEvent.click(await screen.findByRole('button', { name: /src\/main.js:3/ }));
+      await waitFor(() => expect(finishFolder).toBeTypeOf('function'));
       if (scope === 'session') view.rerender(<FileManager isOpen initialPath="/canonical/workspace" sessionId="ss-next" onClose={() => {}} />);
       else act(() => scope === 'environment' ? setActiveEnvironment({ id: 'other-server' }) : setEnvironmentIdentity('another-owner'));
-      await act(async () => { finishFolder({ path: '/canonical/workspace/src', items: [{ name: 'old-scope-marker', type: 'file' }] }); });
+      await act(async () => { finishFolder({ ok: true, json: async () => ({ root: '/canonical/workspace', path: 'src', truncated: false, items: [{ name: 'old-scope-marker', type: 'file', size: 1 }] }) }); });
       expect(screen.queryByText('old-scope-marker')).not.toBeInTheDocument();
       if (scope === 'session') {
         await waitFor(() => expect(apiGet.mock.calls.filter(([url]) => url === '/api/files/list?path=%2Fcanonical%2Fworkspace')).toHaveLength(2));

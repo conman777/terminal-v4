@@ -28,6 +28,7 @@ export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, en
   const freshOperationRef = useRef(false);
   const signal = useSyncExternalStore(subscribeEnvironment, getEnvironmentSignal, getEnvironmentSignal);
   const authKey = useSyncExternalStore(subscribeAuth, authSnapshot, authSnapshot);
+  useEffect(() => { setCloseError(''); }, [threadId, signal, authKey]);
   const [, setRecoveryVersion] = useState(0);
   const recoveryKey = useMemo(() => threadId ? threadTerminalRecoveryKey(captureAuthScope(), threadId) : null, [authKey, signal, threadId]);
   useEffect(() => recoveryKey ? subscribeThreadTerminalRecovery(recoveryKey, () => setRecoveryVersion(value => value + 1)) : undefined, [recoveryKey]);
@@ -130,7 +131,11 @@ export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, en
   const closeTerminal = useCallback(async id => {
     if (!closeSession || !terminals.some(item => item.id === id)) return false;
     const last = terminals.length === 1;
-    const result = await closeSession(id);
+    const auth = captureAuthScope();
+    let result;
+    try { result = await closeSession(id); }
+    catch { result = { ok: false }; }
+    if (signal.aborted || !isAuthScopeCurrent(auth) || currentThread.current !== threadId) return false;
     if (result?.ok === false) {
       setCloseError('This terminal could not be closed.');
       return false;
@@ -140,7 +145,7 @@ export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, en
     setCreated(current => current.filter(item => item.id !== id));
     setSelected(current => current === id ? null : current);
     return true;
-  }, [closeSession, terminals, threadId]);
+  }, [closeSession, terminals, threadId, signal]);
 
   const terminalId = terminals.some(item => item.id === selected) ? selected : terminals[0]?.id || null;
   // A shell that ended (for example when the server restarted) starts again in the same terminal, keeping its history.

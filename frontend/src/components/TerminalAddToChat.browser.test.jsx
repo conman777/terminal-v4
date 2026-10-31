@@ -30,11 +30,12 @@ const fakeContext = `
 const noop = () => Promise.resolve({});
 const api = { listSessionGitBranches: () => Promise.resolve({ branches: [], currentBranch: null }), checkoutSessionGitBranch: noop, createSession: noop, sendToSession: noop, sendRawToSession: noop,
   updateThreadMetadata: (_id, patch) => Promise.resolve({ ...patch }), renameSession: noop, restoreSession: () => Promise.resolve({ restored: true }), refreshSessionGitStats: noop,
+  closeSession: id => { window.fixtureClosedTerminal = id; return Promise.resolve({ ok: true }); },
   updateStructuredSessionSelection: noop, updateStructuredSessionAccess: noop, activeSessionId: 'ss-a' };
 export const useTerminalSession = () => api;
 export const TerminalSessionProvider = ({ children }) => children;`;
 const entry = `
-import React from 'react';
+import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './src/styles.css';
 import './src/WorkspaceUI.css';
@@ -51,8 +52,9 @@ const desktopProps = { pane: { id: 'pane-1', sessionId: 'ss-a' }, isActive: true
   onFocus: noop, onFullscreen: noop, showPreview: false, keybarOpen: false, viewportHeight: 800, fontSize: 14, webglEnabled: false, sessionActivity: {}, projectInfo: { cwd: '/repo/current' },
   sessionAiTypes: {}, customAiProviders: [], onSetSessionAiType: noop, onAddCustomAiProvider: noop, desktopAllowTerminalInput: true, currentDesktopId: 'd1', fitSignal: 0 };
 function App() {
+  const [terminalOpen, setTerminalOpen] = useState(true);
   return <AutocorrectProvider><ThemeProvider>{mobile
-    ? <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}><MobileShell visible sessions={sessions} terminalSessions={sessions} activeSessionId="ss-a" mobileView="terminal" threadTerminalOpen
+    ? <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}><MobileShell visible sessions={sessions} terminalSessions={sessions} activeSessionId="ss-a" mobileView="terminal" threadTerminalOpen={terminalOpen} onThreadTerminalOpenChange={(_id, open) => setTerminalOpen(open)}
         onSelectSession={noop} onCreateSession={noop} onSessionBusyChange={noop} projectInfo={{ cwd: '/repo/current' }} sessionActivity={{}} fontSize={14} viewportHeight={800}
         onViewChange={noop} onChatModeChange={noop} onAccessoryToggle={noop} onAccessoryHeightChange={noop} onRegisterFocusTerminal={noop} onUrlDetected={noop}
         sessionAiTypes={{}} customAiProviders={[]} onSetSessionAiType={noop} onAddCustomAiProvider={noop} /></div>
@@ -164,6 +166,40 @@ describe('terminal add to chat in a real browser', () => {
       await page.reload();
       await page.waitForFunction(() => document.querySelector('.composer-context-chip'));
       expect(await draftText(page)).toContain('FAIL auth');
+      expect(errors).toEqual([]);
+    } finally { await context.close(); }
+  }, 90000);
+
+  it.each([320, 390])('mobile %ipx: terminal close confirmation fits and preserves the draft', async width => {
+    const context = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: true, isMobile: true });
+    try {
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.goto(`${origin}/#mobile`);
+      const drawer = page.getByRole('region', { name: 'Thread terminal' });
+      const composer = page.getByRole('textbox', { name: 'Command composer' });
+      await composer.fill('Keep this mobile draft');
+      const close = drawer.getByRole('button', { name: 'Close Terminal 1' });
+      expect((await close.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      await close.tap();
+      const confirmation = drawer.getByRole('group', { name: 'Confirm closing Terminal 1' });
+      await confirmation.waitFor();
+      const keep = confirmation.getByRole('button', { name: 'Keep open' });
+      const confirm = confirmation.getByRole('button', { name: 'Close Terminal 1' });
+      expect(await inViewport(page, confirmation)).toBe(true);
+      expect(await inViewport(page, keep)).toBe(true);
+      expect(await inViewport(page, confirm)).toBe(true);
+      expect((await keep.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      expect((await confirm.boundingBox()).height).toBeGreaterThanOrEqual(44);
+      expect(await noOverflow(page)).toBe(true);
+      await keep.tap();
+      expect(await drawer.getByRole('group', { name: 'Confirm closing Terminal 1' }).count()).toBe(0);
+      await close.tap();
+      await confirmation.getByRole('button', { name: 'Close Terminal 1' }).tap();
+      await page.waitForFunction(() => window.fixtureClosedTerminal === 'pty-drawer');
+      expect(await drawer.count()).toBe(0);
+      expect(await composer.inputValue()).toBe('Keep this mobile draft');
       expect(errors).toEqual([]);
     } finally { await context.close(); }
   }, 90000);

@@ -13,4 +13,16 @@ describe('context usage', () => {
       { percent: 25, label: 'Context 25%', detail: '50,000 of 200,000 tokens · 48,000 in, 2,000 out · $0.04' }, null, null,
     ]);
   });
+
+  it('does not invent token counters or accept invalid measurements', () => {
+    expect(contextMeter({ contextTokens: 10, contextWindow: 100, inputTokens: 8 })).toEqual({
+      percent: 10, label: 'Context 10%', detail: '10 of 100 tokens · 8 in',
+    });
+    for (const usage of [
+      { contextTokens: -1, contextWindow: 100 },
+      { contextTokens: 1, contextWindow: -100 },
+      { contextTokens: 1, contextWindow: Infinity },
+      { contextTokens: 1.5, contextWindow: 100 },
+    ]) expect(contextMeter(usage)).toBeNull();
+  });
 });

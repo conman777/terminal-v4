@@ -372,7 +372,7 @@ async fn a_completed_command_is_announced_to_its_session_exactly_once_without_it
         vec![(
             action.clone(),
             format!(
-                "Background command {action} exited with code 0. Its output is not included; use the reviewed-output action to read it."
+                "Background command {action} exited with code 0. Its output is not included; output release is currently unavailable."
             )
         )]
     );
@@ -431,7 +431,10 @@ async fn a_read_only_child_turn_is_not_offered_and_cannot_call_background_tools(
     assert_eq!(background.pending_completions().unwrap(), vec![]);
 
     let standard = scripted_turn(&bench, &background, |_, _| stop(), allow_all, false).await;
-    assert_eq!(standard.background_tools_offered(0), 5);
+    assert_eq!(
+        standard.background_tools_offered(0),
+        crate::v4_agent::background_process::tool::definitions().len()
+    );
     fixture.manager.shutdown().await.unwrap();
 }
 
@@ -524,7 +527,10 @@ async fn denied_approvals_neither_start_a_process_nor_release_output() {
     let results = turn.results();
     assert_eq!(results[1]["state"], "exited");
     assert!(
-        results[2].as_str().unwrap().contains("denied"),
+        results[2]
+            .as_str()
+            .unwrap()
+            .contains("User denied releasing background output"),
         "{:?}",
         results[2]
     );
@@ -1349,7 +1355,10 @@ mod production {
         let run = run_isolated(Some("1"), "approve", "printf enabled > marker").await;
         assert!(run.status.success(), "{}", run.output);
         assert_eq!(run.requests.len(), 2, "{}", run.output);
-        assert_eq!(offered(&run.requests[0]), 5);
+        assert_eq!(
+            offered(&run.requests[0]),
+            crate::v4_agent::background_process::tool::definitions().len()
+        );
         assert_eq!(
             std::fs::read_to_string(run.workspace.path().join("marker")).unwrap(),
             "enabled"

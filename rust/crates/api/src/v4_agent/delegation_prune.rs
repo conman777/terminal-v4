@@ -124,6 +124,8 @@ mod tests {
             permission: Permission::ReadOnlyChild,
             operation_id: Uuid::new_v4(),
             authorization: None,
+            paired_authorization: None,
+            paired_attestation: None,
         }
     }
 

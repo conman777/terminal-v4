@@ -521,6 +521,8 @@ mod tests {
             permission: Permission::ReadOnlyChild,
             operation_id: Uuid::new_v4(),
             authorization: None,
+            paired_authorization: None,
+            paired_attestation: None,
         };
         let (task, _) = outbox
             .prepare_held_child(root.path(), &binding)
@@ -858,6 +860,8 @@ mod tests {
             permission: Permission::ReadOnlyChild,
             operation_id: Uuid::new_v4(),
             authorization: None,
+            paired_authorization: None,
+            paired_attestation: None,
         };
         outbox
             .prepare_held_child(root.path(), &binding)

@@ -51,7 +51,10 @@ fn select_defaults_to_local_and_requires_explicit_docker_opt_in() {
         selected(&[(BACKEND_VARIABLE, "ssh")]),
         Err("SSH execution backend requires a host setting".into())
     );
-    assert_eq!(selected(&ssh_settings()), Ok("ssh".into()));
+    assert_eq!(
+        selected(&ssh_settings()),
+        Err("SSH execution is disabled because remote command cleanup cannot be confirmed".into())
+    );
     assert_eq!(
         selected(&[(BACKEND_VARIABLE, "podman")]),
         Err("Unknown execution backend setting".into())
@@ -152,7 +155,7 @@ async fn docker_backend_runs_through_a_fake_docker_without_pulling_images() {
     let program = fake_docker(
         bin.path(),
         &format!(
-            "for a in \"$@\"; do printf '%s\\n' \"$a\" >> '{}'; done\necho fake-container-output",
+            "if [ \"$1\" != run ]; then exit 0; fi\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{}'; done\necho fake-container-output",
             log.display()
         ),
     );
@@ -301,6 +304,13 @@ fn ssh_arguments_are_non_interactive_strict_and_forward_nothing() {
             r"cd -- '/srv/it'\''s' && exec /bin/sh -c 'echo '\''a b'\'''"
         ]
     );
+}
+
+#[test]
+fn ssh_approval_discloses_that_cancellation_may_not_stop_the_remote_command() {
+    assert!(ssh("ssh".into(), "/srv/work")
+        .host_description()
+        .contains("remote commands may continue after cancellation or disconnection"));
 }
 
 #[tokio::test]
@@ -507,21 +517,35 @@ def label_values(opts):
     return labels
 
 if args[0] == "kill":
+    if os.path.exists(STATE + "/fail-cleanup"):
+        sys.exit(1)
     sys.exit(0 if destroy(args[1]) else 1)
 if args[0] == "rm":
+    if os.path.exists(STATE + "/fail-cleanup"):
+        sys.exit(1)
     ok = all(destroy(t) for t in args[1:] if not t.startswith("-"))
     sys.exit(0 if ok else 1)
 if args[0] == "ps":
     wanted = None
+    name_filter = None
     for index, a in enumerate(args):
         if a == "--filter":
-            wanted = args[index + 1][len("label="):]
+            filt = args[index + 1]
+            if filt.startswith("label="):
+                wanted = filt[len("label="):]
+            elif filt.startswith("name=^/") and filt.endswith("$"):
+                name_filter = filt[len("name=^/"):-1]
     for entry in sorted(os.listdir(STATE)):
         if entry.endswith(".json"):
             meta = json.load(open(f"{STATE}/{entry}"))
             labels = meta["labels"]
+            if name_filter is not None and name_filter != meta["name"]:
+                continue
             if wanted is None or wanted in [f"{k}={v}" if v else k for k, v in labels.items()]:
-                print("\t".join([meta["id"], labels.get("terminal-v4.pid", ""), labels.get("terminal-v4.run", "")]))
+                if name_filter is not None:
+                    print(meta["name"])
+                else:
+                    print("\t".join([meta["id"], labels.get("terminal-v4.pid", ""), labels.get("terminal-v4.run", "")]))
     sys.exit(0)
 if args[0] != "run":
     sys.exit(2)
@@ -704,7 +728,7 @@ async fn fake_daemon_keeps_a_container_running_after_its_client_is_sigkilled() {
 }
 
 #[tokio::test]
-async fn successful_docker_command_leaves_no_container_and_never_issues_cleanup() {
+async fn successful_docker_command_confirms_the_container_is_gone() {
     let daemon = FakeDaemon::new();
     let root = tempfile::tempdir().unwrap();
     let output = super::super::tools::run_command_with_backend(
@@ -717,7 +741,7 @@ async fn successful_docker_command_leaves_no_container_and_never_issues_cleanup(
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["stdout"], "from-container\n");
     assert_eq!(daemon.containers(), Vec::<serde_json::Value>::new());
-    assert_eq!(verbs(&daemon), ["run"]);
+    assert_eq!(verbs(&daemon), ["run", "kill", "rm", "rm", "ps"]);
 }
 
 #[tokio::test]
@@ -737,6 +761,7 @@ async fn docker_run_uses_a_unique_name_cidfile_and_ownership_labels() {
     let calls = daemon.calls();
     let names: Vec<&String> = calls
         .iter()
+        .filter(|call| call[0] == "run")
         .map(|call| {
             call.iter()
                 .find(|a| a.starts_with("--name=v4-run-"))
@@ -745,7 +770,7 @@ async fn docker_run_uses_a_unique_name_cidfile_and_ownership_labels() {
         .collect();
     assert_eq!(names.len(), 2);
     assert_ne!(names[0], names[1]);
-    for call in &calls {
+    for call in calls.iter().filter(|call| call[0] == "run") {
         assert!(call.contains(&"--label=terminal-v4.app=run-command".to_string()));
         assert!(call.contains(&format!("--label=terminal-v4.pid={}", std::process::id())));
         assert!(call.iter().any(|a| a.starts_with("--cidfile=")));
@@ -766,8 +791,44 @@ async fn timeout_removes_the_container_that_outlives_its_killed_client() {
     )
     .await;
     assert_eq!(result, Err("Command timed out after 1 seconds".into()));
-    assert_eq!(verbs(&daemon), ["run", "kill", "rm", "rm"]);
+    assert_eq!(verbs(&daemon), ["run", "kill", "rm", "rm", "ps"]);
     assert_eq!(daemon.containers(), Vec::<serde_json::Value>::new());
+}
+
+#[tokio::test]
+async fn failed_docker_cleanup_remains_owned_and_can_be_retried() {
+    let daemon = FakeDaemon::new();
+    let root = tempfile::tempdir().unwrap();
+    let backend = docker(daemon.program.clone(), false);
+    let resources = super::super::tools::CommandResources::default();
+    std::fs::write(daemon.state.join("fail-cleanup"), "").unwrap();
+    let result = super::super::tools::run_command_with_resources_for_test(
+        root.path(),
+        &json!({"command":"sleep 300"}),
+        &backend,
+        Duration::from_secs(1),
+        &resources,
+    )
+    .await;
+    assert_eq!(
+        result,
+        Err("Docker container cleanup is unconfirmed".into())
+    );
+    assert!(!resources.is_confirmed());
+    assert_eq!(daemon.containers().len(), 1);
+    let second = super::super::tools::run_command_with_resources_for_test(
+        root.path(),
+        &json!({"command":"echo should-not-run"}),
+        &backend,
+        Duration::from_secs(1),
+        &resources,
+    )
+    .await;
+    assert!(second.unwrap_err().contains("Previous command cleanup"));
+    std::fs::remove_file(daemon.state.join("fail-cleanup")).unwrap();
+    resources.close().await.unwrap();
+    assert!(resources.is_confirmed());
+    assert!(daemon.containers().is_empty());
 }
 
 #[tokio::test]
@@ -913,4 +974,23 @@ async fn reaper_removes_only_labelled_containers_of_dead_runs() {
 #[test]
 fn reaper_without_a_docker_executable_removes_nothing() {
     assert_eq!(reap_leftover_containers("/nonexistent/docker"), 0);
+}
+
+#[test]
+fn docker_cleanup_does_not_wait_for_descendants_holding_stdout_open() {
+    let mut command = scrubbed_std_command("/bin/sh");
+    command.args(["-c", "sleep 2 &"]);
+    let start = Instant::now();
+    let output = bounded_output(command, Duration::from_millis(100));
+    assert!(output.is_none());
+    assert!(start.elapsed() < Duration::from_millis(1500));
+}
+
+#[test]
+fn docker_cleanup_rejects_unbounded_stdout() {
+    let mut command = scrubbed_std_command("/bin/sh");
+    command.args(["-c", "exec yes x"]);
+    let start = Instant::now();
+    assert!(bounded_output(command, Duration::from_secs(5)).is_none());
+    assert!(start.elapsed() < Duration::from_secs(5));
 }

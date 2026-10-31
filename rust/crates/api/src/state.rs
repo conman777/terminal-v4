@@ -90,6 +90,50 @@ impl LocalAdmission {
         authority: &crate::auth::LocalAuthority,
         accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
     ) -> Result<(Result<T, E>, bool), String> {
+        self.accept_checked(
+            owner,
+            |tx| {
+                let current = AppState::auth_generation(tx, owner)?;
+                let (generation, _) = authority
+                    .valid_for(owner, crate::v4_agent::interaction::now_ms())
+                    .ok_or("Credential is invalid or expired")?;
+                if generation != current {
+                    return Err("Credential has been revoked".into());
+                }
+                Ok(())
+            },
+            accept,
+            false,
+        )
+    }
+
+    pub(crate) fn accept_paired<T, E>(
+        &self,
+        owner: &str,
+        grant: &crate::paired_environments::PairedGrantAuthority,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+    ) -> Result<(Result<T, E>, bool), String> {
+        let guard = owner_input::acquire(&self.root, owner, std::time::Duration::ZERO)?;
+        self.accept_checked(
+            owner,
+            |tx| {
+                if owner_input::installed(tx)? {
+                    guard.bind(tx)?;
+                }
+                crate::paired_environments::validate_paired_grant_with_connection(tx, grant, owner)
+            },
+            accept,
+            true,
+        )
+    }
+
+    fn accept_checked<T, E>(
+        &self,
+        owner: &str,
+        check_authority: impl Fn(&rusqlite::Transaction<'_>) -> Result<(), String>,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+        verify_after: bool,
+    ) -> Result<(Result<T, E>, bool), String> {
         let _fence = self.fence.acquire()?;
         let mut connection = self
             .db
@@ -130,18 +174,13 @@ impl LocalAdmission {
                     _ => return Err("Background installation identity is unavailable".into()),
                 }
             }
-            let current = AppState::auth_generation(&tx, owner)?;
-            let (generation, _) = authority
-                .valid_for(owner, crate::v4_agent::interaction::now_ms())
-                .ok_or("Credential is invalid or expired")?;
-            if generation != current {
-                return Err("Credential has been revoked".into());
-            }
-            Ok(())
+            check_authority(&tx)
         };
         check()?;
         let result = accept(&check);
-        Ok((result, tx.commit().is_ok()))
+        let valid = !verify_after || check().is_ok();
+        let committed = tx.commit().is_ok();
+        Ok((result, valid && committed))
     }
 }
 
@@ -248,6 +287,17 @@ pub struct HistoryQuery {
     pub after_ts: Option<i64>,
     pub before_seq: Option<i64>,
     pub after_seq: Option<i64>,
+}
+
+fn vault_database_error(error: rusqlite::Error) -> String {
+    #[cfg(unix)]
+    {
+        crate::vault_admission::database_error(error)
+    }
+    #[cfg(not(unix))]
+    {
+        error.to_string()
+    }
 }
 
 impl AppState {
@@ -1398,6 +1448,117 @@ impl AppState {
         Ok(result)
     }
 
+    #[cfg(unix)]
+    pub(crate) fn try_with_owner_review<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        review: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &dyn Fn() -> Result<(), String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.try_acquire()?;
+        let mut db = Connection::open_with_flags(
+            self.config()
+                .data_dir
+                .canonicalize()
+                .map_err(|_| "Authentication admission unavailable")?
+                .join("terminal.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|_| "Authentication admission unavailable")?;
+        db.busy_timeout(std::time::Duration::ZERO)
+            .map_err(|_| "Authentication admission unavailable")?;
+        admission.validate(&db)?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        let check = || {
+            admission.validate(&tx)?;
+            let current = Self::auth_generation(&tx, owner)?;
+            let (generation, _) = authority
+                .valid_for(owner, crate::v4_agent::interaction::now_ms())
+                .ok_or("Credential is invalid or expired")?;
+            if generation != current {
+                return Err("Credential has been revoked".into());
+            }
+            Ok(())
+        };
+        check()?;
+        let result = review(&tx, &check)?;
+        tx.commit()
+            .map_err(|_| "Owner review outcome is uncertain")?;
+        Ok(result)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn try_with_paired_owner_review<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::PairedInputAuthority,
+        review: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &dyn Fn() -> Result<(), String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let guard = self.try_acquire_input_guard(owner)?;
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.try_acquire()?;
+        let mut db = Connection::open_with_flags(
+            self.config()
+                .data_dir
+                .canonicalize()
+                .map_err(|_| "Authentication admission unavailable")?
+                .join("terminal.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+        .map_err(|_| "Authentication admission unavailable")?;
+        db.busy_timeout(std::time::Duration::ZERO)
+            .map_err(|_| "Authentication admission unavailable")?;
+        admission.validate(&db)?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        if owner_input::installed(&tx)? {
+            guard.bind(&tx)?;
+        }
+        let check = || {
+            admission.validate(&tx)?;
+            let expires = crate::paired_environments::validate_input_authority_with_connection(
+                &tx, authority, owner,
+            )?;
+            if crate::v4_agent::interaction::now_ms() >= expires {
+                return Err("Paired grant expired or revoked".into());
+            }
+            Ok(())
+        };
+        check()?;
+        let result = review(&tx, &check)?;
+        check()?;
+        tx.commit()
+            .map_err(|_| "Owner review outcome is uncertain")?;
+        Ok(result)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn hold_auth_admission_for_test(&self) -> Result<std::fs::File, String> {
+        self.inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?
+            .acquire()
+    }
+
     fn auth_generation(connection: &Connection, user_id: &str) -> Result<i64, String> {
         connection
             .query_row(
@@ -1930,13 +2091,15 @@ impl AppState {
         key_value: &str,
         created_at: &str,
     ) -> Result<(), String> {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&self.config().data_dir, &user.user_id)?;
         let connection = self.lock_db()?;
         connection
             .execute(
                 "INSERT INTO api_key_vault (id, user_id, key_name, key_value, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![id, user.user_id, key_name, key_value, created_at],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(vault_database_error)?;
         Ok(())
     }
 
@@ -1969,21 +2132,25 @@ impl AppState {
         original: &str,
         encrypted: &str,
     ) -> Result<(), String> {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&self.config().data_dir, &user.user_id)?;
         self.lock_db()?.execute(
             "UPDATE api_key_vault SET key_value = ?1 WHERE id = ?2 AND user_id = ?3 AND key_value = ?4",
             params![encrypted, key_id, user.user_id, original],
-        ).map_err(|error| error.to_string())?;
+        ).map_err(vault_database_error)?;
         Ok(())
     }
 
     pub fn delete_vault_key(&self, user: &AuthenticatedUser, key_id: &str) -> Result<bool, String> {
+        #[cfg(unix)]
+        let _lease = crate::vault_admission::exclusive(&self.config().data_dir, &user.user_id)?;
         let connection = self.lock_db()?;
         let count = connection
             .execute(
                 "DELETE FROM api_key_vault WHERE id = ? AND user_id = ?",
                 rusqlite::params![key_id, user.user_id],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(vault_database_error)?;
         Ok(count > 0)
     }
 
@@ -2163,6 +2330,11 @@ impl AppState {
                     key_value TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     UNIQUE(user_id, key_name)
+                );
+                CREATE TABLE IF NOT EXISTS vault_owner_fences (
+                    owner_hash TEXT PRIMARY KEY,
+                    device TEXT NOT NULL,
+                    inode TEXT NOT NULL
                 );
                 ",
             )
@@ -2543,6 +2715,13 @@ impl AppState {
             .db
             .lock()
             .map_err(|_| "Database lock poisoned".to_string())
+    }
+
+    pub(crate) fn try_lock_db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        self.inner
+            .db
+            .try_lock()
+            .map_err(|_| "Database is busy or unavailable".to_string())
     }
 
     fn lock_files(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {

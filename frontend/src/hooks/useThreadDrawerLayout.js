@@ -34,6 +34,7 @@ export function useThreadDrawerLayout(threadId) {
   return {
     layout,
     setSplit: useCallback(splitId => update(() => ({ splitId: splitId || null })), [update]),
+    setDirection: useCallback(direction => update(() => ({ direction: direction === 'stacked' ? 'stacked' : 'side-by-side' })), [update]),
     setRatio: useCallback(ratio => update(() => ({ ratio: clampSplitRatio(ratio) })), [update]),
     setHeight: useCallback((height, maxHeight) => update(() => ({ height: clampDrawerHeight(height, maxHeight) })), [update]),
   };

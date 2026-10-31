@@ -4,7 +4,7 @@ import './ThreadTerminalTabs.css';
 export const terminalTabId = id => `thread-terminal-tab-${id}`;
 export const terminalPanelId = id => `thread-terminal-panel-${id}`;
 
-export function ThreadTerminalTabs({ terminals, selectedId, onSelect, onAdd, onClose, onSplit, splitLabel = 'Split terminal', disabled = false, className = '', label = 'Thread terminals', withPanels = true }) {
+export function ThreadTerminalTabs({ terminals, selectedId, onSelect, onAdd, onClose, closeButtonRef, onSplit, splitLabel = 'Split terminal', onToggleSplitDirection, splitDirection, disabled = false, className = '', label = 'Thread terminals', withPanels = true }) {
   const list = useRef(null);
   const selectedIndex = Math.max(0, terminals.findIndex(terminal => terminal.id === selectedId));
 
@@ -26,7 +26,8 @@ export function ThreadTerminalTabs({ terminals, selectedId, onSelect, onAdd, onC
     <div className="thread-terminal-actions">
       <button type="button" className="thread-terminal-add" aria-label="New terminal in this thread" disabled={disabled} onClick={onAdd}>+</button>
       {onSplit && <button type="button" aria-label={splitLabel} disabled={disabled} onClick={onSplit}>Split</button>}
-      {onClose && <button type="button" aria-label={`Close Terminal ${selectedIndex + 1}`} disabled={disabled} onClick={() => onClose(terminals[selectedIndex].id)}>×</button>}
+      {onToggleSplitDirection && <button type="button" aria-label={splitDirection === 'stacked' ? 'Show terminals side by side' : 'Stack terminals'} disabled={disabled} onClick={onToggleSplitDirection}>{splitDirection === 'stacked' ? 'Side by side' : 'Stack'}</button>}
+      {onClose && <button type="button" ref={closeButtonRef} aria-label={`Close Terminal ${selectedIndex + 1}`} disabled={disabled} onClick={() => onClose(terminals[selectedIndex].id)}>×</button>}
     </div>
   </div>;
 }

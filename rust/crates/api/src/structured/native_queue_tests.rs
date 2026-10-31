@@ -896,6 +896,124 @@ async fn workspace_writer_release_reschedules_the_skipped_drain() {
 }
 
 #[tokio::test]
+async fn a_new_generation_gets_its_own_retry_while_an_older_generation_is_fenced() {
+    let fx = fixture(false).await;
+    fx.start_turn().await;
+    fx.provider.finish("completed");
+    idle(&fx).await;
+    let fence = loop {
+        match crate::workspace_activity::exclusive(fx.workspace.path()) {
+            Ok(fence) => break fence,
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+        }
+    };
+    fx.enqueue("after the next generation");
+    let session = fx
+        .manager
+        .owned_session("owner", &fx.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let generation = session.state.lock().await.generation;
+    queue::drain(
+        fx.manager.clone(),
+        "owner".into(),
+        fx.id.clone(),
+        generation,
+    )
+    .await
+    .unwrap();
+    eventually(|| native_queue::retrying_for_test(fx.data.path()) == 1).await;
+
+    {
+        let mut state = session.state.lock().await;
+        state.generation += 1;
+    }
+    queue::drain(
+        fx.manager.clone(),
+        "owner".into(),
+        fx.id.clone(),
+        generation + 1,
+    )
+    .await
+    .unwrap();
+    assert_eq!(native_queue::retrying_for_test(fx.data.path()), 2);
+
+    drop(fence);
+    eventually(|| fx.provider.starts() == 2).await;
+    eventually(|| fx.on_disk().items[0].state == ItemState::Accepted).await;
+    eventually(|| native_queue::retrying_for_test(fx.data.path()) == 0).await;
+    assert_eq!(fx.accepted_requests().len(), 2);
+}
+
+#[test]
+fn runtime_shutdown_releases_fenced_retry_for_the_same_generation() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (fx, fence, generation) = runtime.block_on(async {
+        let fx = fixture(false).await;
+        fx.start_turn().await;
+        fx.provider.finish("completed");
+        idle(&fx).await;
+        let fence = loop {
+            match crate::workspace_activity::exclusive(fx.workspace.path()) {
+                Ok(fence) => break fence,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        };
+        fx.enqueue("after runtime shutdown");
+        let session = fx
+            .manager
+            .owned_session("owner", &fx.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let generation = session.state.lock().await.generation;
+        queue::drain(
+            fx.manager.clone(),
+            "owner".into(),
+            fx.id.clone(),
+            generation,
+        )
+        .await
+        .unwrap();
+        eventually(|| native_queue::retrying_for_test(fx.data.path()) == 1).await;
+        (fx, fence, generation)
+    });
+
+    drop(runtime);
+    assert_eq!(
+        (
+            native_queue::retrying_for_test(fx.data.path()),
+            fx.on_disk().items[0].state
+        ),
+        (0, ItemState::Pending)
+    );
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        queue::drain(
+            fx.manager.clone(),
+            "owner".into(),
+            fx.id.clone(),
+            generation,
+        )
+        .await
+        .unwrap();
+        assert_eq!(native_queue::retrying_for_test(fx.data.path()), 1);
+        drop(fence);
+        eventually(|| fx.provider.starts() == 2).await;
+        eventually(|| fx.on_disk().items[0].state == ItemState::Accepted).await;
+        eventually(|| native_queue::retrying_for_test(fx.data.path()) == 0).await;
+    });
+}
+
+#[tokio::test]
 async fn a_hold_taken_while_fenced_is_never_drained_when_the_fence_clears() {
     native_queue::set_fallback_for_test(std::time::Duration::from_millis(40));
     let fx = fixture(false).await;
@@ -1347,6 +1465,136 @@ async fn graceful_shutdown_keeps_native_queue_pending_and_held_for_the_next_proc
         assert_eq!(
             (snapshot.mode, snapshot.items[0].state, provider.starts()),
             (QueueMode::Held, ItemState::Pending, 0)
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn native_queue_crash_child_fixture() {
+    let data = PathBuf::from(std::env::var_os("V4_NATIVE_TEST_DATA").unwrap());
+    let workspace = PathBuf::from(std::env::var_os("V4_NATIVE_TEST_WORKSPACE").unwrap());
+    let ready = PathBuf::from(std::env::var_os("V4_NATIVE_TEST_READY").unwrap());
+    let provider_id: &'static str = match std::env::var("V4_NATIVE_TEST_PROVIDER").unwrap().as_str()
+    {
+        "codex" => "codex",
+        "claude" => "claude",
+        _ => panic!("unexpected provider"),
+    };
+    let provider = provider_for(provider_id);
+    let manager = StructuredSessionManager::new_with_providers(config(&data), vec![provider]);
+    let id = manager
+        .create_session(
+            "owner",
+            workspace.to_str().unwrap(),
+            Some(provider_id),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+    native_queue::opt_in("owner", &id);
+    manager
+        .submit(
+            "owner",
+            &id,
+            "active turn",
+            Some(&Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap();
+    let scope = QueueScope::new_native("owner", &workspace, &id).unwrap();
+    let store = queue::store(&manager);
+    let revision = store.load(&scope).unwrap().revision;
+    let item = Uuid::new_v4();
+    store
+        .mutate(
+            &scope,
+            Mutation {
+                operation_id: Uuid::new_v4(),
+                expected_queue_revision: revision,
+                operation: QueueOperation::Enqueue {
+                    item_id: item,
+                    text: "preserved after crash".into(),
+                    run_when_idle: true,
+                },
+            },
+        )
+        .unwrap();
+    let ready_temporary = ready.with_extension("tmp");
+    std::fs::write(
+        &ready_temporary,
+        serde_json::to_vec(&serde_json::json!({ "id": id, "item": item })).unwrap(),
+    )
+    .unwrap();
+    std::fs::rename(ready_temporary, ready).unwrap();
+    std::future::pending::<()>().await;
+}
+
+#[tokio::test]
+async fn abrupt_process_exit_holds_native_queues_without_replaying_them() {
+    for provider_id in ["codex", "claude"] {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let ready = data.path().join("fixture-ready.json");
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "structured::native_queue_tests::native_queue_crash_child_fixture",
+                "--ignored",
+            ])
+            .env_clear()
+            .env("V4_NATIVE_TEST_DATA", data.path())
+            .env("V4_NATIVE_TEST_WORKSPACE", workspace.path())
+            .env("V4_NATIVE_TEST_READY", &ready)
+            .env("V4_NATIVE_TEST_PROVIDER", provider_id)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while !ready.exists() {
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "fixture exited before preparing the queue"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture did not prepare the queue");
+        let details: Value = serde_json::from_slice(&std::fs::read(&ready).unwrap()).unwrap();
+        child.kill().await.unwrap();
+        child.wait().await.unwrap();
+
+        let id = details["id"].as_str().unwrap();
+        let item = Uuid::parse_str(details["item"].as_str().unwrap()).unwrap();
+        let provider = provider_for(provider_id);
+        let manager = StructuredSessionManager::new_with_providers(
+            config(data.path()),
+            vec![provider.clone()],
+        );
+        native_queue::opt_in("owner", id);
+        let snapshot = manager.queue_snapshot("owner", id).await.unwrap();
+        assert_eq!(
+            (
+                snapshot.mode,
+                snapshot.hold_reason,
+                snapshot.items[0].item_id,
+                snapshot.items[0].state,
+                provider.starts()
+            ),
+            (
+                QueueMode::Held,
+                Some(HoldReason::Restart),
+                item,
+                ItemState::Pending,
+                0
+            ),
+            "{provider_id} queue after process death"
         );
     }
 }

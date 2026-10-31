@@ -5,6 +5,7 @@ import { MobileShell } from './MobileShell';
 import { splitContext } from './composer-context/composerContext';
 import { getComposerDraftStore } from '../utils/composerDraftStore';
 import { setActiveEnvironment } from '../utils/remoteEnvironments';
+import { setUser } from '../utils/auth';
 import { resetPullRequestMentionCache } from '../hooks/useCurrentPullRequest';
 
 const terminals = new Map();
@@ -139,6 +140,32 @@ describe('MobileShell terminal selection menu', () => {
     await waitFor(() => expect(screen.queryByRole('group', { name: 'Context actions' })).not.toBeInTheDocument());
     expect(draft('ss-a').chips).toEqual([]);
     expect(draft('ss-b').chips).toEqual([]);
+  });
+
+  it('does not open a stale selection menu if the thread changes during a pending long press', async () => {
+    const view = render(shell(sessions, 'ss-a', { threadTerminalOpen: true }));
+    const drawer = await screen.findByRole('region', { name: 'Thread terminal' });
+    await waitFor(() => expect(terminals.has('pty-drawer')).toBe(true));
+    select('pty-drawer', 'old thread output');
+    fireEvent.touchStart(drawer, { touches: [{ clientX: 40, clientY: 60 }] });
+    view.rerender(shell(sessions, 'ss-b', { threadTerminalOpen: true }));
+    act(() => { vi.advanceTimersByTime(600); });
+    expect(screen.queryByRole('group', { name: 'Context actions' })).not.toBeInTheDocument();
+    expect(draft('ss-a').chips).toEqual([]);
+    expect(draft('ss-b').chips).toEqual([]);
+  });
+
+  it('does not insert a selection after the account changes while its menu is open', async () => {
+    setUser({ id: 'first-user' });
+    render(shell(sessions, 'ss-a', { threadTerminalOpen: true }));
+    const drawer = await screen.findByRole('region', { name: 'Thread terminal' });
+    await waitFor(() => expect(terminals.has('pty-drawer')).toBe(true));
+    select('pty-drawer', 'old account output');
+    longPress(drawer);
+    const item = await screen.findByRole('button', { name: 'Add to chat: Alpha' });
+    setUser({ id: 'second-user' });
+    fireEvent.click(item);
+    expect(getComposerDraftStore('ss-a').getSnapshot().text).toBe('');
   });
 
   it('offers the current branch pull request as a mention', async () => {

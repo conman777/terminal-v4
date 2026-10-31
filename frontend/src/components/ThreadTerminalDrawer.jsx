@@ -9,7 +9,7 @@ import './ThreadTerminalDrawer.css';
 const maxDrawerHeight = () => Math.max(MIN_DRAWER_HEIGHT, Math.floor((typeof window === 'undefined' ? 900 : window.innerHeight) * 0.7));
 
 export function ThreadTerminalDrawer({ threadId, drawer, terminalInputAllowed, sessionCwd, fontSize, webglEnabled, isActive, fitSignal, owner = null, onRequestClose, onRequestReopen }) {
-  const { layout, setSplit, setRatio, setHeight } = useThreadDrawerLayout(threadId);
+  const { layout, setSplit, setDirection, setRatio, setHeight } = useThreadDrawerLayout(threadId);
   const [confirmClose, setConfirmClose] = useState(null);
   const [fitTick, setFitTick] = useState(0);
   const drawerRef = useRef(null);
@@ -20,12 +20,13 @@ export function ThreadTerminalDrawer({ threadId, drawer, terminalInputAllowed, s
   const partnerId = resolveSplitPartner(layout, ids, primaryId);
   const nameOf = id => `Terminal ${ids.indexOf(id) + 1}`;
   const ratioPercent = Math.round(layout.ratio * 100);
+  const stacked = layout.direction === 'stacked';
   const height = Math.min(layout.height, maxDrawerHeight());
 
   useEffect(() => {
     const timer = window.setTimeout(() => setFitTick(tick => tick + 1), 80);
     return () => window.clearTimeout(timer);
-  }, [layout.ratio, height, partnerId]);
+  }, [layout.ratio, layout.direction, height, partnerId]);
   useEffect(() => { if (confirmClose) keepButton.current?.focus(); }, [confirmClose]);
   useEffect(() => { if (confirmClose && !ids.includes(confirmClose)) setConfirmClose(null); }, [confirmClose, ids]);
 
@@ -52,6 +53,10 @@ export function ThreadTerminalDrawer({ threadId, drawer, terminalInputAllowed, s
     }
   }
   const showAlone = id => { setSplit(null); drawer.select(id); };
+  const toggleDirection = () => {
+    if (!stacked && height < 360) setHeight(360, maxDrawerHeight());
+    setDirection(stacked ? 'side-by-side' : 'stacked');
+  };
   const fit = `${fitSignal ?? ''}:${fitTick}`;
   const chat = id => <TerminalWithAddToChat key={id} owner={owner} label="Thread terminal" surface="desktop" sessionId={id} fontSize={fontSize} webglEnabled={webglEnabled}
     viewMode="terminal" inputEnabled={terminalInputAllowed} isPrimary={isActive} fitSignal={fit} />;
@@ -76,11 +81,13 @@ export function ThreadTerminalDrawer({ threadId, drawer, terminalInputAllowed, s
   else if (drawer.error) body = <div className="thread-terminal-drawer-error"><p role="alert">{drawer.error}</p>
     {drawer.canRetry && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawer.retry()}>Retry opening terminal</button>}
     {!primaryId && drawer.canStartAgainAfterReview && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawer.startAgainAfterReview()}>I checked the list; start another</button>}</div>;
-  else if (primaryId) body = <div className="thread-terminal-panes" ref={panesRef}>
+  else if (primaryId) body = <div className={`thread-terminal-panes${partnerId && stacked ? ' thread-terminal-panes-stacked' : ''}`} ref={panesRef}>
     {pane(primaryId, { tabbed: true })}
-    {partnerId && <PaneSeparator orientation="vertical" label="Resize terminal split" value={ratioPercent} min={20} max={80} step={5} largeStep={10}
+    {partnerId && <PaneSeparator orientation={stacked ? 'horizontal' : 'vertical'} reverseKeyboard={stacked} label="Resize terminal split" value={ratioPercent} min={20} max={80} step={5} largeStep={10}
       format={value => `${value}% and ${100 - value}%`} onChange={value => setRatio(value / 100)}
-      measure={event => { const rect = panesRef.current?.getBoundingClientRect(); return rect?.width ? ((event.clientX - rect.left) / rect.width) * 100 : NaN; }} />}
+      measure={event => { const rect = panesRef.current?.getBoundingClientRect(); return stacked
+        ? rect?.height ? ((event.clientY - rect.top) / rect.height) * 100 : NaN
+        : rect?.width ? ((event.clientX - rect.left) / rect.width) * 100 : NaN; }} />}
     {partnerId && pane(partnerId, { tabbed: false })}
   </div>;
   else body = <p role="status" className="thread-terminal-drawer-status">Opening a terminal in this thread's folder…</p>;
@@ -90,7 +97,8 @@ export function ThreadTerminalDrawer({ threadId, drawer, terminalInputAllowed, s
       format={value => `${value} pixels tall`} onChange={value => setHeight(value, maxDrawerHeight())}
       measure={event => { const rect = drawerRef.current?.getBoundingClientRect(); return rect ? rect.bottom - event.clientY : NaN; }} />
     {drawer.terminals.length > 0 && <ThreadTerminalTabs terminals={drawer.terminals} selectedId={primaryId} onSelect={selectTab}
-      onAdd={() => drawer.addTerminal()} onSplit={partnerId ? null : split} onClose={partnerId ? null : id => setConfirmClose(id)} disabled={!terminalInputAllowed} />}
+      onAdd={() => drawer.addTerminal()} onSplit={partnerId ? null : split} onClose={partnerId ? null : id => setConfirmClose(id)}
+      onToggleSplitDirection={partnerId ? toggleDirection : null} splitDirection={layout.direction} disabled={!terminalInputAllowed} />}
     {confirmClose && <div className="thread-terminal-confirm" role="group" aria-label={`Confirm closing ${nameOf(confirmClose)}`}>
       <p>{`Close ${nameOf(confirmClose)}? Anything running in it will stop.`}</p>
       <button type="button" ref={keepButton} onClick={() => setConfirmClose(null)}>Keep open</button>

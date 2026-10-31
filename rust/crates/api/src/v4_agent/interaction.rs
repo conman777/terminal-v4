@@ -100,6 +100,13 @@ pub(crate) struct ActionScope {
     pub(crate) turn_id: String,
 }
 
+#[cfg(unix)]
+pub(crate) struct ImageTurn<'a> {
+    pub(crate) scope: &'a ActionScope,
+    pub(crate) interaction: &'a dyn Interaction,
+    pub(crate) cancellation: &'a Cancellation,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ApprovalRequest {
     pub(crate) id: String,
@@ -132,12 +139,21 @@ struct PendingApproval {
     request: ApprovalRequest,
     cancel: Cancellation,
     reply: Option<oneshot::Sender<Option<Value>>>,
+    private_output: Option<PrivateOutput>,
+}
+struct PrivateOutput {
+    origin: uuid::Uuid,
+    workspace_identity: (u64, u64),
+    snapshot: Value,
+    preview_token: Option<String>,
+    published: bool,
 }
 #[derive(Default)]
 struct ApprovalState {
     pending: Option<PendingApproval>,
     decisions: VecDeque<DecisionReceipt>,
     answers: HashMap<String, Value>,
+    private_decisions: HashMap<String, (uuid::Uuid, (u64, u64), String, String)>,
 }
 pub(crate) struct ApprovalGate {
     scope: ActionScope,
@@ -154,13 +170,17 @@ impl ApprovalGate {
     pub(crate) fn matches_scope(&self, scope: &ActionScope) -> bool {
         self.scope == *scope
     }
+    #[cfg(unix)]
+    pub(crate) fn scope(&self) -> &ActionScope {
+        &self.scope
+    }
     pub(crate) async fn wait(
         &self,
         request: ApprovalRequest,
         sink: &dyn Interaction,
         cancel: &Cancellation,
     ) -> Result<bool, String> {
-        self.wait_inner(request, sink, cancel)
+        self.wait_inner(request, sink, cancel, None)
             .await
             .map(|answer| answer == Some(Value::Bool(true)))
     }
@@ -174,18 +194,79 @@ impl ApprovalGate {
             return Err("Invalid question action".into());
         }
         super::question::validate_questions(&request.tool_input)?;
-        self.wait_inner(request, sink, cancel).await
+        self.wait_inner(request, sink, cancel, None).await
+    }
+    pub(crate) async fn wait_private_output_bound(
+        &self,
+        mut request: ApprovalRequest,
+        snapshot: Value,
+        origin: uuid::Uuid,
+        workspace_identity: (u64, u64),
+        sink: &dyn Interaction,
+        cancel: &Cancellation,
+    ) -> Result<bool, String> {
+        if request.tool_name != "background_read_output"
+            || serde_json::to_vec(&snapshot)
+                .map_err(|_| "Invalid output snapshot")?
+                .len()
+                > 1024 * 1024
+        {
+            return Err("Invalid private output review".into());
+        }
+        let action_id = request
+            .tool_input
+            .get("actionId")
+            .and_then(Value::as_str)
+            .filter(|id| {
+                id.len() == 64
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            })
+            .ok_or("Invalid background action ID")?;
+        request.tool_input = serde_json::json!({"actionId": action_id});
+        request.description = "Review this background output privately before deciding whether to share it with the agent. Approved output enters the agent's conversation history.".into();
+        self.wait_inner(
+            request,
+            sink,
+            cancel,
+            Some(PrivateOutput {
+                origin,
+                workspace_identity,
+                snapshot,
+                preview_token: None,
+                published: false,
+            }),
+        )
+        .await
+        .map(|answer| answer == Some(Value::Bool(true)))
+    }
+    #[cfg(test)]
+    async fn wait_private_output(
+        &self,
+        request: ApprovalRequest,
+        snapshot: Value,
+        sink: &dyn Interaction,
+        cancel: &Cancellation,
+    ) -> Result<bool, String> {
+        self.wait_private_output_bound(request, snapshot, uuid::Uuid::nil(), (0, 0), sink, cancel)
+            .await
     }
     async fn wait_inner(
         &self,
         request: ApprovalRequest,
         sink: &dyn Interaction,
         cancel: &Cancellation,
+        private_output: Option<PrivateOutput>,
     ) -> Result<Option<Value>, String> {
         cancel.check()?;
         if request.scope != self.scope || request.expires_at <= now_ms() {
             return Err("Approval scope or expiry is invalid".into());
         }
+        if request.tool_name == "background_read_output" && private_output.is_none() {
+            return Err("Background output requires private review".into());
+        }
+        let has_private_output = private_output.is_some();
         let (send, receive) = oneshot::channel();
         {
             let mut state = self.state.lock().await;
@@ -201,6 +282,7 @@ impl ApprovalGate {
                 request: request.clone(),
                 cancel: cancel.clone(),
                 reply: Some(send),
+                private_output,
             });
         }
         if let Err(error) = sink
@@ -219,6 +301,16 @@ impl ApprovalGate {
         {
             self.remove(&request.id).await;
             return Err(error);
+        }
+        if has_private_output {
+            let mut state = self.state.lock().await;
+            let review = state
+                .pending
+                .as_mut()
+                .filter(|pending| pending.request.id == request.id)
+                .and_then(|pending| pending.private_output.as_mut())
+                .ok_or("Private output review is no longer pending")?;
+            review.published = true;
         }
         let result = tokio::select! {
             biased;
@@ -307,7 +399,173 @@ impl ApprovalGate {
         sink: &dyn Interaction,
         expires_at: Option<i64>,
     ) -> Result<DecisionReceipt, String> {
+        self.decide_checked(id, approved, sink, expires_at, None, None)
+            .await
+    }
+
+    // Callers must hold the owner and session admission fences throughout this check and response.
+    #[cfg(test)]
+    pub(crate) async fn private_output_preview_checked(
+        &self,
+        id: &str,
+        check: &(dyn Fn() -> Result<(), String> + Send + Sync),
+    ) -> Result<(String, Value), String> {
         let mut state = self.state.lock().await;
+        self.private_output_preview_locked(&mut state, id, None, None, check)
+    }
+
+    pub(crate) fn try_private_output_preview_checked(
+        &self,
+        id: &str,
+        action_id: &str,
+        origin: uuid::Uuid,
+        workspace_identity: (u64, u64),
+        check: &(dyn Fn() -> Result<(), String> + Send + Sync),
+    ) -> Result<(String, Value), String> {
+        let mut state = self
+            .state
+            .try_lock()
+            .map_err(|_| "Approval is busy; retry")?;
+        self.private_output_preview_locked(
+            &mut state,
+            id,
+            Some(action_id),
+            Some((origin, workspace_identity)),
+            check,
+        )
+    }
+
+    fn private_output_preview_locked(
+        &self,
+        state: &mut ApprovalState,
+        id: &str,
+        action_id: Option<&str>,
+        origin: Option<(uuid::Uuid, (u64, u64))>,
+        check: &(dyn Fn() -> Result<(), String> + Send + Sync),
+    ) -> Result<(String, Value), String> {
+        check()?;
+        let pending = state
+            .pending
+            .as_mut()
+            .filter(|pending| {
+                pending.request.id == id
+                    && pending.request.scope == self.scope
+                    && action_id.is_none_or(|expected| {
+                        pending
+                            .request
+                            .tool_input
+                            .get("actionId")
+                            .and_then(Value::as_str)
+                            == Some(expected)
+                    })
+                    && pending.request.expires_at > now_ms()
+                    && !pending.cancel.is_cancelled()
+                    && pending
+                        .reply
+                        .as_ref()
+                        .is_some_and(|reply| !reply.is_closed())
+            })
+            .ok_or("Private output review is no longer pending")?;
+        let review = pending
+            .private_output
+            .as_mut()
+            .filter(|review| {
+                review.published
+                    && origin.is_none_or(|expected| {
+                        (review.origin, review.workspace_identity) == expected
+                    })
+            })
+            .ok_or("No private output review is pending")?;
+        let snapshot = review.snapshot.clone();
+        check()?;
+        let token = uuid::Uuid::new_v4().to_string();
+        review.preview_token = Some(token.clone());
+        Ok((token, snapshot))
+    }
+
+    #[cfg(test)]
+    async fn private_output_preview(&self, id: &str) -> Result<(String, Value), String> {
+        self.private_output_preview_checked(id, &|| Ok(())).await
+    }
+
+    // The token binds a preview to a decision; it does not replace caller authorization.
+    pub(crate) async fn decide_private_output_with_expiry(
+        &self,
+        id: &str,
+        action_id: &str,
+        token: &str,
+        origin: uuid::Uuid,
+        workspace_identity: (u64, u64),
+        sink: &dyn Interaction,
+        expires_at: i64,
+        check: &(dyn Fn() -> Result<(), String> + Send + Sync),
+    ) -> Result<DecisionReceipt, String> {
+        self.decide_checked(
+            id,
+            true,
+            sink,
+            Some(expires_at),
+            Some((origin, workspace_identity, action_id, token)),
+            Some(check),
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    async fn decide_private_output(
+        &self,
+        id: &str,
+        token: &str,
+        sink: &dyn Interaction,
+    ) -> Result<DecisionReceipt, String> {
+        let action_id = {
+            let state = self.state.lock().await;
+            state
+                .pending
+                .as_ref()
+                .filter(|pending| pending.request.id == id)
+                .and_then(|pending| {
+                    pending
+                        .request
+                        .tool_input
+                        .get("actionId")
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    state
+                        .private_decisions
+                        .get(id)
+                        .map(|(_, _, action, _)| action.as_str())
+                })
+                .unwrap_or("")
+                .to_string()
+        };
+        self.decide_private_output_with_expiry(
+            id,
+            &action_id,
+            token,
+            uuid::Uuid::nil(),
+            (0, 0),
+            sink,
+            i64::MAX,
+            &|| Ok(()),
+        )
+        .await
+    }
+
+    async fn decide_checked(
+        &self,
+        id: &str,
+        approved: bool,
+        sink: &dyn Interaction,
+        expires_at: Option<i64>,
+        private_token: Option<(uuid::Uuid, (u64, u64), &str, &str)>,
+        authority_check: Option<&(dyn Fn() -> Result<(), String> + Send + Sync)>,
+    ) -> Result<DecisionReceipt, String> {
+        let mut state = self.state.lock().await;
+        if let Some(check) = authority_check {
+            check()?;
+        }
         if expires_at.is_some_and(|expiry| now_ms() >= expiry) {
             return Err("Paired grant expired before approval".into());
         }
@@ -316,6 +574,17 @@ impl ApprovalGate {
             .iter()
             .find(|decision| decision.approval_id == id)
         {
+            if private_token.is_some_and(|(origin, workspace, action, token)| {
+                state
+                    .private_decisions
+                    .get(id)
+                    .map(|(actor, identity, saved_action, saved)| {
+                        (*actor, *identity, saved_action.as_str(), saved.as_str())
+                    })
+                    != Some((origin, workspace, action, token))
+            }) {
+                return Err("Private output review does not match this decision".into());
+            }
             if previous.approved != approved || (approved && state.answers.contains_key(id)) {
                 return Err("This exact action already has a different decision".into());
             }
@@ -329,8 +598,35 @@ impl ApprovalGate {
             .as_ref()
             .filter(|pending| pending.request.id == id && pending.reply.is_some())
             .ok_or("Approval ID is stale or does not match the pending action")?;
+        if private_token.is_some() && pending.request.tool_name != "background_read_output" {
+            return Err("This is not a private output review".into());
+        }
         if pending.request.tool_name == "ask_user" && approved {
             return Err("Answer the question before sending".into());
+        }
+        if approved
+            && pending.request.tool_name == "background_read_output"
+            && !pending
+                .private_output
+                .as_ref()
+                .and_then(|review| {
+                    review.preview_token.as_deref().map(|token| {
+                        (
+                            review.origin,
+                            review.workspace_identity,
+                            pending
+                                .request
+                                .tool_input
+                                .get("actionId")
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                            token,
+                        )
+                    })
+                })
+                .is_some_and(|binding| Some(binding) == private_token)
+        {
+            return Err("Review the private output before approving it".into());
         }
         if pending.request.scope != self.scope
             || pending.request.expires_at <= now_ms()
@@ -344,6 +640,9 @@ impl ApprovalGate {
         }
         if expires_at.is_some_and(|expiry| now_ms() >= expiry) {
             return Err("Paired grant expired before approval".into());
+        }
+        if let Some(check) = authority_check {
+            check()?;
         }
         sink.emit(StructuredSessionEvent::ApprovalResolved {
             ts: now_ms(),
@@ -359,6 +658,11 @@ impl ApprovalGate {
             approval_id: id.into(),
             approved,
         };
+        if let Some((origin, workspace, action, token)) = private_token {
+            state
+                .private_decisions
+                .insert(id.into(), (origin, workspace, action.into(), token.into()));
+        }
         state.decisions.push_back(receipt.clone());
         if let Some(reply) = state
             .pending
@@ -533,7 +837,7 @@ impl TurnResources {
         Ok(())
     }
     #[cfg(unix)]
-    pub(super) fn background_actor(
+    pub(crate) fn background_actor(
         &self,
         scope: &ActionScope,
     ) -> Option<Arc<dyn super::background_process::tool::BackgroundActor>> {
@@ -1017,6 +1321,269 @@ mod tests {
         );
         assert_eq!(task.await.unwrap().unwrap(), Some(answer));
     }
+    #[tokio::test]
+    async fn private_output_preview_and_decision_recheck_live_authority() {
+        let gate = Arc::new(ApprovalGate::new(scope()));
+        let sink = Arc::new(Sink::new());
+        let mut request = request();
+        request.tool_name = "background_read_output".into();
+        request.tool_input = json!({"actionId": "d".repeat(64)});
+        let id = request.id.clone();
+        let task = tokio::spawn({
+            let gate = gate.clone();
+            let sink = sink.clone();
+            async move {
+                gate.wait_private_output(
+                    request,
+                    json!({"stdout":"private"}),
+                    sink.as_ref(),
+                    &Cancellation::default(),
+                )
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_millis(300), sink.ready.notified())
+            .await
+            .unwrap();
+        assert!(gate
+            .private_output_preview_checked(&id, &|| Err("Credential revoked".into()))
+            .await
+            .is_err());
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        assert!(gate
+            .private_output_preview_checked(&id, &|| {
+                if checks.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(())
+                } else {
+                    Err("Credential revoked".into())
+                }
+            })
+            .await
+            .is_err());
+        let (token, _) = gate
+            .private_output_preview_checked(&id, &|| Ok(()))
+            .await
+            .unwrap();
+        assert!(gate
+            .decide_private_output_with_expiry(
+                &id,
+                &"d".repeat(64),
+                &token,
+                uuid::Uuid::nil(),
+                (0, 0),
+                sink.as_ref(),
+                now_ms() + 30_000,
+                &|| Err("Credential revoked".into())
+            )
+            .await
+            .is_err());
+        assert!(gate
+            .decide_private_output_with_expiry(
+                &id,
+                &"d".repeat(64),
+                &token,
+                uuid::Uuid::nil(),
+                (0, 0),
+                sink.as_ref(),
+                now_ms() - 1,
+                &|| Ok(())
+            )
+            .await
+            .is_err());
+        assert!(
+            gate.decide_private_output_with_expiry(
+                &id,
+                &"d".repeat(64),
+                &token,
+                uuid::Uuid::nil(),
+                (0, 0),
+                sink.as_ref(),
+                now_ms() + 30_000,
+                &|| Ok(())
+            )
+            .await
+            .unwrap()
+            .approved
+        );
+        assert!(task.await.unwrap().unwrap());
+    }
+
+    #[tokio::test]
+    async fn private_output_is_unavailable_until_the_approval_event_is_recorded() {
+        struct DelayedSink {
+            entered: Notify,
+            release: Notify,
+        }
+        #[async_trait]
+        impl Interaction for DelayedSink {
+            async fn emit(&self, _event: StructuredSessionEvent) -> Result<(), String> {
+                self.entered.notify_one();
+                self.release.notified().await;
+                Err("Approval journal unavailable".into())
+            }
+            async fn approve(&self, _request: ApprovalRequest) -> Result<bool, String> {
+                Err("Unexpected recursive approval".into())
+            }
+        }
+        let gate = Arc::new(ApprovalGate::new(scope()));
+        let sink = Arc::new(DelayedSink {
+            entered: Notify::new(),
+            release: Notify::new(),
+        });
+        let mut request = request();
+        request.tool_name = "background_read_output".into();
+        request.tool_input = json!({"actionId": "c".repeat(64)});
+        let id = request.id.clone();
+        let task = tokio::spawn({
+            let gate = gate.clone();
+            let sink = sink.clone();
+            async move {
+                gate.wait_private_output(
+                    request,
+                    json!({"stdout":"private"}),
+                    sink.as_ref(),
+                    &Cancellation::default(),
+                )
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_millis(300), sink.entered.notified())
+            .await
+            .unwrap();
+        assert!(gate.private_output_preview(&id).await.is_err());
+        sink.release.notify_one();
+        assert!(task.await.unwrap().is_err());
+        assert!(gate.private_output_preview(&id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn private_output_review_requires_the_preview_token_and_never_journals_output() {
+        let gate = Arc::new(ApprovalGate::new(scope()));
+        let sink = Arc::new(Sink::new());
+        let mut request = request();
+        request.tool_name = "background_read_output".into();
+        request.tool_input =
+            json!({"actionId": "a".repeat(64), "secret": "private-fixture-output"});
+        request.description = "private-fixture-output".into();
+        let id = request.id.clone();
+        let output = json!({"stdout": "private-fixture-output", "stderr": ""});
+        let waiting_gate = gate.clone();
+        let waiting_sink = sink.clone();
+        let expected = output.clone();
+        let task = tokio::spawn(async move {
+            waiting_gate
+                .wait_private_output(
+                    request,
+                    expected,
+                    waiting_sink.as_ref(),
+                    &Cancellation::default(),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_millis(300), sink.ready.notified())
+            .await
+            .unwrap();
+        assert!(gate.decide(&id, true, sink.as_ref()).await.is_err());
+        let (token, preview) = gate.private_output_preview(&id).await.unwrap();
+        assert_eq!(preview, output);
+        assert!(gate
+            .decide_private_output(&id, "wrong-token", sink.as_ref())
+            .await
+            .is_err());
+        assert!(
+            gate.decide_private_output(&id, &token, sink.as_ref())
+                .await
+                .unwrap()
+                .approved
+        );
+        assert!(task.await.unwrap().unwrap());
+        assert!(gate.private_output_preview(&id).await.is_err());
+        assert_eq!(
+            gate.decide_private_output(&id, &token, sink.as_ref())
+                .await
+                .unwrap()
+                .status,
+            "already_decided"
+        );
+        assert!(gate
+            .decide_private_output(&id, "wrong-token", sink.as_ref())
+            .await
+            .is_err());
+        assert!(!serde_json::to_string(&*sink.events.lock().await)
+            .unwrap()
+            .contains("private-fixture-output"));
+    }
+
+    #[tokio::test]
+    async fn private_output_review_invalidates_old_previews_and_cancellation() {
+        let gate = Arc::new(ApprovalGate::new(scope()));
+        let sink = Arc::new(Sink::new());
+        let cancel = Cancellation::default();
+        let mut request = request();
+        request.tool_name = "background_read_output".into();
+        request.tool_input = json!({"actionId": "b".repeat(64)});
+        let id = request.id.clone();
+        let task = tokio::spawn({
+            let gate = gate.clone();
+            let sink = sink.clone();
+            let cancel = cancel.clone();
+            async move {
+                gate.wait_private_output(
+                    request,
+                    json!({"stdout":"private"}),
+                    sink.as_ref(),
+                    &cancel,
+                )
+                .await
+            }
+        });
+        tokio::time::timeout(Duration::from_millis(300), sink.ready.notified())
+            .await
+            .unwrap();
+        let (first, _) = gate.private_output_preview(&id).await.unwrap();
+        let (second, _) = gate.private_output_preview(&id).await.unwrap();
+        assert!(gate
+            .decide_private_output(&id, &first, sink.as_ref())
+            .await
+            .is_err());
+        cancel.cancel();
+        assert!(gate
+            .decide_private_output(&id, &second, sink.as_ref())
+            .await
+            .is_err());
+        assert!(task.await.unwrap().is_err());
+        assert!(gate.private_output_preview(&id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ordinary_approval_rejects_background_output_before_emitting_any_event() {
+        let gate = ApprovalGate::new(scope());
+        let sink = Sink::new();
+        let mut request = request();
+        request.tool_name = "background_read_output".into();
+        request.description = "private-fixture-output".into();
+        assert!(gate
+            .wait(request, &sink, &Cancellation::default())
+            .await
+            .is_err());
+        assert!(sink.events.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn private_output_decision_cannot_approve_an_unrelated_action() {
+        let gate = Arc::new(ApprovalGate::new(scope()));
+        let sink = Arc::new(Sink::new());
+        let request = request();
+        let id = request.id.clone();
+        let task = waiting(gate.clone(), sink.clone(), Cancellation::default(), request).await;
+        assert!(gate
+            .decide_private_output(&id, "arbitrary", sink.as_ref())
+            .await
+            .is_err());
+        gate.decide(&id, false, sink.as_ref()).await.unwrap();
+        assert!(!task.await.unwrap().unwrap());
+    }
+
     #[tokio::test]
     async fn approval_is_bound_to_one_action_and_repeated_decisions_are_idempotent() {
         let gate = Arc::new(ApprovalGate::new(scope()));

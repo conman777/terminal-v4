@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo, useId, memo } from 'react';
 import { LightweightMarkdown } from './LightweightMarkdown';
 import { getBrowserToolDisplayInfo } from '../utils/browserToolPresentation';
+import { projectFileReference } from '../utils/projectFileReference';
 import './ToolCallBlock.css';
 
 // Regex to match file:line patterns
 const FILE_LINE_REGEX = /([\/\w\-\.]+\.[a-zA-Z0-9]+):(\d+)/g;
+const PROJECT_FILE_LINE_REGEX = /(?<![\p{L}\p{N}_./\\:%?#@-])((?:\/|\.\/)?[\p{L}\p{N}_.-]+(?:\/[\p{L}\p{N}_.-]+)*:\d+(?::\d+)?)(?![\p{L}\p{N}_./\\:%?#@-])/gu;
 
 // File link component
 const FileLink = memo(function FileLink({ path, line, onClick }) {
@@ -50,6 +52,22 @@ function parseFileLinks(text, onClick) {
   }
 
   return parts.length > 0 ? parts : text;
+}
+
+function parseProjectFileLinks(text, workspacePath, onClick) {
+  const parts = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(PROJECT_FILE_LINE_REGEX)) {
+    const file = projectFileReference(match[1], workspacePath);
+    if (!file) continue;
+    parts.push(text.slice(lastIndex, match.index));
+    parts.push(<button type="button" className="file-link" key={match.index}
+      aria-label={`Open ${match[1]} at line ${file.line}`} onClick={() => onClick(file)}>{match[1]}</button>);
+    lastIndex = match.index + match[1].length;
+  }
+  if (!parts.length) return text || ' ';
+  parts.push(text.slice(lastIndex));
+  return parts;
 }
 
 // Copy button component
@@ -589,13 +607,15 @@ function generateToolSummary(tool, input, output, isError) {
 }
 
 // Markdown renderer
-const MarkdownContent = memo(function MarkdownContent({ content }) {
+const MarkdownContent = memo(function MarkdownContent({ content, workspacePath, onFileClick }) {
   if (!content) return null;
 
   return (
     <LightweightMarkdown
       content={content}
       linkClassName="md-link"
+      workspacePath={workspacePath}
+      onFileClick={onFileClick}
       renderCodeActions={(code) => <CopyButton text={code} />}
     />
   );
@@ -844,7 +864,7 @@ function MessageActions({ item }) {
   </div>;
 }
 
-export default memo(function ToolCallBlock({ item, onFileClick }) {
+export default memo(function ToolCallBlock({ item, onFileClick, workspacePath, onProjectFileClick }) {
   // Default to collapsed for tool blocks
   const [expanded, setExpanded] = useState(false);
   const [showFullOutput, setShowFullOutput] = useState(false);
@@ -869,7 +889,7 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
         <div className="cc-assistant-bubble">
           <span className="cc-message-author cc-sr-only">{item.roleLabel || 'Assistant'}</span>
           <div className="cc-assistant-content">
-            <MarkdownContent content={item.content} />
+            <MarkdownContent content={item.content} workspacePath={workspacePath} onFileClick={onProjectFileClick} />
           </div>
         </div>
         <MessageActions item={item} />
@@ -909,7 +929,7 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
     const backgroundStart = tool === 'delegate_task_background' && !isError && hasResult ? backgroundDelegationStart(output) : null;
 
     // Generate summary for the header
-    const summary = backgroundStart ? 'Result follows in the queue' : sessionTodos ? `${sessionTodos.length} ${sessionTodos.length === 1 ? 'task' : 'tasks'}` : hasResult && !output ? (isError ? 'Error' : 'No output') : generateToolSummary(item.tool, item.toolInput, output, isError);
+    const summary = backgroundStart ? 'Delivery details' : sessionTodos ? `${sessionTodos.length} ${sessionTodos.length === 1 ? 'task' : 'tasks'}` : hasResult && !output ? (isError ? 'Error' : 'No output') : generateToolSummary(item.tool, item.toolInput, output, isError);
 
     // Edit tool with diff
     const isEditTool = tool === 'edit' || tool === 'replace_text';
@@ -954,7 +974,10 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
                 <div className="cc-tool-output" tabIndex={0} data-conversation-scroll-region>{result.status === 'completed' ? result.result : result.error}</div>
               </div>)}
             </section>}
-            {backgroundStart && <p className="cc-tool-section">{backgroundStart.delivery}</p>}
+            {backgroundStart && <section className="cc-tool-section">
+              <p>{backgroundStart.delivery}</p>
+              <p>Find retained results in Project tools → Tasks &amp; schedules.</p>
+            </section>}
             {displayInfo.input && (
               <section className="cc-tool-section">
                 <div className="cc-tool-section-label">
@@ -986,7 +1009,8 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
                 <div className="cc-tool-output" tabIndex={0} role="region" aria-label={isError ? 'Error output' : 'Output'} data-conversation-scroll-region>
                   {displayLines.map((line, idx) => (
                     <div key={idx} className="cc-output-line">
-                      {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
+                      {onProjectFileClick && workspacePath ? parseProjectFileLinks(line, workspacePath, onProjectFileClick)
+                        : onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
                     </div>
                   ))}
                 </div>

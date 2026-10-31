@@ -129,5 +129,19 @@ for (const width of [320, 390]) {
     await page.keyboard.press('Enter');
     await expect(terminal.locator('.xterm-rows')).toContainText('restored-thread-pty');
     await page.screenshot({ path: testInfo.outputPath('restored-thread-terminal.png'), animations: 'disabled' });
+    await terminal.getByRole('button', { name: 'Close Terminal 1', exact: true }).click();
+    const confirmation = terminal.getByRole('group', { name: 'Confirm closing Terminal 1' });
+    await expect(confirmation).toBeInViewport({ ratio: 1 });
+    await confirmation.getByRole('button', { name: 'Keep open', exact: true }).click();
+    await expect(terminal.getByRole('tab', { name: 'Terminal 1', exact: true })).toBeVisible();
+    await terminal.getByRole('button', { name: 'Close Terminal 1', exact: true }).click();
+    await confirmation.getByRole('button', { name: 'Close Terminal 1', exact: true }).click();
+    await expect(terminal).toHaveCount(0);
+    await expect.poll(() => page.evaluate(async id => {
+      const headers = { Authorization: `Bearer ${localStorage.getItem('terminal_access_token')}` };
+      const inventory = await (await fetch('/api/terminal', { headers })).json();
+      return inventory.sessions.some((item: any) => item.id === id);
+    }, companions[0])).toBe(false);
+    await expect(composer).toHaveValue('Keep the conversation draft');
   });
 }

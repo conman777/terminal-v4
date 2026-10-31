@@ -24,6 +24,33 @@ const chats = () => screen.getAllByTestId('terminal-chat').map(node => node.data
 beforeEach(() => { localStorage.clear(); setUser({ id: 'drawer-user' }); });
 
 describe('ThreadTerminalDrawer', () => {
+  it('switches a live split to stacked panes, resizes it, and restores that layout', async () => {
+    const view = render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Split terminal' }));
+    const separator = await screen.findByRole('separator', { name: 'Resize terminal split' });
+    const originalTerminals = screen.getAllByTestId('terminal-chat');
+    fireEvent.click(screen.getByRole('button', { name: 'Stack terminals' }));
+    expect(separator).toHaveAttribute('aria-orientation', 'horizontal');
+    expect(separator.parentElement).toHaveClass('thread-terminal-panes-stacked');
+    expect(screen.getByRole('region', { name: 'Thread terminal' })).toHaveStyle({ flexBasis: '360px' });
+    expect(screen.getAllByTestId('terminal-chat')).toEqual(originalTerminals);
+    fireEvent.keyDown(separator, { key: 'ArrowDown' });
+    expect(separator).toHaveAttribute('aria-valuenow', '55');
+    separator.parentElement.getBoundingClientRect = () => ({ left: 0, width: 400, right: 400, top: 100, bottom: 500, height: 400 });
+    fireEvent.pointerDown(separator, { pointerId: 1, button: 0 });
+    fireEvent.pointerMove(separator, { pointerId: 1, clientY: 220 });
+    fireEvent.pointerUp(separator, { pointerId: 1 });
+    expect(separator).toHaveAttribute('aria-valuenow', '30');
+    view.unmount();
+    render(<Harness initial={['pty-1', 'pty-2']} />);
+    const restored = screen.getByRole('separator', { name: 'Resize terminal split' });
+    expect(restored).toHaveAttribute('aria-orientation', 'horizontal');
+    expect(restored).toHaveAttribute('aria-valuenow', '30');
+    fireEvent.click(screen.getByRole('button', { name: 'Show terminals side by side' }));
+    expect(restored).toHaveAttribute('aria-orientation', 'vertical');
+    expect(screen.getAllByTestId('terminal-chat')).toHaveLength(2);
+  });
+
   it('splits the drawer by creating a second terminal without moving focus away from the first', async () => {
     const calls = { add: vi.fn() };
     render(<Harness calls={calls} />);

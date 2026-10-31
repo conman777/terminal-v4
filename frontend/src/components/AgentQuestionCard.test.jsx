@@ -8,6 +8,51 @@ const questions = [
 ];
 
 describe('AgentQuestionCard', () => {
+  it('sends several selected choices and a custom answer for a multi-select question', () => {
+    const onAnswer = vi.fn();
+    render(<AgentQuestionCard questions={[{ id: 'devices', question: 'Which devices?', multiSelect: true, options: [{ label: 'Phone' }, { label: 'Desktop' }] }]} onAnswer={onAnswer} onDismiss={vi.fn()} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Phone' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Desktop' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Something else' }));
+    expect(screen.getByRole('button', { name: 'Send answers' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Your answer to: Which devices?' }), { target: { value: ' Tablet ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }));
+    expect(onAnswer).toHaveBeenCalledWith({ devices: ['Phone', 'Desktop', 'Tablet'] });
+  });
+
+  it('prevents sending a duplicate custom selection and retains other selected values', () => {
+    const onAnswer = vi.fn();
+    render(<AgentQuestionCard questions={[{ id: 'devices', question: 'Which devices?', multiSelect: true, options: [{ label: 'Phone' }, { label: 'Desktop' }] }]} onAnswer={onAnswer} onDismiss={vi.fn()} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Phone' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Something else' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Your answer to: Which devices?' }), { target: { value: 'Phone' } });
+    expect(screen.getByRole('button', { name: 'Send answers' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Something else' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }));
+    expect(onAnswer).toHaveBeenCalledWith({ devices: ['Phone'] });
+  });
+
+  it('treats question IDs that match object prototype names as ordinary IDs', () => {
+    const onAnswer = vi.fn();
+    render(<AgentQuestionCard questions={[
+      { id: 'constructor', question: 'Choose one?', options: [{ label: 'Yes' }, { label: 'No' }] },
+      { id: '__proto__', question: 'Explain?' },
+    ]} onAnswer={onAnswer} onDismiss={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Send answers' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('radio', { name: 'Yes' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Explain?' }), { target: { value: 'Details' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }));
+    expect(onAnswer).toHaveBeenCalledWith(Object.fromEntries([['constructor', ['Yes']], ['__proto__', ['Details']]]));
+  });
+
+  it('supports a multi-select question whose ID matches an object prototype name', () => {
+    const onAnswer = vi.fn();
+    render(<AgentQuestionCard questions={[{ id: '__proto__', question: 'Choose devices?', multiSelect: true, options: [{ label: 'Phone' }, { label: 'Desktop' }] }]} onAnswer={onAnswer} onDismiss={vi.fn()} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Phone' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Desktop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send answers' }));
+    expect(onAnswer).toHaveBeenCalledWith(Object.fromEntries([['__proto__', ['Phone', 'Desktop']]]));
+  });
   it('sends one answer per question once every question is answered', () => {
     const onAnswer = vi.fn();
     render(<AgentQuestionCard questions={questions} onAnswer={onAnswer} onDismiss={vi.fn()} />);
@@ -80,5 +125,17 @@ describe('AgentQuestionCard keyboard and counter', () => {
     fireEvent.keyDown(document.body, { key: '1' });
     fireEvent.keyDown(document.body, { key: 'Enter' });
     expect(onAnswer).not.toHaveBeenCalled();
+  });
+
+  it('uses number keys to toggle multiple options within the focused multi-select question', async () => {
+    render(<AgentQuestionCard questions={[{ id: 'devices', question: 'Which devices?', multiSelect: true, options: [{ label: 'Phone' }, { label: 'Desktop' }] }, ...batch.slice(0, 1)]} onAnswer={vi.fn()} onDismiss={vi.fn()} />);
+    fireEvent.keyDown(document.body, { key: '1' });
+    const phone = screen.getByRole('checkbox', { name: 'Phone' });
+    await vi.waitFor(() => expect(phone).toHaveFocus());
+    fireEvent.keyDown(phone, { key: '2' });
+    expect(screen.getByRole('checkbox', { name: 'Desktop' })).toBeChecked();
+    fireEvent.keyDown(phone, { key: '1' });
+    expect(phone).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Yes' })).not.toBeChecked();
   });
 });

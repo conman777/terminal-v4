@@ -55,6 +55,19 @@ beforeEach(async () => {
 afterEach(async () => { await context?.close(); release(); });
 
 describe('refreshTokens across independent same-origin browser tabs', () => {
+  it('reuses a rotation when a waiting tab captured its access token before its refresh token', async () => {
+    for (const page of [first, second]) await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
+    await start(first); await expect.poll(() => requests.length).toBe(1);
+    // Simulate observing the access write in the middle of another tab's two-key rotation.
+    await second.evaluate(access => localStorage.setItem('terminal_access_token', access), rotated.access);
+    await start(second);
+    // The waiting tab has captured the mixed pair; let the owner finish its normal guarded write.
+    await second.evaluate(access => localStorage.setItem('terminal_access_token', access), initial.access);
+    release(); await Promise.all([finished(first), finished(second)]);
+    expect(await snapshot(second)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+    expect(requests).toEqual([{ refreshToken: initial.refresh }]);
+  });
+
   it('serializes rotating refresh tokens across tabs when HTTP has no Web Locks', async () => {
     for (const page of [first, second]) await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
     await start(first); await expect.poll(() => requests.length).toBe(1);
@@ -62,6 +75,30 @@ describe('refreshTokens across independent same-origin browser tabs', () => {
     release(); await Promise.all([finished(first), finished(second)]);
     expect(await snapshot(first)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
     expect(await snapshot(second)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+    expect(requests).toEqual([{ refreshToken: initial.refresh }]);
+  });
+
+  it('reuses a completed rotation when the provider keeps the same access token', async () => {
+    for (const page of [first, second]) await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
+    await start(first); await expect.poll(() => requests.length).toBe(1);
+    await start(second);
+    release(200, { tokens: { accessToken: initial.access, refreshToken: rotated.refresh } });
+    await Promise.all([finished(first), finished(second)]);
+    expect(await snapshot(second)).toEqual({ outcome: { accessToken: initial.access }, access: initial.access, refresh: rotated.refresh, user: identity });
+    expect(requests).toEqual([{ refreshToken: initial.refresh }]);
+  });
+
+  it.each(['account', 'same-account-login'])('fences %s while an HTTP tab waits for the refresh transaction', async change => {
+    for (const page of [first, second]) await page.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
+    await start(first); await expect.poll(() => requests.length).toBe(1);
+    await start(second);
+    await second.evaluate(change => {
+      auth.setTokens('synthetic-new-login-access', 'synthetic-new-login-refresh');
+      auth.setUser({ id: change === 'account' ? 'synthetic-other-owner' : 'synthetic-owner' });
+    }, change);
+    release(); await Promise.all([finished(first), finished(second)]);
+    expect((await snapshot(second)).outcome).toEqual({ error: 'Authentication changed' });
+    expect(await second.evaluate(() => ({ access: auth.getAccessToken(), refresh: auth.getRefreshToken() }))).toEqual({ access: 'synthetic-new-login-access', refresh: 'synthetic-new-login-refresh' });
     expect(requests).toEqual([{ refreshToken: initial.refresh }]);
   });
 

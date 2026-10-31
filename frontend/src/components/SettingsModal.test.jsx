@@ -64,6 +64,42 @@ function withNavigator(navigatorLike, testFn) {
 }
 
 describe('SettingsModal', () => {
+  it('persists the desktop composer scrolling preference', () => {
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+    const view = render(<SettingsModal {...buildProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Interface' }));
+    const group = screen.getByRole('group', { name: 'Compact composer on scroll' });
+    const off = group.querySelector('button[aria-label="Keep composer expanded"]');
+    fireEvent.click(off);
+    expect(off).toHaveAttribute('aria-pressed', 'true');
+    expect(localStorage.getItem('tv4.composerCollapseOnScroll')).toBe('false');
+    view.unmount();
+    render(<SettingsModal {...buildProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Interface' }));
+    expect(screen.getByRole('button', { name: 'Keep composer expanded' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Compact composer while scrolling' }));
+    expect(localStorage.getItem('tv4.composerCollapseOnScroll')).toBe('true');
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+  });
+
+  it('keeps the preference usable in this tab and reports when browser storage fails', () => {
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+    const originalSetItem = Storage.prototype.setItem;
+    const storage = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (key, value) {
+      if (key === 'tv4.composerCollapseOnScroll') throw new Error('storage unavailable');
+      return originalSetItem.call(this, key, value);
+    });
+    const view = render(<SettingsModal {...buildProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Interface' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keep composer expanded' }));
+    expect(screen.getByRole('button', { name: 'Keep composer expanded' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('alert')).toHaveTextContent('only in this tab');
+    storage.mockRestore();
+    fireEvent.click(screen.getByRole('button', { name: 'Compact composer while scrolling' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    view.unmount();
+    localStorage.removeItem('tv4.composerCollapseOnScroll');
+  });
   it('exposes the current settings section and selected toggle state', () => {
     render(<SettingsModal {...buildProps({ showTabStatusLabels: false })} />);
     expect(screen.getByRole('dialog', { name: 'Session Settings' })).toBeVisible();

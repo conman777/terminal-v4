@@ -84,7 +84,18 @@ export function FindInThread({ open, onClose, focusRequest }) {
       }
       return;
     }
-    if (selected.node !== scrolledRef.current) selected.node.scrollIntoView?.({ block: 'center' });
+    let destination = selected.node;
+    if (revealRef.current) {
+      const needle = query.trim().toLowerCase();
+      for (const details of selected.node.querySelectorAll('details.md-details')) {
+        const body = details.querySelector(':scope > .md-details-content');
+        if (body?.textContent.toLowerCase().includes(needle)) {
+          details.open = true;
+          destination = body;
+        }
+      }
+    }
+    if (selected.node !== scrolledRef.current) destination.scrollIntoView?.({ block: 'center' });
     scrolledRef.current = selected.node;
     revealRef.current = false;
   };

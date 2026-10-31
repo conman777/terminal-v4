@@ -20,6 +20,7 @@ import { ScreenshotGallery } from './components/ScreenshotGallery';
 import { formatBinding, loadBindings } from './utils/keybindings';
 import { isCompanionSession } from './utils/sidebarSessionScope';
 import { projectNameFromPath } from './utils/projectBadge';
+import { projectFileReference } from './utils/projectFileReference';
 import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense, useSyncExternalStore } from 'react';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
@@ -1769,9 +1770,11 @@ function AppContent({ serverControl }) {
     : isStructuredSessionId(navigationSession.id)
       ? navigationSession.thread?.projectPath || navigationSession.cwd || currentWorkspacePath
       : currentWorkspacePath || navigationSession.cwd;
-  const fileTargetIsCurrent = Boolean(filePaneTarget && !isMobile && !showWorkspaceStart
-    && filePaneTarget.desktopId === activeDesktopId && filePaneTarget.paneId === activeFilePaneId
-    && filePaneTarget.sessionId === activeSessionId && filePaneTarget.sessionId === filePaneScope.current.pane?.sessionId);
+  const fileTargetIsCurrent = Boolean(filePaneTarget && !showWorkspaceStart && filePaneTarget.sessionId === activeSessionId
+    && (!filePaneTarget.auth || isAuthScopeCurrent(filePaneTarget.auth))
+    && (!filePaneTarget.environment || filePaneTarget.environment === getEnvironmentSignal() && !filePaneTarget.environment.aborted)
+    && (filePaneTarget.mobile ? isMobile : !isMobile && filePaneTarget.desktopId === activeDesktopId
+      && filePaneTarget.paneId === activeFilePaneId && filePaneTarget.sessionId === filePaneScope.current.pane?.sessionId));
   const filesInitialPath = fileTargetIsCurrent ? filePaneTarget.path : navigationWorkspacePath || (navigationSession ? null : '~');
   const filesWorkspaceKey = fileTargetIsCurrent ? `pane-files:${filePaneTarget.request}` : navigationWorkspacePath || (navigationSession ? `pending:${navigationSession.id}` : 'home');
   useEffect(() => {
@@ -1782,6 +1785,21 @@ function AppContent({ serverControl }) {
     if (typeof path !== 'string' || !path || !pane?.sessionId) return;
     setFilePaneTarget({ desktopId, paneId: pane.id, sessionId: pane.sessionId, path, request: ++filePaneRequest.current });
     setShowFileManager(true);
+  };
+  const handleRevealProjectFile = ({ sessionId, root, file, paneId, desktopId, mobile = false }) => {
+    if (showWorkspaceStart || mobile !== isMobile || navigationSession?.id !== sessionId || navigationSession.cwd !== root
+      || !environmentAllows(getActiveEnvironment(), 'transfer')) return false;
+    if (!mobile && (filePaneScope.current.desktopId !== desktopId || filePaneScope.current.pane?.id !== paneId
+      || filePaneScope.current.pane?.sessionId !== sessionId)) return false;
+    const checked = projectFileReference(`${file?.path}:${file?.line}`, root);
+    if (!checked || checked.path !== file.path || checked.line !== file.line) return false;
+    const parts = file.path.split('/'); parts.pop();
+    const base = root === '/' ? '' : root.replace(/\/+$/, '');
+    const path = parts.length ? `${base}/${parts.join('/')}` : base || '/';
+    setFilePaneTarget({ desktopId, paneId, mobile, sessionId, path, projectTarget: { root, path: file.path },
+      auth: captureAuthScope(), environment: getEnvironmentSignal(), request: ++filePaneRequest.current });
+    setShowFileManager(true);
+    return true;
   };
   const navigationDraftId = navigationSession?.id || 'workspace-start';
   const readNavigationResponse = () => workspaceResponses.get(navigationSession?.id) || '';
@@ -2011,6 +2029,8 @@ function AppContent({ serverControl }) {
                       onSelectSession={handleSelectSession}
                       currentPath={workspaceDraftPath || startupWorkspacePath}
                       projects={sidebarProjects}
+                      sessions={activeSessions}
+                      customAiProviders={customAiProviders}
                       recentFolders={recentFolders}
                       onSelectWorkspace={setWorkspaceDraftPath}
                       onCreateSession={path => typeof path === 'string' && path ? handleRequestNewSession(path) : openNewTerminal()}
@@ -2024,6 +2044,7 @@ function AppContent({ serverControl }) {
                     <ErrorBoundary name="terminal" resetKey={activeSessionId}>
                       <SplitPaneContainer
                         onOpenFiles={handleOpenPaneFiles}
+                        onRevealProjectFile={handleRevealProjectFile}
                         onFindInThread={handlePaneFind}
                         onStartThreadWithPrompt={handleStartThreadWithPrompt}
                         onWorkspaceResponseChange={handleWorkspaceResponseChange}
@@ -2147,6 +2168,7 @@ function AppContent({ serverControl }) {
                 key={filesWorkspaceKey}
                 initialPath={filesInitialPath}
                 sessionId={navigationSession?.id || null}
+                projectTarget={fileTargetIsCurrent ? filePaneTarget.projectTarget : null}
                 isOpen={showFileManager}
                 onClose={() => setShowFileManager(false)}
                 onNavigateTerminal={handleNavigateToPath}
@@ -2268,12 +2290,14 @@ function AppContent({ serverControl }) {
               <div className="mobile-workspace-surface" inert={mobileView === 'preview' ? '' : undefined} aria-hidden={mobileView === 'preview' || undefined}>
                 <MobileShell
                   visible={mobileView !== 'preview' && !showSystemResources}
+                  onRevealProjectFile={handleRevealProjectFile}
                   onWorkspaceResponseChange={handleWorkspaceResponseChange}
                   showWorkspaceStart={showWorkspaceStart}
                   onSelectHistorySession={handleSelectHistorySession}
                   sessions={activeSessions}
                   terminalSessions={sessions}
                   threadTerminalOpen={mobileThreadTerminal?.sessionId === activeSessionId && mobileThreadTerminal.open}
+                  onThreadTerminalOpenChange={(threadId, open) => setMobileThreadTerminal(current => current?.sessionId === threadId ? { ...current, open } : current)}
                   activeSessionId={showWorkspaceStart ? null : activeSessionId}
                   onSelectSession={selectSession}
                   onCreateSession={path => typeof path === 'string' && path ? handleRequestNewSession(path) : openNewTerminal()}
@@ -2334,6 +2358,7 @@ function AppContent({ serverControl }) {
               key={filesWorkspaceKey}
               initialPath={filesInitialPath}
               sessionId={navigationSession?.id || null}
+              projectTarget={fileTargetIsCurrent ? filePaneTarget.projectTarget : null}
               isOpen={showFileManager}
               onClose={() => setShowFileManager(false)}
               onNavigateTerminal={handleNavigateToPath}

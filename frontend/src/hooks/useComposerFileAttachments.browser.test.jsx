@@ -14,7 +14,7 @@ beforeAll(async () => {
     import AttachmentDraftStatus from './src/components/AttachmentDraftStatus';
     setEnvironmentIdentity('fixture-owner', location.origin);
     function App() {
-      const [items, setItems, error, retry, restored, conflict, useSaved, validate] = useComposerFileAttachments('fixture-thread');
+      const [items, setItems, error, retry, restored, conflict, useSaved, validate, , , pending, dispatch] = useComposerFileAttachments('fixture-thread');
       const [message, setMessage] = useState('');
       const add = (name) => setItems(current => [...current, {name, path: '/fixture/' + name, bytes: 'not persisted'}]);
       return <main><textarea aria-label="Draft" value={message} onChange={event => setMessage(event.target.value)} />
@@ -22,7 +22,8 @@ beforeAll(async () => {
         <output aria-label="Current files">{items.map(item => item.name).join(', ')}</output>
         <output aria-label="Restored">{String(restored)}</output>
         {error && <AttachmentDraftStatus error={error} conflict={conflict} onRetry={retry} onUseSaved={useSaved} />}
-        <button disabled={Boolean(error)} onClick={() => validate()}>Send</button></main>;
+        {pending && <p role="status">Saving file selections…</p>}
+        <button disabled={Boolean(error) || pending} onClick={() => dispatch(items, () => true, () => { window.sentFiles = items.map(item => item.name); })}>Send</button></main>;
     }
     createRoot(document.getElementById('root')).render(<App />);
   `;
@@ -47,6 +48,26 @@ afterAll(async () => {
   server?.closeAllConnections();
   if (server) await new Promise(resolve => server.close(resolve));
 });
+
+const holdWriteLock = page => page.evaluate(() => new Promise((resolve, reject) => {
+  const opening = indexedDB.open('terminal-v4-file-selection-lock', 1);
+  opening.onupgradeneeded = () => opening.result.createObjectStore('lock');
+  opening.onerror = () => reject(opening.error);
+  opening.onsuccess = () => {
+    const transaction = opening.result.transaction('lock', 'readwrite');
+    const store = transaction.objectStore('lock');
+    window.releaseFixtureLock = false;
+    let announced = false;
+    const keepAlive = () => {
+      const request = store.get('selection');
+      request.onsuccess = () => {
+        if (!announced) { announced = true; resolve(); }
+        if (!window.releaseFixtureLock) keepAlive();
+      };
+    };
+    keepAlive();
+  };
+}));
 
 describe.each([320, 1200])('attachment conflict recovery at %ipx', width => {
   it('reviews a real second-tab change and rejects a stale review without losing local work', async () => {
@@ -89,6 +110,105 @@ describe.each([320, 1200])('attachment conflict recovery at %ipx', width => {
       expect(await second.evaluate(() => Object.entries(localStorage).find(([key]) => key.includes('composerFiles:'))[1])).toBe(before);
       expect(before).not.toContain('not persisted');
       expect(await first.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    } finally { await context.close(); }
+  }, 15000);
+
+  it('retains this tab’s unsaved selection after a conflicting change and reload', async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    context.setDefaultTimeout(3000);
+    try {
+      const first = await context.newPage(), second = await context.newPage();
+      await first.goto(origin);
+      await second.goto(origin);
+      await first.getByRole('button', { name: 'Add mine' }).click();
+      await second.getByRole('button', { name: 'Review saved files' }).click();
+      await second.getByRole('button', { name: 'Use saved files' }).click();
+      await second.getByRole('button', { name: 'Add theirs' }).click();
+      await first.getByRole('button', { name: 'Add later' }).click();
+      expect(await first.getByLabel('Current files').textContent()).toBe('mine.txt, later.txt');
+      await first.reload();
+      expect(await first.getByLabel('Current files').textContent()).toBe('mine.txt, later.txt');
+      expect(await first.getByRole('button', { name: 'Send' }).isDisabled()).toBe(true);
+      await first.getByRole('button', { name: 'Review saved files' }).click();
+      expect(await first.getByRole('group', { name: 'Saved file selections' }).textContent()).toContain('theirs.txt');
+      expect(await second.evaluate(() => Object.entries(localStorage).find(([key]) => key.includes('composerFiles:'))[1])).toContain('theirs.txt');
+    } finally { await context.close(); }
+  }, 15000);
+
+  it('serializes competing saves and preserves the losing tab through reload', async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    context.setDefaultTimeout(5000);
+    try {
+      const first = await context.newPage(), second = await context.newPage();
+      await Promise.all([first.goto(origin), second.goto(origin)]);
+      await holdWriteLock(first);
+      await Promise.all([first.getByRole('button', { name: 'Add mine' }).click(), second.getByRole('button', { name: 'Add theirs' }).click()]);
+      expect(await first.getByRole('button', { name: 'Send' }).isDisabled()).toBe(true);
+      expect(await second.getByRole('button', { name: 'Send' }).isDisabled()).toBe(true);
+      expect(await first.getByLabel('Current files').textContent()).toBe('mine.txt');
+      expect(await second.getByLabel('Current files').textContent()).toBe('theirs.txt');
+      await first.evaluate(() => { window.releaseFixtureLock = true; });
+      await Promise.all([first.getByText('Saving file selections…').waitFor({ state: 'hidden' }), second.getByText('Saving file selections…').waitFor({ state: 'hidden' })]);
+      const firstConflict = await first.getByRole('alert').count();
+      const secondConflict = await second.getByRole('alert').count();
+      expect(firstConflict + secondConflict).toBe(1);
+      const loser = firstConflict ? first : second;
+      const expected = firstConflict ? 'mine.txt' : 'theirs.txt';
+      await loser.reload();
+      expect(await loser.getByLabel('Current files').textContent()).toBe(expected);
+      expect(await loser.getByRole('button', { name: 'Send' }).isDisabled()).toBe(true);
+      expect(await loser.getByRole('button', { name: 'Review saved files' }).count()).toBe(1);
+    } finally { await context.close(); }
+  }, 15000);
+
+  it('does not dispatch a stale selection when another tab saves first', async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    context.setDefaultTimeout(5000);
+    try {
+      const first = await context.newPage(), second = await context.newPage();
+      await second.addInitScript(() => {
+        window.fixtureTransactions = 0;
+        const original = IDBDatabase.prototype.transaction;
+        IDBDatabase.prototype.transaction = function (...args) {
+          if (args[0] === 'lock') window.fixtureTransactions += 1;
+          return original.apply(this, args);
+        };
+      });
+      await Promise.all([first.goto(origin), second.goto(origin)]);
+      await first.getByRole('button', { name: 'Add mine' }).click();
+      await first.getByText('Saving file selections…').waitFor({ state: 'hidden' });
+      await second.getByRole('button', { name: 'Review saved files' }).click();
+      await second.getByRole('button', { name: 'Use saved files' }).click();
+      await holdWriteLock(first);
+      await second.getByRole('button', { name: 'Add theirs' }).click();
+      await second.waitForFunction(() => window.fixtureTransactions > 0);
+      await first.getByRole('button', { name: 'Send' }).click();
+      await first.evaluate(() => { window.releaseFixtureLock = true; });
+      await second.getByText('Saving file selections…').waitFor({ state: 'hidden' });
+      await first.getByRole('alert').waitFor();
+      expect(await first.evaluate(() => window.sentFiles)).toBeUndefined();
+      expect(await first.getByLabel('Current files').textContent()).toBe('mine.txt');
+      expect(await first.getByRole('button', { name: 'Send' }).isDisabled()).toBe(true);
+      await first.getByRole('button', { name: 'Review saved files' }).click();
+      expect(await first.getByRole('group', { name: 'Saved file selections' }).textContent()).toContain('theirs.txt');
+    } finally { await context.close(); }
+  }, 15000);
+
+  it('keeps the local selection and blocks send if transaction storage is unavailable', async () => {
+    const context = await browser.newContext({ viewport: { width, height: 800 } });
+    try {
+      const page = await context.newPage();
+      await page.addInitScript(() => Object.defineProperty(window, 'indexedDB', { configurable: true, value: undefined }));
+      await page.goto(origin);
+      await page.getByRole('button', { name: 'Send' }).click();
+      await page.waitForFunction(() => Array.isArray(window.sentFiles));
+      expect(await page.evaluate(() => window.sentFiles)).toEqual([]);
+      await page.getByRole('button', { name: 'Add mine' }).click();
+      await page.getByRole('alert').waitFor();
+      expect(await page.getByLabel('Current files').textContent()).toBe('mine.txt');
+      expect(await page.getByRole('button', { name: 'Send' }).isDisabled()).toBe(true);
+      expect(await page.evaluate(() => Object.keys(localStorage).some(key => key.includes('composerFiles:')))).toBe(false);
+      expect(await page.evaluate(() => Object.values(sessionStorage).some(value => value.includes('mine.txt')))).toBe(true);
     } finally { await context.close(); }
   }, 15000);
 });

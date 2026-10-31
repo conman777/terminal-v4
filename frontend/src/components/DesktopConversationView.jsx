@@ -12,11 +12,16 @@ import ToolCallBlock, { getToolDisplayInfo, sessionTodoResult } from './ToolCall
 import { getBrowserToolDisplayInfo } from '../utils/browserToolPresentation';
 import { V4UserImages } from './V4UserImages';
 import { AgentQuestionCard } from './AgentQuestionCard';
+import { PrivateOutputReview } from './PrivateOutputReview';
 import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../utils/aiProviders';
 import { useConversationScroll } from '../hooks/useConversationScroll';
 import { parseInteractivePromptSnapshot, parseInteractivePromptEvent } from '../utils/interactivePrompt';
 import { workspaceKeyboardBlocked } from '../utils/workspaceKeyboardScope';
 import { foldedMessageKey, registerFoldedSearchGroup } from '../utils/foldedConversationSearch';
+import { ProjectFilePreview } from './ProjectFilePreview';
+import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
+import { getActiveEnvironment, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { environmentAllows } from '../utils/runtimePermissions';
 
 function UncertainApprovalReview({ approval, onReview, disabled, isStreaming }) {
   const [checked, setChecked] = useState(false);
@@ -959,12 +964,23 @@ export function DesktopConversationView({
   allowPromptKeyboardCapture = false,
   workspacePath = '',
   allowApprovalForSession = false,
+  privateReviewVisible = true,
+  filePreviewVisible = true,
+  onRevealProjectFile,
   onImplementPlan,
   onImplementPlanInNewThread,
   onEditMessage,
   onForkFromMessage,
   onDiffComment,
 }) {
+  const [filePreview, setFilePreview] = useState(null);
+  useEffect(() => {
+    setFilePreview(null);
+    const auth = captureAuthScope();
+    const unsubscribeAuth = subscribeAuth(() => { if (!isAuthScopeCurrent(auth)) setFilePreview(null); });
+    const unsubscribeEnvironment = subscribeEnvironment(() => setFilePreview(null));
+    return () => { unsubscribeAuth(); unsubscribeEnvironment(); };
+  }, [sessionId, workspacePath, filePreviewVisible]);
   const timeline = [];
   for (const message of structuredMessages) {
     const previous = timeline[timeline.length - 1];
@@ -974,6 +990,8 @@ export function DesktopConversationView({
   }
   const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
   const isStructured = mode === 'structured';
+  const canPreviewFiles = Boolean(isStructured && sessionId && workspacePath && filePreviewVisible && environmentAllows(getActiveEnvironment(), 'transfer'));
+  const openProjectFile = canPreviewFiles ? file => setFilePreview({ sessionId, root: workspacePath, file }) : undefined;
   const turnChanges = useTurnChanges(isStructured ? sessionId : null, isStreaming);
   const approvalInfo = pendingApproval ? getToolDisplayInfo({ tool: pendingApproval.toolName, toolInput: pendingApproval.toolInput }) : null;
   const scheduleReview = ['create_schedule', 'manage_schedule'].includes(pendingApproval?.toolName)
@@ -1138,6 +1156,8 @@ export function DesktopConversationView({
 
   return (
     <div className="desktop-conversation-view mode-conversation" data-conversation-session-id={sessionId}>
+      {canPreviewFiles && filePreview?.sessionId === sessionId && filePreview.root === workspacePath && <ProjectFilePreview
+        sessionId={sessionId} root={workspacePath} file={filePreview.file} onClose={() => setFilePreview(null)} onShowInFiles={onRevealProjectFile} />}
       {shouldRenderHeader && (
         <div className="desktop-conversation-header">
           <div className="desktop-conversation-header-main">
@@ -1383,7 +1403,7 @@ export function DesktopConversationView({
               const outcome = STRUCTURED_MESSAGE_OUTCOMES[msg.completionStatus];
               return (
                 <div key={`s-assistant-${msg.messageId || `${msg.ts ?? index}-${index}`}`} data-message-id={msg.messageId} data-message-role="assistant" tabIndex={-1} onFocus={event => { if (event.target === event.currentTarget) autoScrollRef.current = false; }}>
-                  <ToolCallBlock item={{ type: 'assistant', content: msg.content, roleLabel: assistantLabel,
+                  <ToolCallBlock workspacePath={workspacePath} onProjectFileClick={openProjectFile} item={{ type: 'assistant', content: msg.content, roleLabel: assistantLabel,
                     actions: [
                       ...(canReadAloud() && typeof msg.content === 'string' && msg.content ? [{ label: 'Read aloud', onClick: () => readAloud(msg.content) }] : []),
                       ...(onForkFromMessage && msg.messageId && !isStreaming ? [{ label: 'Fork from here', onClick: () => onForkFromMessage(forkPrompt(structuredMessages, msg.messageId)) }] : []),
@@ -1398,11 +1418,11 @@ export function DesktopConversationView({
               const first = msg.messages[0];
               const key = `s-tool-${first.turnId || ''}-${first.toolCallId || index}`;
               const renderToolResult = (message, toolIndex) => <div key={message.toolCallId || message.messageId || toolIndex} data-folded-render-index={searchIndexes?.[toolIndex] >= 0 ? searchIndexes[toolIndex] : undefined}>
-                <StructuredToolResult message={message} sessionId={sessionId} />
+                <StructuredToolResult message={message} sessionId={sessionId} workspacePath={workspacePath} onProjectFileClick={openProjectFile} />
               </div>;
               return msg.messages.length > 1
-                ? <StructuredActivityGroup key={key} messages={msg.messages} sessionId={sessionId} renderToolResult={searchIndexes ? renderToolResult : undefined} />
-                : searchIndexes ? renderToolResult(first, 0) : <StructuredToolResult key={key} message={first} sessionId={sessionId} />;
+                ? <StructuredActivityGroup key={key} messages={msg.messages} sessionId={sessionId} workspacePath={workspacePath} onProjectFileClick={openProjectFile} renderToolResult={searchIndexes ? renderToolResult : undefined} />
+                : searchIndexes ? renderToolResult(first, 0) : <StructuredToolResult key={key} message={first} sessionId={sessionId} workspacePath={workspacePath} onProjectFileClick={openProjectFile} />;
             }
             if (msg.role === 'error') {
               return (
@@ -1523,7 +1543,15 @@ export function DesktopConversationView({
             </div>
           )}
 
-          {isStructured && pendingApproval && !pendingApproval.decisionUncertain && !pendingApproval.decisionUnconfirmed && pendingApproval.toolName !== 'ask_user' && (
+          {isStructured && privateReviewVisible && pendingApproval?.toolName === 'background_read_output' && !pendingApproval.decisionUncertain && !pendingApproval.decisionUnconfirmed && (
+            <div className="cc-message cc-assistant"><div className="cc-assistant-bubble">
+              <PrivateOutputReview key={`${sessionId}:${pendingApproval.approvalId}`} sessionId={sessionId} approval={pendingApproval}
+                disabled={!onApprove || isApproving || isBrowserApproving || isInterrupting || requiresCleanup}
+                onReject={onApprove ? approval => onApprove(false, approval) : undefined} />
+            </div></div>
+          )}
+
+          {isStructured && pendingApproval && !pendingApproval.decisionUncertain && !pendingApproval.decisionUnconfirmed && !['ask_user', 'background_read_output'].includes(pendingApproval.toolName) && (
             <div className="cc-message cc-assistant">
               <div className="cc-assistant-bubble">
                 <div className={`structured-approval-prompt${approvalInfo.browserTool ? ' structured-browser-approval' : ''}`} role="group" aria-label="Approval required">
@@ -1535,7 +1563,9 @@ export function DesktopConversationView({
                       <div><dt>Project</dt><dd><pre className="structured-delegation-project" tabIndex={0} data-conversation-scroll-region>{pendingApproval.toolInput.workspace}</pre></dd></div>
                       <div><dt>Model</dt><dd>{pendingApproval.toolInput.provider} · {pendingApproval.toolInput.model}</dd></div>
                     </dl>
-                    <p className="structured-approval-help">No shell, writes or external tools. New empty queues run automatically; other held queues need resume.</p>
+                    <p className="structured-approval-help">No shell, writes or external tools. {pendingApproval.toolInput.authorization || pendingApproval.toolInput.paired_authorization
+                      ? 'A new empty queue can run the result automatically while your authorization remains valid; other held queues need resume.'
+                      : 'If delivered, the result is held for review; otherwise check the retained task.'}</p>
                     <details className="structured-tool-details">
                       <summary>More details</summary>
                       <pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>
@@ -1551,8 +1581,12 @@ export function DesktopConversationView({
                       {pendingApproval.toolInput != null && <pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>}
                     </details>
                   </> : <>
-                    <p>{scheduleReview ? scheduleReviewText : pendingApproval.description || pendingApproval.prompt || `Approve ${pendingApproval.toolName}?`}</p>
-                    {pendingApproval.toolInput && (
+                    {['background_start', 'background_write', 'background_write_bytes', 'background_close_input'].includes(pendingApproval.toolName) && pendingApproval.description
+                      ? <><pre className="structured-approval-input" tabIndex={0} aria-label="Background action review" data-conversation-scroll-region>{pendingApproval.description}</pre><p className="structured-approval-help">Scroll to review the full request before deciding.</p></>
+                      : <p>{scheduleReview ? scheduleReviewText : pendingApproval.description || pendingApproval.prompt || `Approve ${pendingApproval.toolName}?`}</p>}
+                    {pendingApproval.toolInput && ['background_start', 'background_write', 'background_write_bytes', 'background_close_input'].includes(pendingApproval.toolName) ? (
+                      <details className="structured-tool-details"><summary>Action details</summary><pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre></details>
+                    ) : pendingApproval.toolInput && (
                       <pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>
                     )}
                     {scheduleReview && pendingApproval.description && <details className="structured-tool-details"><summary>Full approval description</summary><pre tabIndex={0} data-conversation-scroll-region>{pendingApproval.description}</pre></details>}
@@ -1570,7 +1604,7 @@ export function DesktopConversationView({
                     >
                       Approve
                     </button>
-                    {allowApprovalForSession && !approvalInfo.browserTool && <button
+                    {allowApprovalForSession && !approvalInfo.browserTool && !pendingApproval.toolName?.startsWith('background_') && <button
                       type="button"
                       className="desktop-interactive-action secondary"
                       onClick={() => onApprove?.(true, pendingApproval, undefined, { forSession: true })}

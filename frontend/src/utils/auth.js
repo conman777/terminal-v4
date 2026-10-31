@@ -206,7 +206,8 @@ export async function refreshTokens() {
           if (!isAuthScopeCurrent(scope)) throw new Error('Authentication changed');
           // Another tab may have rotated while this request was waiting for ownership.
           if (getRefreshToken() !== refreshToken) {
-            if (!getRefreshToken() || !getAccessToken() || getAccessToken() === accessToken) throw new Error('Authentication changed');
+            // The captured access token may already be the new one: the two storage writes are separate.
+            if (!getRefreshToken() || !getAccessToken()) throw new Error('Authentication changed');
             return { reused: { accessToken: getAccessToken(), user: getUser() } };
           }
           if (getAccessToken() !== accessToken) throw new Error('Authentication changed');

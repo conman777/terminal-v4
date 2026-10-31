@@ -508,6 +508,12 @@ describe('WorkspaceBrowser with an isolated managed Chromium helper', () => {
 
   it('navigates, types, resolves a default prompt, follows history and retains tabs across pane remount', async () => {
     const context = await engine.browser.newContext({ viewport: { width: 1280, height: 900 } });
+    let commandQueue = Promise.resolve();
+    const command = input => {
+      const result = commandQueue.then(() => engine.command(input));
+      commandQueue = result.catch(() => {});
+      return result;
+    };
     try {
       const page = await context.newPage();
       page.setDefaultTimeout(6000);
@@ -516,8 +522,8 @@ describe('WorkspaceBrowser with an isolated managed Chromium helper', () => {
       page.on('pageerror', error => errors.push(error.message));
       await page.exposeFunction('syntheticRequest', async (path, body) => {
         if (path.endsWith('/approvals')) return { requests: [] };
-        if (path.endsWith('/sessions')) return { id: 'synthetic-session', state: await engine.command({ type: 'state' }) };
-        return engine.command(body ? { ...body, human: true } : { type: 'frame' });
+        if (path.endsWith('/sessions')) return { id: 'synthetic-session', state: await command({ type: 'state' }) };
+        return command(body ? { ...body, human: true } : { type: 'frame' });
       });
       await page.setContent(`<html data-theme="light"><style>${styles}body{margin:0}#root{display:flex;width:600px;height:860px}</style><div id="root"></div></html>`);
       await page.addScriptTag({ content: script });
@@ -532,7 +538,7 @@ describe('WorkspaceBrowser with an isolated managed Chromium helper', () => {
         const surfaceElement = page.getByRole('application', { name: 'Interactive browser page' });
         let frame;
         await expect.poll(async () => {
-          frame = await engine.command({ type: 'frame' });
+          frame = await command({ type: 'frame' });
           const layout = await surfaceElement.evaluate(surface => {
             const rect = surface.getBoundingClientRect(), image = surface.querySelector('img');
             const width = Math.min(1920, Math.max(320, Math.floor(rect.width)));
@@ -592,7 +598,7 @@ describe('WorkspaceBrowser with an isolated managed Chromium helper', () => {
       expect(bounds.surface).toBe(390);
       await page.screenshot({ path: resolve(evidence, 'browser-synthetic-mobile.png') });
       expect(errors).toEqual([]);
-      expect((await engine.command({ type: 'state' })).tabs).toHaveLength(2);
+      expect((await command({ type: 'state' })).tabs).toHaveLength(2);
     } finally { await context.close(); }
   }, 30000);
 });

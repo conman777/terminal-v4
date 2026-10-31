@@ -220,6 +220,8 @@ struct Entry {
     generation: Arc<AtomicU64>,
     #[cfg(test)]
     keyboard_inflight: Arc<AtomicBool>,
+    #[cfg(test)]
+    keyboard_lease: Arc<StdMutex<Option<Arc<std::fs::File>>>>,
 }
 #[derive(Clone, Default)]
 struct ActionPermit {
@@ -333,6 +335,23 @@ impl Entry {
         let task_cancel = cancellation.clone();
         let task = tokio::spawn(async move {
             let mut worker = entry.worker.lock().await;
+            #[cfg(test)]
+            if entry.keyboard_inflight.load(Ordering::SeqCst) {
+                return Err(ApiError::bad_request("Keyboard release is still pending."));
+            }
+            #[cfg(test)]
+            let lease = if let Caller::Agent {
+                configuration: Some((owner, _)),
+                ..
+            } = &caller
+            {
+                Some(Arc::new(
+                    crate::v4_agent::browser::browser_settings_lease(&owner.0, &owner.1)
+                        .map_err(ApiError::bad_request)?,
+                ))
+            } else {
+                None
+            };
             if let Caller::Agent {
                 configuration: Some((owner, reviewed)),
                 ..
@@ -360,6 +379,14 @@ impl Entry {
                         .map_err(|error| error.message)
                 })
                 .map_err(ApiError::bad_request)?;
+            #[cfg(test)]
+            {
+                *entry
+                    .keyboard_lease
+                    .lock()
+                    .map_err(|_| unavailable("Browser settings lease unavailable"))? = lease;
+                worker.last_state = Value::Null;
+            }
             let result = worker.call(value).await;
             #[cfg(test)]
             entry.settle_takeover(&worker.last_state)?;
@@ -445,10 +472,16 @@ impl Entry {
         tokio::spawn(async move {
             let mut worker = entry.worker.lock().await;
             entry.authorize(&caller)?;
+            #[cfg(test)]
+            let keyboard_inflight = entry.keyboard_inflight.load(Ordering::SeqCst);
+            #[cfg(test)]
+            if keyboard_inflight {
+                worker.last_state = Value::Null;
+            }
             let result = worker.call(value).await;
             #[cfg(test)]
-            if let Ok(value) = &result {
-                entry.settle_takeover(value)?;
+            if keyboard_inflight {
+                entry.settle_takeover(&worker.last_state)?;
             }
             if worker.last_state["tabs"].is_array() {
                 *entry
@@ -465,6 +498,10 @@ impl Entry {
     #[cfg(test)]
     fn settle_takeover(&self, value: &Value) -> Result<(), ApiError> {
         if value.get("keyboardRelease") == Some(&Value::Null) {
+            *self
+                .keyboard_lease
+                .lock()
+                .map_err(|_| unavailable("Browser settings lease unavailable"))? = None;
             self.keyboard_inflight.store(false, Ordering::SeqCst);
         }
         let mut control = self
@@ -748,6 +785,8 @@ async fn ensure_entry(key: Owner, require_new: bool) -> Result<Entry, ApiError> 
             generation: Arc::new(AtomicU64::new(0)),
             #[cfg(test)]
             keyboard_inflight: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            keyboard_lease: Arc::new(StdMutex::new(None)),
         };
         registry.insert(key.clone(), entry.clone());
         let id = entry.id;
@@ -927,6 +966,8 @@ async fn close_selected_authorized(
             selected.authorize(&caller)?;
             selected.generation.fetch_add(1, Ordering::SeqCst);
             worker.close().await?;
+            #[cfg(test)]
+            selected.settle_takeover(&json!({"keyboardRelease":null}))?;
         }
         mcp::cancel_owner(&key);
         let mut registry = SESSIONS.lock().await;

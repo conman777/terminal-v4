@@ -67,6 +67,8 @@ mod user_images;
 mod utility_route_tests;
 pub mod v4_agent;
 pub mod vault;
+#[cfg(unix)]
+mod vault_admission;
 pub mod webcontainer;
 mod workspace;
 mod workspace_activity;
@@ -351,6 +353,14 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/structured/sessions/{id}/approve",
             post(approve_structured_session),
+        )
+        .route(
+            "/api/structured/sessions/{id}/private-output/preview",
+            post(preview_private_output),
+        )
+        .route(
+            "/api/structured/sessions/{id}/private-output/approve",
+            post(approve_private_output),
         )
         .route(
             "/api/structured/sessions/{id}/approval-capability",
@@ -1159,6 +1169,21 @@ struct StructuredApprovalInput {
     /// Also allow this kind of action for the rest of the conversation.
     #[serde(default)]
     for_session: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrivateOutputPreviewInput {
+    approval_id: String,
+    action_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PrivateOutputDecisionInput {
+    approval_id: String,
+    action_id: String,
+    preview_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2097,6 +2122,111 @@ async fn review_codex_approval_claim(
     #[cfg(unix)]
     Ok(Json(json!({"approvalId":approval_id,"status":"reviewed"})))
 }
+#[cfg(unix)]
+fn valid_private_output_reference(approval_id: &str, action_id: &str) -> bool {
+    approval_id.len() == 36
+        && uuid::Uuid::parse_str(approval_id).is_ok()
+        && action_id.len() == 64
+        && action_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+async fn preview_private_output(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
+    Json(input): Json<PrivateOutputPreviewInput>,
+) -> Result<axum::response::Response, ApiError> {
+    #[cfg(unix)]
+    {
+        if !valid_private_output_reference(&input.approval_id, &input.action_id) {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: "Invalid private review reference".into(),
+            });
+        }
+        let (token, output) = state
+            .structured_session_manager()
+            .preview_private_output(
+                &user.user_id,
+                &id,
+                &input.approval_id,
+                &input.action_id,
+                authority.as_ref().map(|Extension(value)| value),
+                paired.as_ref().map(|Extension(value)| value),
+                &state,
+            )
+            .await
+            .map_err(structured_control_error)?;
+        Ok((
+            [
+                (axum::http::header::CACHE_CONTROL, "private, no-store"),
+                (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            Json(json!({"previewToken":token,"output":output})),
+        )
+            .into_response())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, user, authority, paired, id, input);
+        Err(ApiError::internal(
+            "Private output review is unavailable on this platform",
+        ))
+    }
+}
+
+async fn approve_private_output(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
+    Json(input): Json<PrivateOutputDecisionInput>,
+) -> Result<axum::response::Response, ApiError> {
+    #[cfg(unix)]
+    {
+        if !valid_private_output_reference(&input.approval_id, &input.action_id)
+            || input.preview_token.len() != 36
+            || uuid::Uuid::parse_str(&input.preview_token).is_err()
+        {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: "Invalid private review token".into(),
+            });
+        }
+        let receipt = state
+            .structured_session_manager()
+            .decide_private_output(
+                &user.user_id,
+                &id,
+                &input.approval_id,
+                &input.action_id,
+                &input.preview_token,
+                authority.as_ref().map(|Extension(value)| value),
+                paired.as_ref().map(|Extension(value)| value),
+                &state,
+            )
+            .await
+            .map_err(structured_control_error)?;
+        Ok((
+            [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+            Json(json!(receipt)),
+        )
+            .into_response())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, user, authority, paired, id, input);
+        Err(ApiError::internal(
+            "Private output review is unavailable on this platform",
+        ))
+    }
+}
+
 async fn approve_structured_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -2314,6 +2444,16 @@ fn terminal_session_error(message: String) -> ApiError {
     }
 }
 
+#[cfg(unix)]
+struct TerminalRequestLifetime(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+#[cfg(unix)]
+impl Drop for TerminalRequestLifetime {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 async fn create_terminal_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -2351,6 +2491,7 @@ async fn create_terminal_session(
     validate_optional_terminal_size(input.cols, "cols")?;
     validate_optional_terminal_size(input.rows, "rows")?;
 
+    #[cfg(not(unix))]
     let admission = terminal::credential_admission(
         &state,
         &user.user_id,
@@ -2358,26 +2499,53 @@ async fn create_terminal_session(
         paired.as_ref().map(|Extension(value)| value),
     );
     let request_id = input.request_id.clone();
+    let options = TerminalCreateOptions {
+        cwd: input.cwd,
+        cols: input.cols,
+        rows: input.rows,
+        title: input.title,
+        shell: input.shell,
+        sandbox_mode: input.sandbox_mode,
+        sandbox_workspace_root: input.workspace_root,
+        initial_command: input.initial_command,
+    };
+    let intent = terminal::TerminalCreateIntent {
+        request_id: input.request_id,
+        companion_of: input.companion_of.clone(),
+    };
+    #[cfg(unix)]
+    let creation = {
+        let lifetime = TerminalRequestLifetime(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let cancelled = lifetime.0.clone();
+        let app = state.clone();
+        let owner = user.user_id.clone();
+        let local = authority.map(|Extension(value)| value);
+        let paired = paired.map(|Extension(value)| value);
+        let result = tokio::spawn(async move {
+            app.terminal_manager()
+                .create_session_authorized(
+                    &owner,
+                    options,
+                    intent,
+                    &app,
+                    local.as_ref(),
+                    paired.as_ref(),
+                    &cancelled,
+                )
+                .await
+        })
+        .await
+        .map_err(|_| ApiError::internal("Terminal creation outcome is uncertain"))?
+        .map_err(terminal_session_error)?;
+        drop(lifetime);
+        result
+    };
+    #[cfg(not(unix))]
     let creation = state
         .terminal_manager()
-        .create_session_admitted(
-            &user.user_id,
-            TerminalCreateOptions {
-                cwd: input.cwd,
-                cols: input.cols,
-                rows: input.rows,
-                title: input.title,
-                shell: input.shell,
-                sandbox_mode: input.sandbox_mode,
-                sandbox_workspace_root: input.workspace_root,
-                initial_command: input.initial_command,
-            },
-            terminal::TerminalCreateIntent {
-                request_id: input.request_id,
-                companion_of: input.companion_of.clone(),
-            },
-            Some(&admission),
-        )
+        .create_session_admitted(&user.user_id, options, intent, Some(&admission))
         .await
         .map_err(terminal_session_error)?;
     let session = creation.session;
@@ -2507,13 +2675,45 @@ async fn restore_terminal_session(
     validate_optional_terminal_size(input.cols, "cols")?;
     validate_optional_terminal_size(input.rows, "rows")?;
 
+    #[cfg(not(unix))]
     let admission = terminal::credential_admission(
         &state,
         &user.user_id,
         authority.as_ref().map(|Extension(value)| value),
         paired.as_ref().map(|Extension(value)| value),
     );
-    let Some(session) = state
+    #[cfg(unix)]
+    let restored = {
+        let lifetime = TerminalRequestLifetime(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let cancelled = lifetime.0.clone();
+        let app = state.clone();
+        let owner = user.user_id.clone();
+        let local = authority.map(|Extension(value)| value);
+        let paired = paired.map(|Extension(value)| value);
+        let result = tokio::spawn(async move {
+            app.terminal_manager()
+                .restore_session_authorized(
+                    &owner,
+                    &session_id,
+                    input.cols,
+                    input.rows,
+                    &app,
+                    local.as_ref(),
+                    paired.as_ref(),
+                    &cancelled,
+                )
+                .await
+        })
+        .await
+        .map_err(|_| ApiError::internal("Terminal restore outcome is uncertain"))?
+        .map_err(terminal_session_error)?;
+        drop(lifetime);
+        result
+    };
+    #[cfg(not(unix))]
+    let restored = state
         .terminal_manager()
         .restore_session_admitted(
             &user.user_id,
@@ -2523,8 +2723,8 @@ async fn restore_terminal_session(
             Some(&admission),
         )
         .await
-        .map_err(terminal_session_error)?
-    else {
+        .map_err(terminal_session_error)?;
+    let Some(session) = restored else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: "Persisted session not found".to_string(),
@@ -2714,32 +2914,59 @@ async fn update_terminal_thread(
     if let Some(Some(companion_of)) = &input.companion_of {
         validate_string(companion_of, 1, 200, "companionOf")?;
     }
+    #[cfg(not(unix))]
     let admission = terminal::credential_admission(
         &state,
         &user.user_id,
         authority.as_ref().map(|Extension(value)| value),
         paired.as_ref().map(|Extension(value)| value),
     );
-    let Some(thread) = state
-        .terminal_manager()
-        .update_thread_admitted(
-            &user.user_id,
-            &session_id,
-            ThreadUpdate {
-                topic: input.topic,
-                topic_auto_generated: input.topic_auto_generated,
-                pinned: input.pinned,
-                archived: input.archived,
-                project_path: input.project_path,
-                sandbox_mode: input.sandbox_mode,
-                sandbox_workspace_root: input.sandbox_workspace_root,
-                companion_of: input.companion_of,
-            },
-            Some(&admission),
-        )
+    let updates = ThreadUpdate {
+        topic: input.topic,
+        topic_auto_generated: input.topic_auto_generated,
+        pinned: input.pinned,
+        archived: input.archived,
+        project_path: input.project_path,
+        sandbox_mode: input.sandbox_mode,
+        sandbox_workspace_root: input.sandbox_workspace_root,
+        companion_of: input.companion_of,
+    };
+    #[cfg(unix)]
+    let updated = {
+        let lifetime = TerminalRequestLifetime(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        ));
+        let cancelled = lifetime.0.clone();
+        let app = state.clone();
+        let owner = user.user_id.clone();
+        let local = authority.map(|Extension(value)| value);
+        let paired = paired.map(|Extension(value)| value);
+        let result = tokio::spawn(async move {
+            app.terminal_manager()
+                .update_thread_authorized(
+                    &owner,
+                    &session_id,
+                    updates,
+                    &app,
+                    local.as_ref(),
+                    paired.as_ref(),
+                    &cancelled,
+                )
+                .await
+        })
         .await
-        .map_err(terminal_session_error)?
-    else {
+        .map_err(|_| ApiError::internal("Terminal update outcome is uncertain"))?
+        .map_err(terminal_session_error)?;
+        drop(lifetime);
+        result
+    };
+    #[cfg(not(unix))]
+    let updated = state
+        .terminal_manager()
+        .update_thread_admitted(&user.user_id, &session_id, updates, Some(&admission))
+        .await
+        .map_err(terminal_session_error)?;
+    let Some(thread) = updated else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: "Terminal session not found".to_string(),
@@ -3307,6 +3534,17 @@ struct AddVaultKeyInput {
     key_value: String,
 }
 
+fn vault_mutation_error(error: String) -> ApiError {
+    #[cfg(unix)]
+    {
+        vault_admission::api_error(error)
+    }
+    #[cfg(not(unix))]
+    {
+        ApiError::internal(error)
+    }
+}
+
 async fn add_vault_key(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -3322,7 +3560,7 @@ async fn add_vault_key(
     let now = iso_timestamp();
     state
         .add_vault_key(&user, &id, input.key_name.trim(), &encrypted, &now)
-        .map_err(ApiError::internal)?;
+        .map_err(vault_mutation_error)?;
     Ok(Json(json!({
         "id": id,
         "keyName": input.key_name.trim(),
@@ -3351,7 +3589,7 @@ async fn reveal_vault_key(
         let encrypted = cipher.encrypt(&decrypted).map_err(ApiError::internal)?;
         state
             .migrate_vault_key(&user, &entry.id, &entry.key_value, &encrypted)
-            .map_err(ApiError::internal)?;
+            .map_err(vault_mutation_error)?;
     }
     Ok(Json(json!({
         "id": entry.id,
@@ -3368,7 +3606,7 @@ async fn delete_vault_key(
 ) -> Result<StatusCode, ApiError> {
     let deleted = state
         .delete_vault_key(&user, &key_id)
-        .map_err(ApiError::internal)?;
+        .map_err(vault_mutation_error)?;
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -6175,7 +6413,7 @@ fn project_scan_paths(state: &AppState, user: &AuthenticatedUser) -> Result<Vec<
 }
 
 fn project_scan_entries(state: &AppState, user: &AuthenticatedUser) -> Result<Vec<Value>, String> {
-    project_scan_paths(state, user).map(|paths| project_entries_from_paths(paths.into_iter()))
+    project_scan_paths(state, user).map(project_entries_from_paths)
 }
 
 fn project_entries_from_paths(paths: impl IntoIterator<Item = String>) -> Vec<Value> {
@@ -6830,7 +7068,7 @@ fn authenticate_runtime_websocket(
     } else {
         query_token
             .ok_or_else(|| "Missing session token".to_string())
-            .and_then(|token| crate::auth::authenticate_local_token(&state, token))
+            .and_then(|token| crate::auth::authenticate_local_token(state, token))
     };
     result.map_err(|_| ApiError {
         status: StatusCode::UNAUTHORIZED,
@@ -6843,7 +7081,7 @@ async fn wait_for_preview_revocation(state: &AppState, token: &str, path: &str) 
     loop {
         interval.tick().await;
         if auth::authenticate_runtime_request(state, token, "GET", path).is_err()
-            && crate::auth::authenticate_runtime_preview_token(&state, token, path).is_err()
+            && crate::auth::authenticate_runtime_preview_token(state, token, path).is_err()
         {
             return;
         }
@@ -6877,28 +7115,24 @@ fn authenticate_preview_request_user(
         message: "Missing preview session".to_string(),
     })?;
 
-    crate::auth::authenticate_runtime_preview_token(
-        &state,
-        &token,
-        preview_auth_route_path(request),
-    )
-    .or_else(|_| {
-        let path = if preview_subdomain_port(request.headers()).is_some() {
-            format!("/preview/{port}{}", request.uri().path())
-        } else {
-            request.uri().path().into()
-        };
-        preview::auth_urls::authenticate_resource_token(
-            state,
-            &token,
-            request.method().as_str(),
-            &path,
-        )
-    })
-    .map_err(|_| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        message: "Invalid or expired preview session".to_string(),
-    })
+    crate::auth::authenticate_runtime_preview_token(state, &token, preview_auth_route_path(request))
+        .or_else(|_| {
+            let path = if preview_subdomain_port(request.headers()).is_some() {
+                format!("/preview/{port}{}", request.uri().path())
+            } else {
+                request.uri().path().into()
+            };
+            preview::auth_urls::authenticate_resource_token(
+                state,
+                &token,
+                request.method().as_str(),
+                &path,
+            )
+        })
+        .map_err(|_| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Invalid or expired preview session".to_string(),
+        })
 }
 
 fn preview_auth_route_path(request: &axum::extract::Request) -> &str {
@@ -7001,7 +7235,7 @@ async fn preview_proxy_logs_after_cursor_for_user(
         .await
 }
 
-fn sort_proxy_logs(entries: &mut Vec<preview::request_logs::ProxyLogEntry>) {
+fn sort_proxy_logs(entries: &mut [preview::request_logs::ProxyLogEntry]) {
     entries.sort_by(|left, right| {
         left.timestamp
             .cmp(&right.timestamp)

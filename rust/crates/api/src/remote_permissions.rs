@@ -81,6 +81,9 @@ impl Capabilities {
             ["api", "structured", "sessions", _, "approval-claims", _, "review" | "reserve"] => {
                 self.agent_execute && method == "POST"
             }
+            ["api", "structured", "sessions", _, "private-output", "preview" | "approve"] => {
+                self.agent_execute && method == "POST"
+            }
             ["api", "structured", "sessions", _, "queue"] => {
                 self.agent_execute && (read || method == "POST")
             }
@@ -95,7 +98,7 @@ impl Capabilities {
             }
             ["api", "fs", "list"] | ["api", "files", "list"] => read,
             ["api", "files", "download"] | ["api", "fs", "download"] => read && self.transfer,
-            ["api", "workspace", "files", "search-content" | "read-content"] => {
+            ["api", "workspace", "files", "search-content" | "read-content" | "list-directory"] => {
                 read && self.transfer
             }
             ["api", "files", "upload" | "screenshot"] => {
@@ -185,6 +188,16 @@ impl Capabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn private_output_routes_require_agent_execution_and_exact_post_paths() {
+        for action in ["preview", "approve"] {
+            let path = format!("/api/structured/sessions/session/private-output/{action}");
+            assert!(Capabilities::operator().allows_http("POST", &path));
+            assert!(!Capabilities::observer().allows_http("POST", &path));
+            assert!(!Capabilities::operator().allows_http("GET", &path));
+            assert!(!Capabilities::operator().allows_http("POST", &format!("{path}/extra")));
+        }
+    }
     #[test]
     fn paired_input_capability_probe_is_read_only_and_supervised_routes_are_not_delegated() {
         for capability in [Capabilities::observer(), Capabilities::operator()] {
@@ -373,6 +386,7 @@ mod tests {
             ("GET", "/api/files/download"),
             ("GET", "/api/workspace/files/search-content"),
             ("GET", "/api/workspace/files/read-content"),
+            ("GET", "/api/workspace/files/list-directory"),
             ("GET", "/api/future-execute"),
         ] {
             assert!(!observer.allows_http(method, path), "{method} {path}");
@@ -414,6 +428,8 @@ mod tests {
         assert!(!transfer.allows_http("POST", "/api/workspace/files/search-content"));
         assert!(transfer.allows_http("GET", "/api/workspace/files/read-content"));
         assert!(!transfer.allows_http("POST", "/api/workspace/files/read-content"));
+        assert!(transfer.allows_http("GET", "/api/workspace/files/list-directory"));
+        assert!(!transfer.allows_http("POST", "/api/workspace/files/list-directory"));
         assert!(!transfer.allows_http("POST", "/api/files/upload"));
         let files = Capabilities {
             file_write: true,

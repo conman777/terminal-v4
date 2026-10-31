@@ -24,6 +24,8 @@ mod delegation_review;
 mod execute_code;
 mod execute_code_sandbox;
 mod execution_backend;
+#[cfg(unix)]
+mod image_inspection;
 mod integrations;
 pub(crate) mod interaction;
 mod knowledge;
@@ -1029,6 +1031,26 @@ async fn turn_with_interaction(
         #[allow(unused_mut)]
         let mut definitions = tool_definitions(context.tool_policy, data, owner)?;
         #[cfg(unix)]
+        if let Some(definition) = image_inspection::declaration(
+            context.tool_policy,
+            image_inspection::enabled(),
+            provider_config::select(&session.provider, &session.model)
+                .ok()
+                .and_then(|selection| selection.image_input),
+        ) {
+            definitions.push(definition);
+        }
+        #[cfg(unix)]
+        if let Some(definition) = integrations::image_generation::declaration(
+            context.tool_policy,
+            integrations::image_generation::enabled(),
+            provider_config::select(&session.provider, &session.model)
+                .ok()
+                .and_then(|selection| selection.image_input),
+        ) {
+            definitions.push(definition);
+        }
+        #[cfg(unix)]
         if let Some(definition) = background_delegation_definition(
             &context.resources,
             &context.scope,
@@ -1222,6 +1244,62 @@ async fn turn_with_interaction(
                     }
                     if !context.tool_policy.allows(name) {
                         return Err("Tool denied by read-only child policy".into());
+                    }
+                    #[cfg(unix)]
+                    if name == image_inspection::NAME {
+                        if image_inspection::declaration(
+                            context.tool_policy,
+                            image_inspection::enabled(),
+                            provider_config::select(&session.provider, &session.model)
+                                .ok()
+                                .and_then(|selection| selection.image_input),
+                        )
+                        .is_none()
+                        {
+                            return Err("Image inspection is not enabled for this model".into());
+                        }
+                        return image_inspection::execute(
+                            data,
+                            owner,
+                            &workspace,
+                            session,
+                            &call_id,
+                            &call["input"],
+                            interaction::ImageTurn {
+                                scope: &context.scope,
+                                interaction: context.interaction,
+                                cancellation: &context.cancellation,
+                            },
+                        )
+                        .await;
+                    }
+                    #[cfg(unix)]
+                    if name == integrations::image_generation::NAME {
+                        if integrations::image_generation::declaration(
+                            context.tool_policy,
+                            integrations::image_generation::enabled(),
+                            provider_config::select(&session.provider, &session.model)
+                                .ok()
+                                .and_then(|selection| selection.image_input),
+                        )
+                        .is_none()
+                        {
+                            return Err("Image generation is not enabled for this model".into());
+                        }
+                        return integrations::image_generation::execute(
+                            data,
+                            owner,
+                            &workspace,
+                            session,
+                            &call_id,
+                            &call["input"],
+                            interaction::ImageTurn {
+                                scope: &context.scope,
+                                interaction: context.interaction,
+                                cancellation: &context.cancellation,
+                            },
+                        )
+                        .await;
                     }
                     if name == "todo_list" {
                         return todo::execute(data, owner, session, &call["input"])
@@ -1480,6 +1558,7 @@ async fn turn_with_interaction(
                 };
                 if name == "run_command"
                     || name == "execute_code"
+                    || name == "generate_image"
                     || name == "create_schedule"
                     || name == "manage_schedule"
                     || name == "browser_press"
@@ -1825,6 +1904,8 @@ pub(crate) struct TurnOptions {
     pub(crate) attachments: Vec<terminal_v4_core::ImageAttachment>,
     pub(crate) recovery_events: Vec<StructuredSessionEvent>,
     pub(crate) local_authority: Option<crate::auth::LocalAuthority>,
+    #[cfg(unix)]
+    pub(crate) paired_authority: Option<crate::paired_environments::PairedGrantAuthority>,
 }
 pub(crate) fn resolve_selection(
     provider: &str,

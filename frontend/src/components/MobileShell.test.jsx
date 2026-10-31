@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileShell } from './MobileShell';
 import { RawInputPending } from './RawInputPending';
 import { getSupervisedInputQueues } from '../utils/supervisedRawInputQueue';
+import { withAttachmentWriteLock } from '../utils/attachmentWriteLock';
 
 let lastMobileTerminalProps = null;
 let lastStatusBarProps = null;
@@ -21,6 +22,7 @@ const mockUseStructuredSession = vi.fn();
 const mockListSessionGitBranches = vi.fn(() => Promise.resolve({ branches: [], currentBranch: null }));
 const mockCheckoutSessionGitBranch = vi.fn(() => Promise.resolve({ branches: [], currentBranch: null }));
 const mockCreateSession = vi.fn(() => Promise.resolve({ id: 'pty-mobile' }));
+const mockCloseSession = vi.fn(() => Promise.resolve());
 const echoThreadPatch = (_id, patch) => Promise.resolve({ ...patch });
 const mockUpdateThreadMetadata = vi.fn(echoThreadPatch);
 const mockRestoreSession = vi.fn(() => Promise.resolve());
@@ -164,6 +166,7 @@ vi.mock('../contexts/TerminalSessionContext', () => ({
       listSessionGitBranches: mockListSessionGitBranches,
       checkoutSessionGitBranch: mockCheckoutSessionGitBranch,
       createSession: mockCreateSession,
+      closeSession: mockCloseSession,
       updateThreadMetadata: mockUpdateThreadMetadata,
       restoreSession: mockRestoreSession,
       updateStructuredSessionSelection: mockUpdateStructuredSessionSelection,
@@ -241,6 +244,7 @@ function renderMobileShell(overrides = {}) {
       mobileView="terminal"
       showSessionStrip={overrides.showSessionStrip}
       threadTerminalOpen={overrides.threadTerminalOpen}
+      onThreadTerminalOpenChange={overrides.onThreadTerminalOpenChange}
       terminalSessions={overrides.terminalSessions}
       onViewChange={overrides.onViewChange ?? vi.fn()}
       chatMode={false}
@@ -259,6 +263,78 @@ function renderMobileShell(overrides = {}) {
 }
 
 describe('MobileShell', () => {
+  it('lets a phone user confirm closing the selected terminal without losing the conversation draft', async () => {
+    const session = { id: 'ss-mobile-close', runtime: 'codex', cwd: '/work/project' };
+    const terminals = [
+      { id: 'pty-mobile-first', isActive: true, thread: { companionOf: session.id }, createdAt: '2026-01-01' },
+      { id: 'pty-mobile-second', isActive: true, thread: { companionOf: session.id }, createdAt: '2026-01-02' },
+    ];
+    renderMobileShell({ sessions: [session], terminalSessions: [session, ...terminals], activeSessionId: session.id, threadTerminalOpen: true });
+    await screen.findByTestId('desktop-conversation-view');
+    fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this draft' } });
+    const drawer = screen.getByRole('region', { name: 'Thread terminal' });
+    fireEvent.click(within(drawer).getByRole('tab', { name: 'Terminal 2' }));
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close Terminal 2' }));
+    expect(mockCloseSession).not.toHaveBeenCalled();
+    const confirmation = within(drawer).getByRole('group', { name: 'Confirm closing Terminal 2' });
+    expect(within(confirmation).getByText(/Anything running in it will stop/)).toBeVisible();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Close Terminal 2' }));
+    await waitFor(() => expect(mockCloseSession).toHaveBeenCalledWith('pty-mobile-second'));
+    expect(screen.getByLabelText('Command composer')).toHaveValue('Keep this draft');
+  });
+
+  it('keeps the selected terminal open when the confirmation is dismissed', async () => {
+    const session = { id: 'ss-mobile-keep-terminal', runtime: 'codex', cwd: '/work/project' };
+    const terminal = { id: 'pty-mobile-keep', isActive: true, thread: { companionOf: session.id } };
+    renderMobileShell({ sessions: [session], terminalSessions: [session, terminal], activeSessionId: session.id, threadTerminalOpen: true, onThreadTerminalOpenChange: vi.fn() });
+    const drawer = screen.getByRole('region', { name: 'Thread terminal' });
+    const close = within(drawer).getByRole('button', { name: 'Close Terminal 1' });
+    fireEvent.click(close);
+    const confirmation = within(drawer).getByRole('group', { name: 'Confirm closing Terminal 1' });
+    expect(within(confirmation).getByRole('button', { name: 'Keep open' })).toHaveFocus();
+    fireEvent.keyDown(confirmation, { key: 'Escape' });
+    expect(within(drawer).queryByRole('group', { name: 'Confirm closing Terminal 1' })).not.toBeInTheDocument();
+    expect(close).toHaveFocus();
+    expect(mockCloseSession).not.toHaveBeenCalled();
+  });
+
+  it('closes the drawer before removing its last terminal and reopens it on a failed close', async () => {
+    const session = { id: 'ss-mobile-last-terminal', runtime: 'codex', cwd: '/work/project' };
+    const terminal = { id: 'pty-mobile-last', isActive: true, thread: { companionOf: session.id } };
+    const onThreadTerminalOpenChange = vi.fn();
+    mockCreateSession.mockClear();
+    mockCloseSession.mockRejectedValueOnce(new Error('close failed'));
+    renderMobileShell({ sessions: [session], terminalSessions: [session, terminal], activeSessionId: session.id, threadTerminalOpen: true, onThreadTerminalOpenChange });
+    const drawer = screen.getByRole('region', { name: 'Thread terminal' });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close Terminal 1' }));
+    const confirmation = within(drawer).getByRole('group', { name: 'Confirm closing Terminal 1' });
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Close Terminal 1' }));
+    await waitFor(() => expect(onThreadTerminalOpenChange.mock.calls).toEqual([[session.id, false], [session.id, true]]));
+    expect(within(drawer).getByRole('alert')).toHaveTextContent('This terminal could not be closed.');
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen an old thread terminal when a pending close fails after switching threads', async () => {
+    const first = { id: 'ss-mobile-close-old', runtime: 'codex', cwd: '/work/project' };
+    const second = { id: 'ss-mobile-close-new', runtime: 'codex', cwd: '/work/project' };
+    const firstTerminal = { id: 'pty-mobile-close-old', isActive: true, thread: { companionOf: first.id } };
+    const secondTerminal = { id: 'pty-mobile-close-new', isActive: true, thread: { companionOf: second.id } };
+    const sessions = [first, second], terminals = [...sessions, firstTerminal, secondTerminal];
+    const onThreadTerminalOpenChange = vi.fn();
+    let finish;
+    mockCloseSession.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const view = renderMobileShell({ sessions, terminalSessions: terminals, activeSessionId: first.id, threadTerminalOpen: true, onThreadTerminalOpenChange });
+    let drawer = screen.getByRole('region', { name: 'Thread terminal' });
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close Terminal 1' }));
+    fireEvent.click(within(within(drawer).getByRole('group', { name: 'Confirm closing Terminal 1' })).getByRole('button', { name: 'Close Terminal 1' }));
+    expect(onThreadTerminalOpenChange).toHaveBeenCalledWith(first.id, false);
+    view.rerender(<MobileShell sessions={sessions} terminalSessions={terminals} activeSessionId={second.id} threadTerminalOpen onThreadTerminalOpenChange={onThreadTerminalOpenChange} />);
+    await act(async () => finish({ ok: false }));
+    drawer = screen.getByRole('region', { name: 'Thread terminal' });
+    expect(within(drawer).queryByRole('alert')).not.toBeInTheDocument();
+    expect(onThreadTerminalOpenChange).toHaveBeenCalledTimes(1);
+    expect(await within(drawer).findByTestId('terminal-chat')).toHaveAttribute('data-session-id', secondTerminal.id);
+  });
   it('copies an earlier message into the current draft without discarding what was typed', async () => {
     const session = { id: 'ss-mobile-edit', runtime: 'codex', cwd: '/work/project' };
     renderMobileShell({ sessions: [session], activeSessionId: session.id });
@@ -549,6 +625,14 @@ describe('MobileShell', () => {
     expect(screen.getByLabelText('Command composer')).toHaveValue('keep this draft');
     expect(mockUseMobileChatTurns.mock.results.at(-1).value.handleChatSend).not.toHaveBeenCalled();
   });
+  it('hides private output review when the mobile workspace is covered', async () => {
+    const session = { id: 'ss-private-review', runtime: 'v4', cwd: '/work/project' };
+    const view = renderMobileShell({ sessions: [session], activeSessionId: session.id });
+    await screen.findByTestId('desktop-conversation-view');
+    expect(lastConversationViewProps.privateReviewVisible).toBe(true);
+    view.rerender(<MobileShell sessions={[session]} activeSessionId={session.id} visible={false} />);
+    expect(lastConversationViewProps.privateReviewVisible).toBe(false);
+  });
   it('keeps the phone terminal draft while HTTP acceptance is pending and after rejection', async () => {
     let rejectDelivery;
     const terminal = createMobileChatTurnsState();
@@ -579,6 +663,7 @@ describe('MobileShell', () => {
     mockCheckoutSessionGitBranch.mockClear();
     mockUpdateStructuredSessionSelection.mockClear();
     mockSendRawToSession.mockReset();
+    mockCloseSession.mockReset().mockResolvedValue(undefined);
     mockRawInputMode = 'legacy';
   });
 
@@ -589,6 +674,16 @@ describe('MobileShell', () => {
     const v4 = { ...session, id: 'ss-phone-v4-files', runtime: 'v4' };
     view.rerender(<MobileShell sessions={[v4]} activeSessionId={v4.id} />);
     expect(lastStatusBarProps).toMatchObject({ mentionRoot: '/work/project', allowAnyFile: false });
+  });
+
+  it('passes provider-reported context to the phone composer only for supported native sessions', () => {
+    mockUseStructuredSession.mockReturnValue({ ...createStructuredSessionState(), contextUsage: { contextTokens: 50, contextWindow: 200 } });
+    const session = { id: 'ss-phone-meter', runtime: 'codex', cwd: '/work/project' };
+    const view = renderMobileShell({ sessions: [session], activeSessionId: session.id });
+    expect(lastStatusBarProps.composerContext).toEqual({ percent: 25, label: 'Context 25%', detail: '50 of 200 tokens' });
+    const v4 = { ...session, runtime: 'v4' };
+    view.rerender(<MobileShell sessions={[v4]} activeSessionId={v4.id} />);
+    expect(lastStatusBarProps.composerContext).toBeNull();
   });
 
   it('reports an uncertain raw input without clearing the mobile draft', async () => {
@@ -664,14 +759,14 @@ describe('MobileShell', () => {
       if (key.includes('composerFiles:')) throw new Error('storage full');
       return original.call(this, key, value);
     });
-    act(() => lastStatusBarProps.onComposerAttachmentAdd({ name: 'private.txt', path: '/work/project/private.txt' }));
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'private.txt', path: '/work/project/private.txt' }); });
     expect(screen.getByRole('alert')).toHaveTextContent('File selections could not be saved');
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
     await act(async () => { await lastStatusBarProps.onComposerSubmit('Review'); });
     expect(state.sendMessage).not.toHaveBeenCalled();
     setItem.mockRestore();
     fireEvent.click(screen.getByRole('button', { name: 'Retry saving files' }));
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled();
     act(() => clearTokens(true));
   });
@@ -683,7 +778,7 @@ describe('MobileShell', () => {
     mockUseStructuredSession.mockReturnValue(state);
     renderMobileShell({ sessions: [session], activeSessionId: session.id });
     fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this message' } });
-    act(() => lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }));
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
     const key = Object.keys(localStorage).find(value => value.includes('composerFiles:') && value.includes(session.id));
     const saved = JSON.stringify({ version: 1, sessionId: session.id, items: [{ name: 'saved.txt', path: '/work/project/saved.txt' }] });
     localStorage.setItem(key, saved);
@@ -708,6 +803,7 @@ describe('MobileShell', () => {
     const refresh = vi.fn();
     mockServerQueue = { status: 'available', snapshot: { revision: 1, mode: 'running', holdReason: null, items: [], order: [] }, reason: '', refresh };
     const state = { ...createStructuredSessionState(), isStreaming: true, sendMessage: vi.fn().mockResolvedValue({ accepted: true }) };
+    enqueueServerFollowup.mockClear();
     mockUseStructuredSession.mockReturnValue(state);
     try {
       renderMobileShell({ sessions: [session], activeSessionId: session.id });
@@ -732,7 +828,7 @@ describe('MobileShell', () => {
     mockUseStructuredSession.mockReturnValue(state);
     renderMobileShell({ sessions: [session], activeSessionId: session.id });
     fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this message' } });
-    act(() => lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }));
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
     const key = Object.keys(localStorage).find(value => value.includes('composerFiles:') && value.includes(session.id));
     localStorage.setItem(key, JSON.stringify({ version: 1, sessionId: session.id, items: [{ name: 'other.txt', path: '/work/project/other.txt' }] }));
     await act(async () => { await lastStatusBarProps.onComposerSubmit('Keep this message'); });
@@ -740,6 +836,97 @@ describe('MobileShell', () => {
     expect(screen.getByLabelText('Command composer')).toHaveValue('Keep this message');
     expect(screen.getByRole('alert')).toHaveTextContent('changed in another tab');
     act(() => clearTokens(true));
+  });
+
+  it('does not send a stale file selection when another tab wins the lock first', async () => {
+    setUser({ id: 'mobile-attachment-send-lock' });
+    const session = { id: 'ss-phone-attachment-send-lock', runtime: 'codex', cwd: '/work/project' };
+    const state = { ...createStructuredSessionState(), sendMessage: vi.fn().mockResolvedValue({ accepted: true }) };
+    mockUseStructuredSession.mockReturnValue(state);
+    renderMobileShell({ sessions: [session], activeSessionId: session.id });
+    fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this message' } });
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
+    let release;
+    withAttachmentWriteLock.mockImplementationOnce(action => new Promise(resolve => { release = () => resolve(action()); }));
+    let sending;
+    act(() => { sending = lastStatusBarProps.onComposerSubmit('Keep this message'); });
+    expect(state.sendMessage).not.toHaveBeenCalled();
+    await act(async () => {});
+    const key = Object.keys(localStorage).find(value => value.includes('composerFiles:') && value.includes(session.id));
+    localStorage.setItem(key, JSON.stringify({ version: 1, sessionId: session.id, items: [{ name: 'theirs.txt', path: '/work/project/theirs.txt' }] }));
+    await act(async () => { release(); await sending; });
+    expect(state.sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Command composer')).toHaveValue('Keep this message');
+    expect(screen.getByText('mine.txt')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('changed in another tab');
+    act(() => clearTokens(true));
+  });
+
+  it('starts only one mobile send when the user submits twice while file validation waits', async () => {
+    setUser({ id: 'mobile-attachment-double-send' });
+    const session = { id: 'ss-phone-attachment-double-send', runtime: 'codex', cwd: '/work/project' };
+    const state = { ...createStructuredSessionState(), sendMessage: vi.fn().mockResolvedValue({ accepted: true }) };
+    mockUseStructuredSession.mockReturnValue(state);
+    renderMobileShell({ sessions: [session], activeSessionId: session.id });
+    fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Send once' } });
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
+    let release;
+    withAttachmentWriteLock.mockImplementationOnce(action => new Promise(resolve => { release = () => resolve(action()); }));
+    let first, second;
+    act(() => { first = lastStatusBarProps.onComposerSubmit('Send once'); second = lastStatusBarProps.onComposerSubmit('Send once'); });
+    expect(state.sendMessage).not.toHaveBeenCalled();
+    await act(async () => { release(); await Promise.all([first, second]); });
+    expect(state.sendMessage).toHaveBeenCalledTimes(1);
+    expect(state.sendMessage.mock.calls[0][0]).toContain('/work/project/mine.txt');
+    act(() => clearTokens(true));
+  });
+
+  it('keeps a mobile draft if the conversation changes from streaming while validation waits', async () => {
+    setUser({ id: 'mobile-attachment-route-change' });
+    enqueueServerFollowup.mockClear();
+    const session = { id: 'ss-phone-attachment-route-change', runtime: 'codex', cwd: '/work/project' };
+    const state = { ...createStructuredSessionState(), isStreaming: true, sendMessage: vi.fn().mockResolvedValue({ accepted: true }) };
+    mockServerQueue = { status: 'available', snapshot: { revision: 1, order: [] }, refresh: vi.fn() };
+    mockUseStructuredSession.mockReturnValue(state);
+    try {
+      const view = renderMobileShell({ sessions: [session], activeSessionId: session.id });
+      fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this message' } });
+      await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
+      let release, sending;
+      withAttachmentWriteLock.mockImplementationOnce(action => new Promise(resolve => { release = () => resolve(action()); }));
+      act(() => { sending = lastStatusBarProps.onComposerSubmit('Keep this message'); });
+      mockUseStructuredSession.mockReturnValue({ ...state, isStreaming: false });
+      view.rerender(<MobileShell sessions={[session]} activeSessionId={session.id} />);
+      await act(async () => { release(); await sending; });
+      expect(state.sendMessage).not.toHaveBeenCalled();
+      expect(enqueueServerFollowup).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('Command composer')).toHaveValue('Keep this message');
+      expect(screen.getByText(/conversation or file selection changed while preparing/i)).toBeInTheDocument();
+    } finally {
+      mockServerQueue = { status: 'unavailable', snapshot: null, reason: 'fixture', refresh: () => {} };
+      act(() => clearTokens(true));
+    }
+  });
+
+  it('does not send from the old environment if the phone switches servers while validation waits', async () => {
+    setUser({ id: 'mobile-attachment-environment-switch' });
+    const session = { id: 'ss-phone-attachment-environment-switch', runtime: 'codex', cwd: '/work/project' };
+    const state = { ...createStructuredSessionState(), sendMessage: vi.fn().mockResolvedValue({ accepted: true }) };
+    mockUseStructuredSession.mockReturnValue(state);
+    try {
+      renderMobileShell({ sessions: [session], activeSessionId: session.id });
+      fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep original draft' } });
+      await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
+      let release, sending;
+      withAttachmentWriteLock.mockImplementationOnce(action => new Promise(resolve => { release = () => resolve(action()); }));
+      act(() => { sending = lastStatusBarProps.onComposerSubmit('Keep original draft'); });
+      act(() => setActiveEnvironment({ id: 'other-host', capabilities: { agentExecute: true } }));
+      await act(async () => { release(); await sending; });
+      expect(state.sendMessage).not.toHaveBeenCalled();
+      act(() => setActiveEnvironment(null));
+      expect(screen.getByLabelText('Command composer')).toHaveValue('Keep original draft');
+      expect(screen.getByText('mine.txt')).toBeInTheDocument();
+    } finally { act(() => clearTokens(true)); }
   });
 
   it('sends and clears only the current conversation’s attachments', async () => {
@@ -750,9 +937,9 @@ describe('MobileShell', () => {
     const state = { ...createStructuredSessionState(), sendMessage: vi.fn().mockResolvedValue({ accepted: true }) };
     mockUseStructuredSession.mockReturnValue(state);
     const view = renderMobileShell({ sessions, activeSessionId: sessions[0].id });
-    act(() => lastStatusBarProps.onComposerAttachmentAdd({ name: 'first.txt', path: '/work/one/first.txt' }));
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'first.txt', path: '/work/one/first.txt' }); });
     view.rerender(<MobileShell sessions={sessions} activeSessionId={sessions[1].id} />);
-    act(() => lastStatusBarProps.onComposerAttachmentAdd({ name: 'second.txt', path: '/work/two/second.txt' }));
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'second.txt', path: '/work/two/second.txt' }); });
     fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Read this' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(screen.queryByText('second.txt')).not.toBeInTheDocument());

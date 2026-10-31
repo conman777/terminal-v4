@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConversationSharePanel } from './ConversationSharePanel';
 import { setActiveEnvironment } from '../utils/remoteEnvironments';
+import { setUser } from '../utils/auth';
 
 const apiFetch = vi.hoisted(() => vi.fn());
 vi.mock('../utils/api', () => ({ apiFetch }));
@@ -77,6 +78,62 @@ describe('ConversationSharePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss: delete everything' }));
     await waitFor(() => expect(posts().map(([url, options]) => [url.split('/').slice(-2).join('/'), options.body.decision])).toEqual([['proposals/p1', 'approve'], ['proposals/p2', 'dismiss']]));
     expect(onInsertPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers an approved suggestion after its response is lost, without inserting it automatically', async () => {
+    let accepted = false;
+    apiFetch.mockImplementation(async (_url, options) => {
+      if (options?.method === 'POST') { accepted = true; throw new Error('Connection lost'); }
+      return listing([share({ allowGuestMessages: true, proposals: [{ id: 'p1', guestName: 'Pat', text: 'keep my draft', createdAt: 3, status: accepted ? 'approved' : 'pending' }] })]);
+    });
+    const onInsertPrompt = vi.fn();
+    render(<ConversationSharePanel sessionId={SID} onInsertPrompt={onInsertPrompt} pollMs={20} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve and add to composer: keep my draft' }));
+    const recover = await screen.findByRole('button', { name: 'Add approved suggestion to composer: keep my draft' });
+    expect(onInsertPrompt).not.toHaveBeenCalled();
+    fireEvent.click(recover);
+    expect(onInsertPrompt).toHaveBeenCalledExactlyOnceWith('keep my draft');
+    expect(posts()).toHaveLength(1);
+  });
+
+  it('does not insert an approval after the owner switches conversations', async () => {
+    let resolveApproval;
+    apiFetch.mockImplementation(async (url, options) => {
+      if (options?.method === 'POST') return new Promise(resolve => { resolveApproval = resolve; });
+      return listing(url.includes(SID) ? [share({ proposals: [{ id: 'p1', guestName: 'Pat', text: 'old conversation', status: 'pending' }] })] : []);
+    });
+    const onInsertPrompt = vi.fn();
+    const view = render(<ConversationSharePanel sessionId={SID} onInsertPrompt={onInsertPrompt} pollMs={0} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve and add to composer: old conversation' }));
+    const nextId = 'ss-00000000000000000000000000000002';
+    view.rerender(<ConversationSharePanel sessionId={nextId} onInsertPrompt={onInsertPrompt} pollMs={0} />);
+    await screen.findByText(/No share links/);
+    await act(async () => resolveApproval(response({ status: 'approved', text: 'old conversation' })));
+    expect(onInsertPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each(['conversation', 'owner', 'environment', 'unmount', 'conversation-return', 'owner-return', 'environment-return'])('does not show a late share link after %s changes', async change => {
+    setUser({ id: 'share-owner-a' });
+    let finish;
+    apiFetch.mockImplementation(async (_url, options) => options?.method === 'POST'
+      ? new Promise(resolve => { finish = resolve; })
+      : listing());
+    const view = render(<ConversationSharePanel sessionId={SID} pollMs={0} />);
+    await screen.findByText(/No share links/);
+    fireEvent.click(screen.getByRole('button', { name: 'Create read-only link' }));
+    if (change === 'conversation') view.rerender(<ConversationSharePanel sessionId="another-conversation" pollMs={0} />);
+    if (change === 'owner') act(() => setUser({ id: 'share-owner-b' }));
+    if (change === 'environment') act(() => setActiveEnvironment({ id: 'remote-x', baseUrl: 'https://example.invalid' }));
+    if (change === 'conversation-return') {
+      view.rerender(<ConversationSharePanel sessionId="another-conversation" pollMs={0} />);
+      view.rerender(<ConversationSharePanel sessionId={SID} pollMs={0} />);
+    }
+    if (change === 'owner-return') act(() => { setUser({ id: 'share-owner-b' }); setUser({ id: 'share-owner-a' }); });
+    if (change === 'environment-return') act(() => { setActiveEnvironment({ id: 'remote-x', baseUrl: 'https://example.invalid' }); setActiveEnvironment(null); });
+    if (change === 'unmount') view.unmount();
+    await act(async () => finish(response({ id: 'old-share', secret: 'old-secret' })));
+    expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
+    setUser(null);
   });
 
   it('is disabled with an explanation when viewing a remote environment', async () => {

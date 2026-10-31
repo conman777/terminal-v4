@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { apiFetch } from '../utils/api';
-import { getActiveEnvironment } from '../utils/remoteEnvironments';
+import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import './CollaborationPanel.css';
 
 const EXPIRIES = [[3600, '1 hour'], [21600, '6 hours'], [86400, '24 hours']];
@@ -19,8 +20,37 @@ async function request(sessionId, path, options = {}) {
   return data;
 }
 
+const subscribeScope = listener => {
+  const stopAuth = subscribeAuth(listener);
+  const stopEnvironment = subscribeEnvironment(listener);
+  return () => { stopAuth(); stopEnvironment(); };
+};
+const environmentEpochs = new WeakMap();
+let nextEnvironmentEpoch = 0;
+const environmentEpoch = value => {
+  if (!value) return 0;
+  if (!environmentEpochs.has(value)) environmentEpochs.set(value, ++nextEnvironmentEpoch);
+  return environmentEpochs.get(value);
+};
+const scopeSnapshot = () => {
+  const auth = captureAuthScope();
+  const environment = getActiveEnvironment();
+  return JSON.stringify([auth.generation, auth.session, auth.home, auth.userId, environmentEpoch(getEnvironmentSignal()), environmentEpoch(environment)]);
+};
+
 export function ConversationSharePanel({ sessionId, onInsertPrompt, pollMs = 5000 }) {
+  const identity = useSyncExternalStore(subscribeScope, scopeSnapshot);
+  return <ConversationShareScope key={JSON.stringify([identity, sessionId])} sessionId={sessionId} onInsertPrompt={onInsertPrompt} pollMs={pollMs} />;
+}
+
+function ConversationShareScope({ sessionId, onInsertPrompt, pollMs }) {
   const id = useId();
+  const auth = useRef(captureAuthScope()).current;
+  const environmentSignal = useRef(getEnvironmentSignal()).current;
+  const environmentSnapshot = useRef(scopeSnapshot()).current;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const isCurrent = useCallback(() => mounted.current && isAuthScopeCurrent(auth) && !environmentSignal.aborted && scopeSnapshot() === environmentSnapshot, [auth, environmentSignal, environmentSnapshot]);
   const [shares, setShares] = useState([]);
   const [audit, setAudit] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -35,9 +65,9 @@ export function ConversationSharePanel({ sessionId, onInsertPrompt, pollMs = 500
 
   const reload = useCallback(async signal => {
     const data = await request(sessionId, '', { signal });
-    if (signal?.aborted || scope.current !== sessionId) return;
+    if (signal?.aborted || scope.current !== sessionId || !isCurrent()) return;
     setShares(data.shares || []); setAudit(data.audit || []); setLoaded(true);
-  }, [sessionId]);
+  }, [sessionId, isCurrent]);
 
   useEffect(() => {
     scope.current = sessionId;
@@ -46,16 +76,16 @@ export function ConversationSharePanel({ sessionId, onInsertPrompt, pollMs = 500
     const controller = new AbortController();
     let timer;
     const tick = async () => {
-      try { await reload(controller.signal); } catch (failure) { if (!controller.signal.aborted) setError(failure.message); }
+      try { await reload(controller.signal); } catch (failure) { if (!controller.signal.aborted && isCurrent()) setError(failure.message); }
       if (!controller.signal.aborted && pollMs > 0) timer = setTimeout(tick, pollMs);
     };
     void tick();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [sessionId, remote, reload, pollMs]);
+  }, [sessionId, remote, reload, pollMs, isCurrent]);
 
   async function act(work) {
     setBusy(true); setError(''); setMessage('');
-    try { await work(); await reload(); } catch (failure) { setError(failure.message); } finally { setBusy(false); }
+    try { await work(); if (isCurrent()) await reload(); } catch (failure) { if (isCurrent()) setError(failure.message); } finally { if (isCurrent()) setBusy(false); }
   }
 
   const create = event => {
@@ -63,11 +93,12 @@ export function ConversationSharePanel({ sessionId, onInsertPrompt, pollMs = 500
     if (busy || remote) return;
     void act(async () => {
       const issued = await request(sessionId, '', { method: 'POST', body: { expiresInSeconds, allowGuestMessages } });
-      setLink(`${window.location.origin}/#share=${encodeURIComponent(issued.id)}.${encodeURIComponent(issued.secret)}`);
+      if (isCurrent()) setLink(`${window.location.origin}/#share=${encodeURIComponent(issued.id)}.${encodeURIComponent(issued.secret)}`);
     });
   };
   const decide = (share, proposal, decision) => act(async () => {
     const result = await request(sessionId, `/${encodeURIComponent(share.id)}/proposals/${encodeURIComponent(proposal.id)}`, { method: 'POST', body: { decision } });
+    if (scope.current !== sessionId || !isCurrent()) return;
     if (decision === 'approve') {
       if (onInsertPrompt) { onInsertPrompt(result.text); setMessage('Approved. The message is in your composer; review and send it yourself.'); }
       else setMessage(`Approved. Copy this message into the composer: ${result.text}`);
@@ -95,6 +126,11 @@ export function ConversationSharePanel({ sessionId, onInsertPrompt, pollMs = 500
         <p><strong>{proposal.guestName} suggests:</strong></p><p>{proposal.text}</p>
         <button type="button" disabled={busy} aria-label={`Approve and add to composer: ${proposal.text}`} onClick={() => void decide(share, proposal, 'approve')}>Approve and add to composer</button>{' '}
         <button type="button" disabled={busy} aria-label={`Dismiss: ${proposal.text}`} onClick={() => void decide(share, proposal, 'dismiss')}>Dismiss</button>
+      </div>)}
+      {(share.proposals || []).filter(proposal => proposal.status === 'approved').map(proposal => <div key={proposal.id}>
+        <p><strong>Approved suggestion from {proposal.guestName}:</strong></p><p>{proposal.text}</p>
+        <p>Add it again only if it is missing from your draft.</p>
+        {onInsertPrompt && <button type="button" disabled={busy || remote} aria-label={`Add approved suggestion to composer: ${proposal.text}`} onClick={() => { onInsertPrompt(proposal.text); setMessage('Added to your composer; review and send it yourself.'); }}>Add to composer</button>}
       </div>)}
       {(share.state === 'unredeemed' || share.state === 'active') && <button type="button" disabled={busy || remote} aria-label={`Stop sharing ${share.id}`} onClick={() => void act(() => request(sessionId, `/${encodeURIComponent(share.id)}`, { method: 'DELETE' }))}>Stop sharing</button>}
     </article>)}

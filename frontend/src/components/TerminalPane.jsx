@@ -123,6 +123,7 @@ export const TerminalPane = memo(function TerminalPane({
   showBrowser = false,
   onToggleBrowser,
   onOpenFiles,
+  onRevealProjectFile,
   onFindInThread,
   onStartThreadWithPrompt,
   onMinimizeMainTerminal,
@@ -169,9 +170,11 @@ export const TerminalPane = memo(function TerminalPane({
   const [isSessionBusy, setIsSessionBusy] = useState(false);
   const [launchQueued, setLaunchQueued] = useState(false);
   const { value: composerValue, setValue: setComposerValue, revision: composerDraftRevision, clearIfUnchanged: clearComposerDraft, error: composerDraftError, store: composerStore } = useComposerDraft(pane.sessionId);
-  const [composerAttachments, setComposerAttachments, attachmentDraftError, retryAttachmentDraft, restoredAttachments, attachmentConflict, useSavedAttachments, validateAttachmentDraft, getAttachmentSelectionToken, isAttachmentSelectionTokenCurrent] = useComposerFileAttachments(pane.sessionId);
+  const [composerAttachments, setComposerAttachments, attachmentDraftError, retryAttachmentDraft, restoredAttachments, attachmentConflict, useSavedAttachments, validateAttachmentDraft, getAttachmentSelectionToken, isAttachmentSelectionTokenCurrent, attachmentDraftSaving, dispatchWithAttachmentDraft, waitForAttachmentPersistence] = useComposerFileAttachments(pane.sessionId);
   const [composerSubmitting, setComposerSubmitting] = useState(false);
   const composerRequestRef = useRef(null);
+  const composerSessionRef = useRef(pane.sessionId);
+  composerSessionRef.current = pane.sessionId;
   const [modelUpdate, setModelUpdate] = useState(null);
   const modelRequestRef = useRef(null);
   const [viewModeNotice, setViewModeNotice] = useState('');
@@ -685,6 +688,19 @@ export const TerminalPane = memo(function TerminalPane({
     launchAiType(currentAiType);
   }, [currentAiType, launchAiType]);
 
+  const composerRouteRef = useRef('');
+  composerRouteRef.current = JSON.stringify([pane.sessionId, Boolean(structuredIsStreaming), serverQueue.status,
+    serverQueue.snapshot?.revision ?? null, serverQueue.snapshot?.order?.length ?? 0, queueError,
+    queuedMessages.map(item => [item.id, item.status]), Boolean(userImages),
+    userImages?.items?.map(item => [item.localId, item.status]) ?? [], planMode,
+    currentSession?.model, currentSession?.reasoning, currentSession?.serviceTier,
+    sessionInputAllowed, structuredHistoryOnly, structuredRequiresCleanup, structuredConnectionState,
+    structuredIsSending, structuredIsInterrupting]);
+  const sendImageDraftRef = useRef(sendImageDraft);
+  sendImageDraftRef.current = sendImageDraft;
+  const structuredSendMessageRef = useRef(structuredSendMessage);
+  structuredSendMessageRef.current = structuredSendMessage;
+
   const handleComposerSubmit = useCallback(async (text) => {
     if (attachmentDraftError || !validateAttachmentDraft()) return;
     if (!pane.sessionId || composerRequestRef.current || !environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput')) return;
@@ -702,56 +718,57 @@ export const TerminalPane = memo(function TerminalPane({
       setIsNoticePersistent(true); setViewModeNotice('Checking the follow-up queue. Your draft was kept; try again in a moment.');
       return;
     }
-    if ((isClaudeChat || isCodexSession) && serverQueue.status === 'available' && (structuredIsStreaming || serverQueue.snapshot?.order.length)) {
-      const request = {};
-      composerRequestRef.current = request;
-      setComposerSubmitting(true);
-      try {
-        const queued = await enqueueServerFollowup(pane.sessionId, payload);
-        if (composerRequestRef.current !== request) return;
-        clearComposerDraft(submittedDraftRevision, trimmed);
-        setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
-        serverQueue.refresh();
-        setIsNoticePersistent(false);
-        setViewModeNotice(queued.mode === 'held' ? 'Queued on the server. The queue is paused: open Queue to resume it.' : 'Queued on the server.');
-      } catch (error) {
-        if (composerRequestRef.current === request) { setIsNoticePersistent(true); setViewModeNotice(error.message || 'Could not queue this message. Your draft was kept.'); }
-      } finally {
-        if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
-      }
-      return;
-    }
-    if ((isClaudeChat || isCodexSession) && (structuredIsStreaming || queuedMessages.length)) {
-      if (composerDraftError && queuedMessages.some(item => item.text === payload)) return;
-      const item = newNativeFollowup(payload);
-      if (!nativeQueue.update(current => [...current, item])) return;
-      if (!composerDraftError) clearComposerDraft(submittedDraftRevision, trimmed);
-      setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
-      return;
-    }
     const request = {};
     composerRequestRef.current = request;
     setComposerSubmitting(true);
+    const sessionId = pane.sessionId;
+    const route = composerRouteRef.current;
+    const queueing = (isClaudeChat || isCodexSession) && serverQueue.status === 'available' && (structuredIsStreaming || serverQueue.snapshot?.order.length);
     try {
-      const result = isV4Session && userImages ? await sendImageDraft(payload)
-        : isStructuredSession ? await structuredSendMessage(payload) : handleChatSend(payload);
-      if (result?.completion) await result.completion;
-      if (composerRequestRef.current !== request) return;
-      if (isStructuredSession && result?.accepted !== true) {
-        setIsNoticePersistent(true); setViewModeNotice('Message was not accepted. Your draft was kept.');
-        return;
-      }
-      if (!result?.draftManaged) {
-        clearComposerDraft(submittedDraftRevision, trimmed);
-        setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
-      }
-      setIsNoticePersistent(false); setViewModeNotice(result?.queued ? 'Terminal is still connecting. Command queued.' : '');
+      const admission = await dispatchWithAttachmentDraft(submittedAttachments,
+        () => composerSessionRef.current === sessionId && composerRouteRef.current === route && composerRequestRef.current === request
+          && environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput'),
+        async () => {
+          if (queueing) {
+            const queued = await enqueueServerFollowup(sessionId, payload);
+            if (composerRequestRef.current !== request) return;
+            clearComposerDraft(submittedDraftRevision, trimmed);
+            setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+            serverQueue.refresh();
+            setIsNoticePersistent(false);
+            setViewModeNotice(queued.mode === 'held' ? 'Queued on the server. The queue is paused: open Queue to resume it.' : 'Queued on the server.');
+            return;
+          }
+          if ((isClaudeChat || isCodexSession) && (structuredIsStreaming || queuedMessages.length)) {
+            if (composerDraftError && queuedMessages.some(item => item.text === payload)) return;
+            const item = newNativeFollowup(payload);
+            if (!nativeQueue.update(current => [...current, item])) return;
+            if (!composerDraftError) clearComposerDraft(submittedDraftRevision, trimmed);
+            setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+            return;
+          }
+          const result = isV4Session && userImages ? await sendImageDraftRef.current(payload)
+            : isStructuredSession ? await structuredSendMessageRef.current(payload) : handleChatSend(payload);
+          if (result?.completion) await result.completion;
+          if (composerRequestRef.current !== request) return;
+          if (isStructuredSession && result?.accepted !== true) {
+            setIsNoticePersistent(true); setViewModeNotice('Message was not accepted. Your draft was kept.');
+            return;
+          }
+          if (!result?.draftManaged) {
+            clearComposerDraft(submittedDraftRevision, trimmed);
+            setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+          }
+          setIsNoticePersistent(false); setViewModeNotice(result?.queued ? 'Terminal is still connecting. Command queued.' : '');
+        });
+      if (admission.started) await admission.completion;
+      else if (composerRequestRef.current === request) { setIsNoticePersistent(true); setViewModeNotice('The conversation or file selection changed while preparing. Your draft was kept; try again.'); }
     } catch (error) {
-      if (composerRequestRef.current === request) { setIsNoticePersistent(true); setViewModeNotice(error.message || 'Send failed. Your draft was kept.'); }
+      if (composerRequestRef.current === request) { setIsNoticePersistent(true); setViewModeNotice(error.message || (queueing ? 'Could not queue this message. Your draft was kept.' : 'Send failed. Your draft was kept.')); }
     } finally {
       if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
     }
-  }, [attachmentDraftError, validateAttachmentDraft, composerAttachments, composerDraftError, composerDraftRevision, clearComposerDraft, handleChatSend, isClaudeChat, isCodexSession, isStructuredSession, isV4Session, nativeQueue, pane.sessionId, planMode, queueError, queuedMessages, serverQueue, structuredIsStreaming, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
+  }, [attachmentDraftError, validateAttachmentDraft, dispatchWithAttachmentDraft, composerAttachments, composerDraftError, composerDraftRevision, clearComposerDraft, handleChatSend, isClaudeChat, isCodexSession, isStructuredSession, isV4Session, nativeQueue, pane.sessionId, planMode, queueError, queuedMessages, serverQueue, structuredIsStreaming, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
 
   const modelUpdatePending = modelUpdate?.sessionId === pane.sessionId && modelUpdate.pending;
   const modelUpdateError = modelUpdate?.sessionId === pane.sessionId ? modelUpdate.error : '';
@@ -1176,6 +1193,7 @@ export const TerminalPane = memo(function TerminalPane({
         {isStructuredSession && structuredHistoryOnly && <p role="status" aria-label="Connection recovery" className="remote-readonly-notice">{structuredActionError}</p>}
         {composerDraftError && composerDraftError !== structuredActionError && <p role="alert" className="remote-readonly-notice">{composerDraftError}</p>}
         {attachmentDraftError && <AttachmentDraftStatus error={attachmentDraftError} conflict={attachmentConflict} currentItems={composerAttachments} onRetry={retryAttachmentDraft} onUseSaved={useSavedAttachments} />}
+        {attachmentDraftSaving && <p role="status" className="remote-readonly-notice">Saving file selections…</p>}
         {restoredAttachments && !attachmentDraftError && <p role="status" className="remote-readonly-notice">Restored file selections. Check the files before sending; they may have changed.</p>}
         {modelUpdateError && <p role="alert" className="remote-readonly-notice">{modelUpdateError}</p>}
         {modelUpdatePending && <p role="status" className="remote-readonly-notice">Updating model for the next turn…</p>}
@@ -1211,6 +1229,8 @@ export const TerminalPane = memo(function TerminalPane({
                     onImageUpload={!isV4Session && sessionInputAllowed && environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer') ? handleImageUpload : undefined}
                     sessionId={pane.sessionId}
                     workspacePath={isStructuredSession ? sessionCwd : ''}
+                    filePreviewVisible={isActive}
+                    onRevealProjectFile={isActive && onRevealProjectFile ? target => onRevealProjectFile({ ...target, paneId: pane.id, desktopId: currentDesktopId }) : undefined}
                     aiType={currentAiType}
                     connectionState={resolvedConnectionState}
                     isSendReady={isStructuredSession ? structuredConnectionState === 'online' : isSendReady}
@@ -1341,6 +1361,7 @@ export const TerminalPane = memo(function TerminalPane({
                 onAddCustomAiCommand={handleAddCustomAiCommand}
                 onLaunchAi={handleLaunchAgent}
                 composerValue={composerValue}
+                composerDraftStore={composerStore}
                 composerAttachments={composerAttachments}
                 attachmentsEnabled
                 skills={installedSkills}
@@ -1354,10 +1375,11 @@ export const TerminalPane = memo(function TerminalPane({
                 onComposerSubmit={handleComposerSubmit}
                 onComposerAttachmentAdd={handleComposerAttachmentAdd}
                 onComposerAttachmentRemove={handleComposerAttachmentRemove}
+                waitForAttachmentPersistence={waitForAttachmentPersistence}
                 getAttachmentSelectionToken={getAttachmentSelectionToken}
                 isAttachmentSelectionTokenCurrent={isAttachmentSelectionTokenCurrent}
                 composerPlaceholder={sessionInputAllowed ? getComposerPlaceholder({ isStructuredSession, session: currentSession, foregroundAiType: currentAiType, customProviders: customAiProviders }) : "Read-only remote session"}
-                composerSubmitDisabled={Boolean(attachmentDraftError) || (isStructuredSession && structuredHistoryOnly) || queuedMessages.some(item => item.status === 'editing')}
+                composerSubmitDisabled={Boolean(attachmentDraftError) || attachmentDraftSaving || (isStructuredSession && structuredHistoryOnly) || queuedMessages.some(item => item.status === 'editing')}
                 composerDisabled={!pane.sessionId || !sessionInputAllowed || composerSubmitting || modelUpdatePending || (isStructuredSession && (structuredIsSending || structuredIsInterrupting))}
                 runtimeInfo={isStructuredSession ? { label: `${getStructuredAgentLabel(currentSession)}${currentSession?.model ? ` · ${currentSession.model}` : ''}` } : runtimeInfo}
                 gitBranches={sessionGitBranchInfo?.branches || []}

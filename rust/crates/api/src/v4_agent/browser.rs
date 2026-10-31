@@ -1765,11 +1765,19 @@ pub(crate) fn validate_arguments(name: &str, input: &Value) -> Result<(), String
     }
     Ok(())
 }
+// This prototype must not be registered: CDP key events target the focused page,
+// not an element. Focus can change after a check or during keydown.
+#[cfg(test)]
+#[derive(Default)]
+struct KeyState {
+    pressed: bool,
+    lease: Option<Arc<std::fs::File>>,
+}
 #[cfg(test)]
 struct KeySupervisor {
     requests: mpsc::Sender<Request>,
     #[cfg(test)]
-    gate: Arc<tokio::sync::Mutex<bool>>,
+    gate: Arc<tokio::sync::Mutex<KeyState>>,
     timeout: Duration,
 }
 #[cfg(test)]
@@ -1792,7 +1800,7 @@ impl KeySupervisor {
     fn new(requests: mpsc::Sender<Request>, timeout: Duration) -> Self {
         Self {
             requests,
-            gate: Arc::new(tokio::sync::Mutex::new(false)),
+            gate: Arc::new(tokio::sync::Mutex::new(KeyState::default())),
             timeout,
         }
     }
@@ -1809,23 +1817,25 @@ impl KeySupervisor {
             _ = cancel.cancelled() => return Err("Keyboard action cancelled before admission".into()),
             gate = self.gate.clone().lock_owned() => gate,
         };
-        if *gate {
+        if gate.pressed {
             return Err(
                 "Keyboard release is unconfirmed; close the browser before further input".into(),
             );
         }
-        self.press_locked(gate, session, down, up, cancel).await
+        self.press_locked(gate, session, down, up, cancel, None)
+            .await
     }
 
     async fn press_locked(
         &self,
-        mut gate: tokio::sync::OwnedMutexGuard<bool>,
+        mut gate: tokio::sync::OwnedMutexGuard<KeyState>,
         session: &str,
         down: Value,
         up: Value,
         cancel: crate::v4_agent::interaction::Cancellation,
+        lease: Option<Arc<std::fs::File>>,
     ) -> Result<(), String> {
-        if *gate {
+        if gate.pressed {
             return Err(
                 "Keyboard release is unconfirmed; close the browser before further input".into(),
             );
@@ -1840,7 +1850,7 @@ impl KeySupervisor {
         let session = session.to_owned();
         let timeout = self.timeout;
         let action = tokio::spawn(async move {
-            let (response, down_result) = oneshot::channel();
+            let (response, mut down_result) = oneshot::channel();
             cancel.admit(|| {
                 let live = alive
                     .try_lock()
@@ -1854,20 +1864,23 @@ impl KeySupervisor {
                         params: down,
                         session: Some(session.clone()),
                         response,
-                        lease: None,
+                        lease: lease.clone(),
                     })
                     .map_err(|_| "Keyboard admission unavailable")?;
-                *gate = true;
+                gate.pressed = true;
+                gate.lease = lease.clone();
                 Ok(())
             })?;
+            let mut down_replied = false;
+            let mut down_closed = false;
             let outcome = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => Err("Keyboard action cancelled after admission".to_string()),
                 _ = stopped.notified() => Err("Keyboard action caller stopped after admission".to_string()),
-                result = tokio::time::timeout(timeout, down_result) => match result {
-                    Ok(Ok(Ok(_))) => Ok(()),
-                    Ok(Ok(Err(error))) => Err(error),
-                    _ => Err("Keyboard action outcome is unconfirmed; inspect the page before retrying".into()),
+                result = tokio::time::timeout(timeout, &mut down_result) => match result {
+                    Ok(Ok(result)) => { down_replied = true; result.map(|_| ()) },
+                    Ok(Err(_)) => { down_closed = true; Err("Keyboard action outcome is unconfirmed; inspect the page before retrying".into()) },
+                    Err(_) => Err("Keyboard action outcome is unconfirmed; inspect the page before retrying".into()),
                 },
             };
             let (response, released) = oneshot::channel();
@@ -1876,7 +1889,7 @@ impl KeySupervisor {
                 params: up,
                 session: Some(session),
                 response,
-                lease: None,
+                lease: lease.clone(),
             };
             if !matches!(
                 tokio::time::timeout(timeout, requests.send(release)).await,
@@ -1888,7 +1901,14 @@ impl KeySupervisor {
                         .into(),
                 );
             }
-            *gate = false;
+            if !down_replied
+                && (down_closed
+                    || !matches!(tokio::time::timeout(timeout, down_result).await, Ok(Ok(_))))
+            {
+                return Err("Keyboard action outcome is unconfirmed; close the browser before further input".into());
+            }
+            gate.pressed = false;
+            gate.lease = None;
             outcome
         });
         action.await.map_err(|_| {
@@ -2061,7 +2081,7 @@ pub(crate) struct BrowserClient {
     browser: Option<OwnedBrowser>,
     mouse_gate: Arc<tokio::sync::Mutex<MouseState>>,
     #[cfg(test)]
-    key_gate: Arc<tokio::sync::Mutex<bool>>,
+    key_gate: Arc<tokio::sync::Mutex<KeyState>>,
     #[cfg(all(test, unix))]
     cleanup_probe: Option<CleanupProbe>,
 }
@@ -2088,7 +2108,7 @@ impl BrowserClient {
             browser: None,
             mouse_gate: Arc::new(tokio::sync::Mutex::new(MouseState::default())),
             #[cfg(test)]
-            key_gate: Arc::new(tokio::sync::Mutex::new(false)),
+            key_gate: Arc::new(tokio::sync::Mutex::new(KeyState::default())),
             #[cfg(all(test, unix))]
             cleanup_probe: None,
         })
@@ -2116,6 +2136,17 @@ impl BrowserClient {
                 "Mouse release is unconfirmed; close the browser before further actions".into(),
             );
         }
+        #[cfg(test)]
+        let _key = {
+            let key = self.key_gate.lock().await;
+            if key.pressed {
+                return Err(
+                    "Keyboard release is unconfirmed; close the browser before further input"
+                        .into(),
+                );
+            }
+            key
+        };
         validate_arguments(name, input)?;
         if !self.config.enabled || self.is_retiring() {
             return Err("Browser is unavailable for document review".into());
@@ -2220,6 +2251,17 @@ impl BrowserClient {
                     "Mouse release is unconfirmed; close the browser before further actions".into(),
                 );
             }
+            #[cfg(test)]
+            let _key = {
+                let key = self.key_gate.lock().await;
+                if key.pressed {
+                    return Err(
+                        "Keyboard release is unconfirmed; close the browser before further input"
+                            .into(),
+                    );
+                }
+                key
+            };
             self.execute_reviewed_document_inner(name, input, review, lease)
                 .await
         };
@@ -2497,11 +2539,17 @@ impl BrowserClient {
         mouse.pressed = false;
         mouse.lease = None;
         drop(mouse);
-        self.browser = None;
         #[cfg(test)]
         {
-            self.key_gate = Arc::new(tokio::sync::Mutex::new(false));
+            let mut key = tokio::time::timeout_at(deadline, self.key_gate.lock())
+                .await
+                .map_err(|_| {
+                    "Keyboard cleanup is still pending; original browser owner retained for retry"
+                })?;
+            key.pressed = false;
+            key.lease = None;
         }
+        self.browser = None;
         Ok(())
     }
     #[cfg(test)]
@@ -2565,7 +2613,7 @@ impl BrowserClient {
                 _ = cancellation.cancelled() => return Err("Browser action cancelled before admission".into()),
                 guard = self.key_gate.clone().lock_owned() => guard,
             };
-            if *guard {
+            if guard.pressed {
                 return Err(
                     "Keyboard release is unconfirmed; close the browser before further input"
                         .into(),
@@ -2616,12 +2664,13 @@ impl BrowserClient {
         name: &str,
         input: &Value,
         approved: bool,
-        #[allow(unused_mut)] mut key_guard: Option<tokio::sync::OwnedMutexGuard<bool>>,
+        #[cfg(test)] mut key_guard: Option<tokio::sync::OwnedMutexGuard<KeyState>>,
+        #[cfg(not(test))] _key_guard: Option<()>,
         mut mouse_guard: Option<tokio::sync::OwnedMutexGuard<MouseState>>,
         cancellation: &crate::v4_agent::interaction::Cancellation,
     ) -> Result<Value, String> {
         #[cfg(not(test))]
-        let _ = (&key_guard, cancellation);
+        let _ = cancellation;
         validate_arguments(name, input)?;
         if !self.config.enabled {
             return Err("Browser tools are disabled for this account".into());
@@ -2718,6 +2767,8 @@ impl BrowserClient {
             browser.active_session(input).await?;
             if browser.tabs().await?.len() == 1 {
                 drop(mouse_guard.take());
+                #[cfg(test)]
+                drop(key_guard.take());
                 self.close().await?;
                 return Ok(
                     json!({"closed":true,"tabId":target,"browserClosed":true,"profileDeleted":true}),
@@ -2758,6 +2809,7 @@ impl BrowserClient {
                         down,
                         up,
                         cancellation.clone(),
+                        ACTION_SETTINGS_LEASE.try_with(Arc::clone).ok(),
                     )
                     .await?;
                 Ok(json!({"pressed":input["key"]}))
@@ -2799,11 +2851,11 @@ impl BrowserClient {
                     let element = element.ok_or("Element ref required")?;
                     let value = text(input, "text", 32_768)?;
                     let clear = input.get("clear").and_then(Value::as_bool).unwrap_or(true);
-                    browser.evaluate(&session,&format!("(()=>{{const e={element};if(e.matches(':disabled')||e.readOnly||!e.getClientRects().length||getComputedStyle(e).visibility==='hidden'||!(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&['text','search','url','tel','email','password','number'].includes(e.type)))throw Error('Ref is not visible and editable');e.scrollIntoView({{block:'center',inline:'center'}});e.focus();if(document.activeElement!==e&&e.getRootNode().activeElement!==e)throw Error('Element could not receive focus');if({clear}){{if(e.isContentEditable){{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}}else e.select();}}return true;}})()"),true).await?;
-                    browser
-                        .cdp()?
-                        .request("Input.insertText", json!({"text":value}), Some(&session))
-                        .await?;
+                    let encoded_value =
+                        serde_json::to_string(value).map_err(|_| "Invalid browser text")?;
+                    cancellation.run(browser.evaluate(&session,&format!("(()=>{{const e={element};if(e.matches(':disabled')||e.readOnly||!e.getClientRects().length||getComputedStyle(e).visibility==='hidden'||!(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&['text','search','url','tel','email','password','number'].includes(e.type)))throw Error('Ref is not visible and editable');e.scrollIntoView({{block:'center',inline:'center'}});e.focus();if(document.activeElement!==e&&e.getRootNode().activeElement!==e)throw Error('Element could not receive focus');if({clear}){{if(e.isContentEditable){{const r=document.createRange();r.selectNodeContents(e);const s=getSelection();s.removeAllRanges();s.addRange(r);}}else e.select();}}return true;}})()"),true)).await?;
+                    cancellation.check()?;
+                    browser.evaluate(&session,&format!("(()=>{{const e={element};if(e.matches(':disabled')||e.readOnly||!e.getClientRects().length||getComputedStyle(e).visibility==='hidden'||!(e instanceof HTMLTextAreaElement||e.isContentEditable||e instanceof HTMLInputElement&&['text','search','url','tel','email','password','number'].includes(e.type))||document.activeElement!==e&&e.getRootNode().activeElement!==e)throw Error('Element lost focus or is no longer editable; review before retrying');if(!document.execCommand('insertText',false,{encoded_value}))throw Error('Text insertion failed');return true;}})()"),true).await?;
                     return Ok(json!({"typedCharacters":value.chars().count()}));
                 }
                 let script = if let Some(element) = element {
@@ -5038,7 +5090,7 @@ printf '%s\n%s\n' '{port}' '/devtools/browser/cleanup-fixture' > "$profile/DevTo
                 },
             )
             .unwrap();
-            *client.key_gate.lock().await = true;
+            client.key_gate.lock().await.pressed = true;
             assert!(client
                 .dispatch("browser_tabs", &json!({}), true)
                 .await
@@ -5202,10 +5254,138 @@ printf '%s\n%s\n' '{port}' '/devtools/browser/cleanup-fixture' > "$profile/DevTo
                 .unwrap();
             assert_eq!(up.params["type"], "keyUp");
             up.response.send(Ok(json!({}))).unwrap();
+            down.response.send(Ok(json!({}))).unwrap();
             let guard = tokio::time::timeout(Duration::from_secs(2), supervisor.gate.lock())
                 .await
                 .unwrap();
-            assert!(!*guard);
+            assert!(!guard.pressed);
+        }
+
+        #[tokio::test]
+        async fn supervised_key_action_waits_for_late_down_reply_before_unfencing() {
+            let (sender, mut receiver) = mpsc::channel(4);
+            let supervisor = Arc::new(KeySupervisor::new(sender, Duration::from_secs(2)));
+            let cancel = crate::v4_agent::interaction::Cancellation::default();
+            let mut action = {
+                let supervisor = supervisor.clone();
+                let cancel = cancel.clone();
+                tokio::spawn(async move {
+                    supervisor
+                        .press(
+                            "fixture",
+                            json!({"type":"rawKeyDown","key":"Enter"}),
+                            json!({"type":"keyUp","key":"Enter"}),
+                            cancel,
+                        )
+                        .await
+                })
+            };
+            let down = receiver.recv().await.unwrap();
+            cancel.cancel();
+            let up = receiver.recv().await.unwrap();
+            up.response.send(Ok(json!({}))).unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), &mut action)
+                    .await
+                    .is_err()
+            );
+            down.response.send(Ok(json!({}))).unwrap();
+            assert!(action.await.unwrap().unwrap_err().contains("cancelled"));
+            assert!(!supervisor.gate.lock().await.pressed);
+        }
+
+        #[tokio::test]
+        async fn closed_key_down_response_keeps_the_browser_fenced() {
+            let (sender, mut receiver) = mpsc::channel(4);
+            let supervisor = Arc::new(KeySupervisor::new(sender, Duration::from_millis(150)));
+            let action = {
+                let supervisor = supervisor.clone();
+                tokio::spawn(async move {
+                    supervisor
+                        .press(
+                            "fixture",
+                            json!({"type":"rawKeyDown","key":"Enter"}),
+                            json!({"type":"keyUp","key":"Enter"}),
+                            crate::v4_agent::interaction::Cancellation::default(),
+                        )
+                        .await
+                })
+            };
+            let down = receiver.recv().await.unwrap();
+            drop(down.response);
+            let up = receiver.recv().await.unwrap();
+            up.response.send(Ok(json!({}))).unwrap();
+            assert!(action.await.unwrap().unwrap_err().contains("unconfirmed"));
+            assert!(supervisor.gate.lock().await.pressed);
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn unconfirmed_key_input_retains_settings_and_fences_review_until_cleanup() {
+            for missing_down_reply in [false, true] {
+                let data = tempfile::tempdir().unwrap();
+                let workspace = tempfile::tempdir().unwrap();
+                let (mut client, _) =
+                    cleanup_test_client(data.path(), "key-owner", workspace.path()).await;
+                let lease = Arc::new(browser_settings_lease(data.path(), "key-owner").unwrap());
+                let (sender, mut receiver) = mpsc::channel(4);
+                let supervisor = Arc::new(KeySupervisor {
+                    requests: sender,
+                    gate: client.key_gate.clone(),
+                    timeout: Duration::from_millis(150),
+                });
+                let guard = client.key_gate.clone().lock_owned().await;
+                let action = {
+                    let supervisor = supervisor.clone();
+                    tokio::spawn(async move {
+                        supervisor
+                            .press_locked(
+                                guard,
+                                "synthetic-session",
+                                json!({"type":"rawKeyDown","key":"Enter"}),
+                                json!({"type":"keyUp","key":"Enter"}),
+                                crate::v4_agent::interaction::Cancellation::default(),
+                                Some(lease),
+                            )
+                            .await
+                    })
+                };
+                let down = receiver.recv().await.unwrap();
+                let mut pending_down = Some(down.response);
+                drop(down.lease);
+                if !missing_down_reply {
+                    pending_down.take().unwrap().send(Ok(json!({}))).unwrap();
+                }
+                let up = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                up.response
+                    .send(if missing_down_reply {
+                        Ok(json!({}))
+                    } else {
+                        Err("synthetic release failure".into())
+                    })
+                    .unwrap();
+                drop(up.lease);
+                assert!(action.await.unwrap().is_err());
+                assert!(client
+                    .dispatch("browser_tabs", &json!({}), true)
+                    .await
+                    .unwrap_err()
+                    .contains("unconfirmed"));
+                assert!(client
+                    .review_images(&json!({}))
+                    .await
+                    .err()
+                    .unwrap()
+                    .contains("unconfirmed"));
+                assert!(save_config(data.path(), "key-owner", &BrowserConfig::default()).is_err());
+                assert!(save_config(data.path(), "other-owner", &BrowserConfig::default()).is_ok());
+                drop(pending_down);
+                client.close().await.unwrap();
+                assert!(save_config(data.path(), "key-owner", &BrowserConfig::default()).is_ok());
+            }
         }
 
         #[tokio::test]
@@ -6618,6 +6798,39 @@ printf '%s\n%s\n' '{port}' '/devtools/browser/cleanup-fixture' > "$profile/DevTo
             state.close().await.unwrap();
             server.abort();
         }
+        #[tokio::test]
+        async fn typed_text_stays_with_reviewed_element_after_focus_microtask() {
+            let Some(executable) = executable() else {
+                eprintln!("V4 browser fixture skipped: set V4_TEST_BROWSER_BIN");
+                return;
+            };
+            let data = tempfile::tempdir().unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+            let mut client = BrowserClient::new(
+                data.path(),
+                "synthetic-type-focus-owner",
+                workspace.path(),
+                BrowserConfig {
+                    enabled: true,
+                    executable: Some(executable),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let result: Result<(), String> = async {
+                client.dispatch("browser_open", &json!({}), true).await?;
+                client.dispatch("browser_evaluate", &json!({"script":"document.body.innerHTML='<input aria-label=Reviewed><input aria-label=Other>';const [a,b]=document.querySelectorAll('input');a.addEventListener('focus',()=>queueMicrotask(()=>b.focus()));true"}), true).await?;
+                let snapshot = client.dispatch("browser_snapshot", &json!({}), true).await?;
+                let reference = snapshot["elements"].as_array().unwrap().iter().find(|row| row["name"] == "Reviewed").unwrap()["ref"].clone();
+                let typed = client.dispatch("browser_type", &json!({"ref":reference,"text":"approved"}), true).await;
+                let values = client.dispatch("browser_evaluate", &json!({"script":"Array.from(document.querySelectorAll('input'), e => e.value)"}), true).await?;
+                assert_eq!(values, if typed.is_ok() { json!(["approved", ""]) } else { json!(["", ""]) });
+                Ok(())
+            }.await;
+            client.close().await.unwrap();
+            result.unwrap();
+        }
+
         #[tokio::test]
         async fn disabled_keyboard_prototype_can_retarget_after_focus_microtask() {
             let Some(executable) = executable() else {

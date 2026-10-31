@@ -86,6 +86,19 @@ describe('describeShellCommand', () => {
 });
 
 describe('ToolCallBlock', () => {
+  it('links only owned project file locations in tool output', async () => {
+    const onProjectFileClick = vi.fn();
+    const output = 'src/app.jsx:7:4\n/work/project/src/main.rs:9\n../secret.txt:3\nhttps://example.test/remote.js:5\n/work/other/file.js:4\nC:\\secret.js:6\nfoo.js:4:0\n../src/app.jsx:7';
+    render(<ToolCallBlock workspacePath="/work/project" onProjectFileClick={onProjectFileClick}
+      item={{ type: 'tool_use', tool: 'Bash', toolInput: { command: 'check' }, result: { toolResult: output } }} />);
+    fireEvent.click(screen.getByRole('button', { name: /Run command/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open src/app.jsx:7:4 at line 7' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open /work/project/src/main.rs:9 at line 9' }));
+    expect(onProjectFileClick.mock.calls).toEqual([[{ path: 'src/app.jsx', line: 7 }], [{ path: 'src/main.rs', line: 9 }]]);
+    expect(screen.getAllByRole('button').filter(button => button.getAttribute('aria-label')?.startsWith('Open ')).map(button => button.textContent))
+      .toEqual(['src/app.jsx:7:4', '/work/project/src/main.rs:9']);
+  });
+
   it('shows a readable label and URL for an extracted web page', () => {
     render(<ToolCallBlock item={{ type: 'tool_use', tool: 'web_extract', toolInput: { url: 'https://example.test/article' }, result: { toolResult: 'Page content' } }} />);
     fireEvent.click(screen.getByRole('button', { name: /Fetch page/ }));
@@ -142,6 +155,21 @@ describe('ToolCallBlock', () => {
   it('does not describe a rejected background investigation as started', () => {
     render(<ToolCallBlock item={{ type: 'tool_use', tool: 'delegate_task_background', toolInput: { prompt: 'Inspect the project' }, result: { toolResult: 'User denied this action', isError: true } }} />);
     expect(screen.getByRole('button', { name: /Background investigation.*Failed/ })).not.toHaveTextContent('Started');
+  });
+
+  it.each([
+    'If delivery can be completed, the result will enter the held follow-up queue for review. Otherwise, review the retained task result.',
+    'Check the parent queue and retained task result before resuming; delivery may require review.',
+  ])('does not promise a queued result when delivery may need review', async delivery => {
+    const user = userEvent.setup();
+    const output = JSON.stringify({ status: 'running', taskId: 'task', childSessionId: 'child', delivery });
+    render(<ToolCallBlock item={{ type: 'tool_use', tool: 'delegate_task_background', toolInput: { prompt: 'Inspect the project' }, result: { toolResult: output } }} />);
+    const card = screen.getByRole('button', { name: /Background investigation.*Started/ });
+    expect(card).not.toHaveTextContent('Result follows in the queue');
+    expect(card).toHaveTextContent('Delivery details');
+    await user.click(card);
+    expect(screen.getByText(delivery)).toBeVisible();
+    expect(screen.getByText('Find retained results in Project tools → Tasks & schedules.')).toBeVisible();
   });
 
   it('shows parallel read-only investigations and their tasks', () => {

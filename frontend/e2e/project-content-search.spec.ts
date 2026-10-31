@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
@@ -16,8 +16,10 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 1280, height: 800 
     if (!fixtureRoot) throw new Error('Set E2E_SEARCH_ROOT to an isolated, allowed directory.');
     await mkdir(fixtureRoot, { recursive: true });
     const workspace = await mkdtemp(path.join(fixtureRoot, 'v4-content-search-'));
+    const outside = await mkdtemp(path.join(fixtureRoot, 'v4-content-outside-'));
     await mkdir(path.join(workspace, 'src'));
     await writeFile(path.join(workspace, 'src', 'example.txt'), 'First line\nunique-search-needle\n');
+    await writeFile(path.join(outside, 'outside-marker.txt'), 'synthetic outside file');
     let sessionId = '';
     let accessToken = '';
     try {
@@ -46,12 +48,25 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 1280, height: 800 
       })).toBe(true);
       await expect(files).toBeInViewport({ ratio: 1 });
       await page.screenshot({ path: testInfo.outputPath('project-content-search.png') });
+      let unrestrictedResultRequests = 0;
+      page.on('request', request => {
+        const url = new URL(request.url());
+        if (url.pathname === '/api/files/list' && url.searchParams.get('path') === path.join(workspace, 'src')) unrestrictedResultRequests += 1;
+      });
+      await rename(path.join(workspace, 'src'), path.join(workspace, 'src-saved'));
+      await symlink(outside, path.join(workspace, 'src'));
       await result.click();
       const selected = files.getByRole('region', { name: 'Selected search result' });
       await expect(selected).toBeFocused();
       await expect(selected).toContainText('src/example.txt:2');
       await expect(selected).toContainText('unique-search-needle');
       await expect(selected).toContainText('File may have changed since search.');
+      await expect(files.getByRole('alert')).toContainText('Project directory is unavailable');
+      await expect(files.getByText('outside-marker.txt')).toHaveCount(0);
+      expect(unrestrictedResultRequests).toBe(0);
+      await rm(path.join(workspace, 'src'));
+      await rename(path.join(workspace, 'src-saved'), path.join(workspace, 'src'));
+      await files.getByRole('button', { name: 'Refresh', exact: true }).click();
       await expect(files.getByText('example.txt', { exact: true })).toBeVisible();
       const back = selected.getByRole('button', { name: 'Back to search results' });
       await expect(back).toBeInViewport({ ratio: 1 });
@@ -90,6 +105,7 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 1280, height: 800 
     } finally {
       if (sessionId && accessToken) await page.request.delete(`/api/terminal/${sessionId}`, { headers: { Authorization: `Bearer ${accessToken}` }, timeout: 5000 });
       await rm(workspace, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
     }
   });
 }

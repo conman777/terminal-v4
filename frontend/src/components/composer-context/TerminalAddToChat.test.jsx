@@ -5,6 +5,7 @@ import { TerminalAddToChat, useTerminalAddToChat } from './TerminalAddToChat';
 import { splitContext } from './composerContext';
 import { getComposerDraftStore } from '../../utils/composerDraftStore';
 import { setActiveEnvironment } from '../../utils/remoteEnvironments';
+import { setUser } from '../../utils/auth';
 
 function fakeTerminal(sessionId) {
   const listeners = new Set();
@@ -36,6 +37,31 @@ const ownerB = { threadId: 'ss-b', title: 'Bravo' };
 beforeEach(() => { localStorage.clear(); setActiveEnvironment(null); });
 
 describe('TerminalAddToChat', () => {
+  it('cannot insert a previous account’s terminal selection after the account changes', async () => {
+    const user = userEvent.setup();
+    setUser({ id: 'first-user' });
+    const terminals = { 'pty-1': fakeTerminal('pty-1') };
+    render(<Harness terminalId="pty-1" owner={ownerA} terminals={terminals} />);
+    await user.click(screen.getByText('mount'));
+    act(() => terminals['pty-1'].select('private terminal output'));
+    const button = screen.getByRole('button', { name: 'Add to chat: Alpha' });
+    act(() => setUser({ id: 'second-user' }));
+    await user.click(button);
+    expect(getComposerDraftStore('ss-a').getSnapshot().text).toBe('');
+  });
+
+  it('cannot insert a terminal selection after switching environments', async () => {
+    const user = userEvent.setup();
+    const terminals = { 'pty-1': fakeTerminal('pty-1') };
+    render(<Harness terminalId="pty-1" owner={ownerA} terminals={terminals} />);
+    await user.click(screen.getByText('mount'));
+    act(() => terminals['pty-1'].select('old environment output'));
+    const button = screen.getByRole('button', { name: 'Add to chat: Alpha' });
+    act(() => setActiveEnvironment({ id: 'different-environment' }));
+    await user.click(button);
+    expect(getComposerDraftStore('ss-a').getSnapshot().text).toBe('');
+  });
+
   it('renders nothing until text is selected and then adds a chip to the owning thread only', async () => {
     const user = userEvent.setup();
     const terminals = { 'pty-1': fakeTerminal('pty-1') };

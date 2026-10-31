@@ -177,6 +177,7 @@ export function MobileHeader({
   const [renameTarget, setRenameTarget] = useState(null);
   const [renamePending, setRenamePending] = useState(false);
   const renameRequestRef = useRef(null);
+  const renameScopeRef = useRef(null);
   const [closeFeedback, setCloseFeedback] = useState(null);
   const [closePending, setClosePending] = useState(false);
   const closeRequestRef = useRef(null);
@@ -246,18 +247,20 @@ export function MobileHeader({
   const handleStartRename = useCallback((sessionId) => {
     const session = visibleActiveSessions.find((item) => item.id === sessionId);
     if (!session || !onRenameSession) return;
+    renameScopeRef.current = { auth: captureAuthScope(), environment: getEnvironmentSignal() };
     setRenameTarget({sessionId, title: getSessionDisplayInfo(session, 'New terminal').primaryLabel});
   }, [onRenameSession, visibleActiveSessions]);
 
-  const closeRename = useCallback(() => setRenameTarget(null), []);
+  const closeRename = useCallback(() => { renameScopeRef.current = null; setRenameTarget(null); }, []);
   const renameIsCurrent = Boolean(renameTarget && activeVisibleSession?.id === renameTarget.sessionId && !activeVisibleSession.thread?.archived && !isPreviewView && !showDrawer);
   useEffect(() => { if (!renameIsCurrent) setRenameTarget(null); }, [renameIsCurrent]);
   useEffect(() => () => { renameRequestRef.current = null; }, []);
 
   const handleSaveRename = async (sessionId, nextTitle) => {
     if (!renameIsCurrent || renameTarget.sessionId !== sessionId) return {ok: false, error: new Error('The selected thread changed. Open Rename again.')};
+    if (!renameScopeRef.current || renameScopeRef.current.environment.aborted || !isAuthScopeCurrent(renameScopeRef.current.auth)) return {ok: false, error: new Error('Account or environment changed. Open Rename again.')};
     if (renameRequestRef.current) return {ok: false, error: new Error('A rename is already in progress.')};
-    const request = {};
+    const request = renameScopeRef.current;
     renameRequestRef.current = request;
     setRenamePending(true);
     try {
@@ -282,6 +285,41 @@ export function MobileHeader({
   }, [activeSessionId, activeVisibleSession?.id, activeVisibleSession?.thread?.archived, mobileView, isWorkspaceStart, showDrawer]);
   useEffect(() => () => { pinRequestRef.current = null; }, []);
   useEffect(() => {
+    let activeScope = { auth: captureAuthScope(), environment: getEnvironmentSignal() };
+    const scopeChanged = () => {
+      if (activeScope.environment.aborted || !isAuthScopeCurrent(activeScope.auth)) {
+        activeScope = { auth: captureAuthScope(), environment: getEnvironmentSignal() };
+        setShowOverflow(false);
+        setShowTitle(false);
+        setShowDrawer(false);
+      }
+      const rename = renameRequestRef.current || renameScopeRef.current;
+      if (rename && (rename.environment.aborted || !isAuthScopeCurrent(rename.auth))) {
+        renameRequestRef.current = null;
+        renameScopeRef.current = null;
+        setRenamePending(false);
+        setRenameTarget(null);
+      }
+      const close = closeRequestRef.current;
+      if (!close || close.environment.aborted || !isAuthScopeCurrent(close.auth)) {
+        closeRequestRef.current = null;
+        closeScopeRef.current = {};
+        setClosePending(false);
+        setCloseFeedback(null);
+      }
+      const pin = pinRequestRef.current;
+      if (!pin || pin.environment.aborted || !isAuthScopeCurrent(pin.auth)) {
+        pinRequestRef.current = null;
+        pinScopeRef.current = {};
+        setPinPending(false);
+        setPinFeedback(null);
+      }
+    };
+    const unsubscribeAuth = subscribeAuth(scopeChanged);
+    const unsubscribeEnvironment = subscribeEnvironment(scopeChanged);
+    return () => { unsubscribeAuth(); unsubscribeEnvironment(); };
+  }, []);
+  useEffect(() => {
     if (pinFeedback && Boolean(activeVisibleSession?.thread?.pinned) !== pinFeedback.pinned) setPinFeedback(null);
   }, [activeVisibleSession?.thread?.pinned, pinFeedback]);
 
@@ -289,16 +327,16 @@ export function MobileHeader({
     const action = pinned ? onUnpinSession : onPinSession;
     if (pinRequestRef.current || archiveRequestRef.current || !action || activeVisibleSession?.id !== sessionId || activeVisibleSession.thread?.archived || Boolean(activeVisibleSession.thread?.pinned) !== pinned || isPreviewView || showDrawer) return;
     const scope = pinScopeRef.current;
-    const request = {};
+    const request = { auth: captureAuthScope(), environment: getEnvironmentSignal() };
     pinRequestRef.current = request;
     setPinPending(true);
     setPinFeedback({ sessionId, pinned, error: null });
     try {
       const result = await action(sessionId);
       if (result?.ok === false) throw result.error || new Error('Try again.');
-      if (pinRequestRef.current === request && pinScopeRef.current === scope) setPinFeedback(null);
+      if (pinRequestRef.current === request && pinScopeRef.current === scope && !request.environment.aborted && isAuthScopeCurrent(request.auth)) setPinFeedback(null);
     } catch (failure) {
-      if (pinRequestRef.current === request && pinScopeRef.current === scope) setPinFeedback({ sessionId, pinned, error: `Could not ${pinned ? 'unpin' : 'pin'} thread. ${failure?.message || 'Try again.'}` });
+      if (pinRequestRef.current === request && pinScopeRef.current === scope && !request.environment.aborted && isAuthScopeCurrent(request.auth)) setPinFeedback({ sessionId, pinned, error: `Could not ${pinned ? 'unpin' : 'pin'} thread. ${failure?.message || 'Try again.'}` });
     } finally {
       if (pinRequestRef.current === request) { pinRequestRef.current = null; setPinPending(false); }
     }
@@ -418,7 +456,7 @@ export function MobileHeader({
   const handleCloseFromMenu = async (sessionId) => {
     if (closeRequestRef.current || !onCloseSession || activeVisibleSession?.id !== sessionId || activeVisibleSession.thread?.archived || isPreviewView || showDrawer) return;
     const scope = closeScopeRef.current;
-    const request = {};
+    const request = { auth: captureAuthScope(), environment: getEnvironmentSignal() };
     const sessionTitle = getSessionDisplayInfo(activeVisibleSession, 'Thread').primaryLabel;
     closeRequestRef.current = request;
     setClosePending(true);
@@ -426,9 +464,9 @@ export function MobileHeader({
     try {
       const result = await onCloseSession(sessionId);
       if (result?.ok === false) throw result.error || new Error('Try again.');
-      if (closeRequestRef.current === request && closeScopeRef.current === scope) setCloseFeedback(null);
+      if (closeRequestRef.current === request && closeScopeRef.current === scope && !request.environment.aborted && isAuthScopeCurrent(request.auth)) setCloseFeedback(null);
     } catch (failure) {
-      if (closeRequestRef.current === request && closeScopeRef.current === scope) {
+      if (closeRequestRef.current === request && closeScopeRef.current === scope && !request.environment.aborted && isAuthScopeCurrent(request.auth)) {
         setCloseFeedback({sessionId, title: sessionTitle, error: `Could not close ${sessionTitle}. ${failure?.message || 'Try again.'}`});
       }
     } finally {

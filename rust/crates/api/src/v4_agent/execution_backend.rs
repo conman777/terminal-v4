@@ -68,6 +68,68 @@ fn scrubbed_std_command(program: &str) -> std::process::Command {
     process
 }
 
+#[cfg(unix)]
+fn bounded_output(mut process: std::process::Command, timeout: Duration) -> Option<String> {
+    use std::{io::Read, os::fd::AsRawFd};
+
+    const OUTPUT_LIMIT: usize = 1024 * 1024;
+    let mut child = process.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let fd = stdout.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+
+    let deadline = Instant::now() + timeout;
+    let mut output = Vec::new();
+    let mut status = None;
+    let mut eof = false;
+    loop {
+        let mut read_progress = false;
+        if !eof {
+            let mut buffer = [0u8; 8192];
+            match stdout.read(&mut buffer) {
+                Ok(0) => eof = true,
+                Ok(count) if output.len() + count <= OUTPUT_LIMIT => {
+                    output.extend_from_slice(&buffer[..count]);
+                    read_progress = true;
+                }
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(value) => status = value,
+                Err(_) => break,
+            }
+        }
+        if let (Some(exit), true) = (status, eof) {
+            return exit
+                .success()
+                .then(|| String::from_utf8(output).ok())
+                .flatten();
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        if !read_progress {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    if status.is_none() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    None
+}
+
+#[cfg(not(unix))]
 fn bounded_output(mut process: std::process::Command, timeout: Duration) -> Option<String> {
     let mut child = process.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
@@ -103,12 +165,7 @@ impl ContainerCleanup {
         self.directory.path().join("container.id")
     }
 
-    pub(super) fn disarm(&mut self) {
-        self.armed = false;
-    }
-
-    pub(super) fn force_remove(&mut self) {
-        self.armed = false;
+    pub(super) fn force_remove(&mut self) -> Result<(), String> {
         let mut targets = vec![self.name.clone()];
         if let Ok(id) = std::fs::read_to_string(self.cidfile()) {
             let id = id.trim();
@@ -126,12 +183,28 @@ impl ContainerCleanup {
             remove.args(["rm", "-f", target]);
             let _ = bounded_output(remove, CLEANUP_TIMEOUT);
         }
+        let mut list = scrubbed_std_command(&self.program);
+        list.args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("name=^/{}$", self.name),
+            "--format",
+            "{{.Names}}",
+        ]);
+        let listing = bounded_output(list, CLEANUP_TIMEOUT)
+            .ok_or("Docker container cleanup is unconfirmed")?;
+        if listing.lines().any(|name| !name.trim().is_empty()) {
+            return Err("Docker container cleanup is unconfirmed".into());
+        }
+        self.armed = false;
+        Ok(())
     }
 }
 impl Drop for ContainerCleanup {
     fn drop(&mut self) {
         if self.armed {
-            self.force_remove();
+            let _ = self.force_remove();
         }
     }
 }
@@ -449,7 +522,7 @@ impl ExecutionBackend for SshBackend {
     }
     fn host_description(&self) -> String {
         format!(
-            "runs on the remote host {} over SSH in {} (not this machine; the workspace is not synchronised; the remote login shell must be POSIX)",
+            "runs on the remote host {} over SSH in {} (not this machine; the workspace is not synchronised; remote commands may continue after cancellation or disconnection; the remote login shell must be POSIX)",
             self.host, self.workdir
         )
     }
@@ -519,7 +592,13 @@ pub(super) fn select(
                 network: matches!(lookup(DOCKER_NETWORK_VARIABLE).as_deref(), Some("enabled")),
             }))
         }
-        Some("ssh") => Ok(Box::new(ssh_from_settings(lookup)?)),
+        Some("ssh") => {
+            let _ = ssh_from_settings(lookup)?;
+            Err(
+                "SSH execution is disabled because remote command cleanup cannot be confirmed"
+                    .into(),
+            )
+        }
         Some(_) => Err("Unknown execution backend setting".into()),
     }
 }

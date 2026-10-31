@@ -28,7 +28,7 @@ async function startApi(binary: string, root: string, port: number, provider: nu
   const data = path.join(root, dataName);
   await mkdir(data, { recursive: true });
   const child = spawn(binary, [], { env: {
-    PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: root, HOST: '127.0.0.1', PORT: String(port),
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin', XDG_CONFIG_HOME: root, HOST: '127.0.0.1', PORT: String(port),
     TERMINAL_DATA_DIR: data, TERMINAL_USE_TMUX: 'false', TERMINAL_V4_LOCAL_TESTING: '1',
     JWT_SECRET: secret, VAULT_ENCRYPTION_KEY: 'queue-authority-fixture-vault',
     DEEPSEEK_BASE_URL: `http://127.0.0.1:${provider}/v1`, NO_PROXY: '*',
@@ -83,27 +83,7 @@ async function queue(base: string, token: string, id: string) {
   return result.value;
 }
 
-async function verifyDefaultHoldsProtectedItem(base: string, token: string, id: string) {
-  const initial = await queue(base, token, id);
-  expect(initial.mode).toBe('held');
-  expect(initial.items).toHaveLength(1);
-  const item = initial.items[0];
-  const edit = await call(base, `/api/structured/sessions/${id}/queue`, token, 'POST', {
-    operationId: randomUUID(), expectedQueueRevision: initial.revision,
-    operation: { kind: 'edit', itemId: item.itemId, expectedItemRevision: item.revision, text: 'changed' },
-  });
-  expect(edit.status).toBe(409);
-  const resume = await call(base, `/api/structured/sessions/${id}/queue`, token, 'POST', {
-    operationId: randomUUID(), expectedQueueRevision: initial.revision, operation: { kind: 'resume' },
-  });
-  expect(resume.status).toBe(200);
-  await expect.poll(async () => {
-    const value = await queue(base, token, id);
-    return [value.mode, value.holdReason, value.items[0]?.state];
-  }, { timeout: 10_000 }).toEqual(['held', 'dispatch_error', 'pending']);
-}
-
-test('default backend holds a signed delegation and does not dispatch or strip its proof', async () => {
+test('default backend dispatches a signed delegation through the authorized path', async () => {
   test.setTimeout(90_000);
   const root = process.env.E2E_QUEUE_FIXTURE_ROOT || '';
   if (!root || !defaultBinary || !previewBinary) throw new Error('An isolated fixture root and both binaries are required');
@@ -118,7 +98,7 @@ test('default backend holds a signed delegation and does not dispatch or strip i
       const transcript = JSON.stringify(body.messages || []);
       const answer = (message: unknown, reason = 'stop') => ({ choices: [{ finish_reason: reason, message }] });
       let value;
-      if (parent && transcript.includes('Delegated task ')) value = answer({ role: 'assistant', content: 'unexpected second turn' });
+      if (transcript.includes('Delegated task ')) value = answer({ role: 'assistant', content: 'Parent received the child result.' });
       else if (parent && (body.messages || []).some((message: any) => message.role === 'tool')) value = answer({ role: 'assistant', content: 'Background investigation started.' });
       else if (parent) value = answer({ role: 'assistant', content: null, tool_calls: [{ id: 'delegate-fixture', type: 'function', function: { name: 'delegate_task_background', arguments: JSON.stringify({ prompt: 'Inspect notes.' }) } }] }, 'tool_calls');
       else value = answer({ role: 'assistant', content: 'Verified child answer.' });
@@ -145,10 +125,11 @@ test('default backend holds a signed delegation and does not dispatch or strip i
       return Boolean(approvalId);
     }, { timeout: 20_000 }).toBe(true);
     expect((await call(api.base, `/api/structured/sessions/${id}/approve`, token, 'POST', { approvalId, approved: true })).status).toBe(200);
-    await expect.poll(async () => (await queue(api.base, token, id)).items.length, { timeout: 30_000 }).toBe(1);
-    await verifyDefaultHoldsProtectedItem(api.base, token, id);
+    await expect.poll(async () => (await queue(api.base, token, id)).items[0]?.state, { timeout: 30_000 }).toBe('accepted');
     const session = await call(api.base, `/api/structured/sessions/${id}`, token);
-    expect(session.value.events.filter((event: any) => event.type === 'user_message_accepted')).toHaveLength(1);
+    const accepted = session.value.events.filter((event: any) => event.type === 'user_message_accepted');
+    expect(accepted).toHaveLength(2);
+    expect(JSON.stringify(accepted)).toContain('Verified child answer.');
     expect(await readFile(path.join(workspace, 'notes'), 'utf8')).toBe('original');
   } finally {
     if (child) await stopApi(child);
@@ -157,16 +138,24 @@ test('default backend holds a signed delegation and does not dispatch or strip i
   }
 });
 
-test('default backend holds proof-bearing queue work restored from preview', async () => {
+test('default backend preserves the restart hold before dispatching preview-signed work', async () => {
   test.setTimeout(90_000);
   const root = process.env.E2E_QUEUE_FIXTURE_ROOT || '';
   if (!root || !defaultBinary || !previewBinary) throw new Error('An isolated fixture root and both binaries are required');
   const workspace = await mkdtemp(path.join(root, 'workspace-'));
+  const provider = createHttpServer((_incoming, outgoing) => {
+    outgoing.writeHead(200, { 'content-type': 'application/json' });
+    outgoing.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Restored queue dispatched.' } }] }));
+  });
+  await new Promise<void>((resolve, reject) => provider.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const address = provider.address();
+  if (!address || typeof address === 'string') throw new Error('Provider port unavailable');
   let child: ChildProcess | undefined;
   try {
-    let api = await startApi(previewBinary, root, await freePort(), 1, 'restart-data');
+    let api = await startApi(previewBinary, root, await freePort(), address.port, 'restart-data');
     child = api.child;
     const token = await login(api.base);
+    expect((await call(api.base, '/api/vault', token, 'POST', { keyName: 'terminal-v4:provider:deepseek', keyValue: 'synthetic-fixture-key' })).status).toBe(200);
     const id = await createSession(api.base, token, workspace);
     const enqueued = await call(api.base, `/api/structured/sessions/${id}/queue`, token, 'POST', {
       operationId: randomUUID(), expectedQueueRevision: 0,
@@ -175,11 +164,66 @@ test('default backend holds proof-bearing queue work restored from preview', asy
     expect(enqueued.status).toBe(200);
     await stopApi(child);
     child = undefined;
-    api = await startApi(defaultBinary, root, await freePort(), 1, 'restart-data');
+    api = await startApi(defaultBinary, root, await freePort(), address.port, 'restart-data');
     child = api.child;
-    await verifyDefaultHoldsProtectedItem(api.base, token, id);
-    const session = await call(api.base, `/api/structured/sessions/${id}`, token);
-    expect(session.value.events.filter((event: any) => event.type === 'user_message_accepted')).toHaveLength(0);
+    const held = await queue(api.base, token, id);
+    expect([held.mode, held.holdReason, held.items[0]?.state]).toEqual(['held', 'restart', 'pending']);
+    expect((await call(api.base, `/api/structured/sessions/${id}`, token)).value.events.filter((event: any) => event.type === 'user_message_accepted')).toHaveLength(0);
+    const resume = await call(api.base, `/api/structured/sessions/${id}/queue`, token, 'POST', {
+      operationId: randomUUID(), expectedQueueRevision: held.revision, operation: { kind: 'resume' },
+    });
+    expect(resume.status).toBe(200);
+    await expect.poll(async () => (await queue(api.base, token, id)).items[0]?.state, { timeout: 20_000 }).toBe('accepted');
+    const accepted = (await call(api.base, `/api/structured/sessions/${id}`, token)).value.events.filter((event: any) => event.type === 'user_message_accepted');
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0].content).toContain('Preview-signed message');
+  } finally {
+    if (child) await stopApi(child);
+    await new Promise<void>(resolve => provider.close(() => resolve()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('default backend can still edit an unproven message in a legacy session', async () => {
+  test.setTimeout(90_000);
+  const root = process.env.E2E_QUEUE_FIXTURE_ROOT || '';
+  if (!root || !defaultBinary) throw new Error('An isolated fixture root and default binary are required');
+  const workspace = await mkdtemp(path.join(root, 'legacy-unproven-workspace-'));
+  let child: ChildProcess | undefined;
+  try {
+    let api = await startApi(defaultBinary, root, await freePort(), 1, 'legacy-unproven-data');
+    child = api.child;
+    const loginResult = await call(api.base, '/api/auth/local-testing', undefined, 'POST', { username: 'legacy-unproven' });
+    expect(loginResult.status).toBe(200);
+    const token = loginResult.value.tokens.accessToken as string;
+    const owner = loginResult.value.user.id as string;
+    const id = await createSession(api.base, token, workspace);
+    const itemId = randomUUID();
+    expect((await call(api.base, `/api/structured/sessions/${id}/queue`, token, 'POST', {
+      operationId: randomUUID(), expectedQueueRevision: 0,
+      operation: { kind: 'enqueue', itemId, text: 'Legacy message', runWhenIdle: false },
+    })).status).toBe(200);
+    await stopApi(child);
+    child = undefined;
+    const ownerDir = createHash('sha256').update(owner).digest('hex');
+    const checkpointPath = path.join(root, 'legacy-unproven-data', 'structured-sessions', ownerDir, `${id}.json`);
+    const [first, ...tail] = (await readFile(checkpointPath, 'utf8')).split('\n');
+    expect(tail.join('').trim()).toBe('');
+    const checkpoint = JSON.parse(first);
+    delete checkpoint.sessionIncarnation;
+    checkpoint.version = 1;
+    await writeFile(checkpointPath, JSON.stringify(checkpoint));
+    api = await startApi(defaultBinary, root, await freePort(), 1, 'legacy-unproven-data');
+    child = api.child;
+    const before = await queue(api.base, token, id);
+    const edit = await call(api.base, `/api/structured/sessions/${id}/queue`, token, 'POST', {
+      operationId: randomUUID(), expectedQueueRevision: before.revision,
+      operation: { kind: 'edit', itemId, expectedItemRevision: 1, text: 'Edited legacy message' },
+    });
+    expect(edit.status).toBe(200);
+    const after = await queue(api.base, token, id);
+    expect([after.mode, after.holdReason, after.items[0].text]).toEqual(['held', 'restart', 'Edited legacy message']);
+    expect(await exists(path.join(root, 'legacy-unproven-data', 'queue-authority.key'))).toBe(false);
   } finally {
     if (child) await stopApi(child);
     await rm(workspace, { recursive: true, force: true });

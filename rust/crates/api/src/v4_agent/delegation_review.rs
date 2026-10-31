@@ -85,6 +85,19 @@ impl ApprovedDelegation {
     pub(super) fn binding(&self) -> &Binding {
         &self.binding
     }
+    #[cfg(unix)]
+    pub(super) fn attach_paired_attestation(
+        &mut self,
+        proof: crate::followup_queue::PairedDelegationAttestation,
+    ) -> Result<(), String> {
+        self.check()?;
+        if self.binding.paired_authorization.is_none() || self.binding.paired_attestation.is_some()
+        {
+            return Err("Delegation authority cannot be attached".into());
+        }
+        self.binding.paired_attestation = Some(proof);
+        Ok(())
+    }
     pub(super) fn check(&self) -> Result<(), String> {
         self.cancellation.check()?;
         self.check_expiry()?;
@@ -147,6 +160,8 @@ pub(super) async fn review(
         queue_identity,
         incarnation,
         None,
+        #[cfg(unix)]
+        None,
         call_id,
         input,
         interaction,
@@ -163,6 +178,7 @@ pub(super) async fn review_with_authorization(
     queue_identity: Uuid,
     parent_incarnation: Option<Uuid>,
     authorization: Option<DelegationAuthorization>,
+    #[cfg(unix)] paired_authorization: Option<crate::paired_environments::PairedGrantAuthority>,
     call_id: &str,
     input: &Value,
     interaction: &dyn Interaction,
@@ -215,6 +231,10 @@ pub(super) async fn review_with_authorization(
         permission: Permission::ReadOnlyChild,
         operation_id: Uuid::new_v4(),
         authorization,
+        #[cfg(unix)]
+        paired_authorization,
+        #[cfg(unix)]
+        paired_attestation: None,
     };
     super::delegation_outbox::validate_binding(&binding)?;
     crate::workspace_tasks::validate_held_delegation(
@@ -223,8 +243,12 @@ pub(super) async fn review_with_authorization(
     )
     .map_err(|error| error.message)?;
     let details = serde_json::to_value(&binding).map_err(|_| "Cannot encode delegation review")?;
-    let delivery = if cfg!(feature = "queued-authority-preview") && binding.authorization.is_some()
+    let mut authorized_delivery = binding.authorization.is_some();
+    #[cfg(unix)]
     {
+        authorized_delivery |= binding.paired_authorization.is_some();
+    }
+    let delivery = if authorized_delivery {
         "If the initiating authorization remains valid, a new empty follow-up queue is enabled automatically. Other held queues require resume."
     } else {
         "If delivery remains available, its result will enter the parent follow-up queue held for review. Otherwise, review the retained task result."
@@ -283,6 +307,10 @@ mod tests {
                 permission: Permission::ReadOnlyChild,
                 operation_id: Uuid::new_v4(),
                 authorization: None,
+                #[cfg(unix)]
+                paired_authorization: None,
+                #[cfg(unix)]
+                paired_attestation: None,
             },
             expires_at: interaction::now_ms() + 10_000,
             cancellation: Cancellation::default(),
@@ -394,6 +422,8 @@ mod tests {
                 Uuid::new_v4(),
                 Some(incarnation),
                 authorization,
+                #[cfg(unix)]
+                None,
                 "call",
                 &serde_json::json!({"prompt":"Inspect"}),
                 &gate,
@@ -403,7 +433,7 @@ mod tests {
             .unwrap();
             let requests = gate.requests.lock().unwrap();
             let description = &requests[0].description;
-            if cfg!(feature = "queued-authority-preview") && has_local_authority {
+            if has_local_authority {
                 assert!(description.contains("automatically"), "{description}");
                 assert!(
                     description.contains("authorization remains valid"),
@@ -417,6 +447,61 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn paired_approval_records_grant_and_describes_conditional_delivery() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let session = super::super::new_session(
+            "deepseek",
+            "fixture-model",
+            &workspace.path().canonicalize().unwrap(),
+        );
+        let scope = ActionScope {
+            owner: "owner".into(),
+            session_id: format!("ss-{}", Uuid::parse_str(&session.id).unwrap().simple()),
+            turn_id: Uuid::new_v4().to_string(),
+        };
+        let now = interaction::now_ms();
+        let grant: crate::paired_environments::PairedGrantAuthority =
+            serde_json::from_value(serde_json::json!({
+                "owner": "owner", "grant_id": Uuid::new_v4(),
+                "created": now / 1000 - 1,
+                "expires_at_ms": (now / 1000 + 60) * 1000,
+                "revision": "a".repeat(64)
+            }))
+            .unwrap();
+        let gate = Gate {
+            approved: true,
+            requests: Mutex::new(Vec::new()),
+        };
+        let approved = review_with_authorization(
+            data.path(),
+            "owner",
+            &session,
+            &scope,
+            Uuid::new_v4(),
+            Some(Uuid::new_v4()),
+            None,
+            Some(grant.clone()),
+            "call",
+            &serde_json::json!({"prompt":"Inspect"}),
+            &gate,
+            &Cancellation::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            approved.binding().paired_authorization.as_ref(),
+            Some(&grant)
+        );
+        let requests = gate.requests.lock().unwrap();
+        assert!(requests[0]
+            .description
+            .contains("authorization remains valid"));
+        assert!(requests[0].description.contains("enabled automatically"));
     }
 
     #[tokio::test]

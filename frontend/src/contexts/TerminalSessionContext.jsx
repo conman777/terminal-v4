@@ -91,6 +91,8 @@ export function TerminalSessionProvider({ children }) {
   const inventorySeqRef = useRef(0);
   const loadRequestRef = useRef(0);
   const appliedInventorySeqRef = useRef(0);
+  const initialSelectionHandledRef = useRef(false);
+  const initialSelectionGenerationRef = useRef(selectionGenerationRef.current);
 
   const captureSelection = useCallback(() => {
     const generation = selectionGenerationRef.current;
@@ -773,19 +775,28 @@ export function TerminalSessionProvider({ children }) {
   }, [loadSessions, patchStructuredSessionMetadata, refreshStructuredLifecycle, sessions]);
 
   const closeSession = useCallback(async (sessionId) => {
+    const auth = captureAuthScope();
+    const signal = environmentSignal.current;
+    const scopeCurrent = () => isMountedRef.current && !signal.aborted
+      && getEnvironmentSignal() === signal && isAuthScopeCurrent(auth);
+    const scopeChanged = () => ({ ok: false, error: new Error('The account or environment changed. Check the original terminal before trying again.') });
+    if (!scopeCurrent()) return scopeChanged();
     if (isStructuredSessionId(sessionId)) {
       try {
         const response = await apiFetch(`/api/structured/sessions/${sessionId}`, {
-          method: 'DELETE'
+          method: 'DELETE', signal
         });
+        if (!scopeCurrent()) return scopeChanged();
         if (!response.ok) {
           throw new Error(`Failed to close structured session (${response.status})`);
         }
 
         removeStructuredSessionMetadata(sessionId);
         setSessions((currentSessions) => {
+          if (!scopeCurrent()) return currentSessions;
           const remainingSessions = currentSessions.filter((session) => session.id !== sessionId);
           setSelectedSession((currentActiveId) => {
+            if (!scopeCurrent()) return currentActiveId;
             if (sessionId === currentActiveId) {
               const nextActive = remainingSessions.find(isFallbackSession);
               return nextActive ? nextActive.id : null;
@@ -795,8 +806,10 @@ export function TerminalSessionProvider({ children }) {
           return remainingSessions;
         });
       } catch (error) {
+        if (!scopeCurrent()) return scopeChanged();
         console.error('Failed to close structured session', error);
         await loadSessions();
+        if (!scopeCurrent()) return scopeChanged();
         return { ok: false, error };
       }
       return;
@@ -804,15 +817,18 @@ export function TerminalSessionProvider({ children }) {
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}`, {
-        method: 'DELETE'
+        method: 'DELETE', signal
       });
+      if (!scopeCurrent()) return scopeChanged();
       if (!response.ok) {
         throw new Error(`Failed to close session (${response.status})`);
       }
 
       setSessions((currentSessions) => {
+        if (!scopeCurrent()) return currentSessions;
         const remainingSessions = currentSessions.filter((s) => s.id !== sessionId);
         setSelectedSession((currentActiveId) => {
+          if (!scopeCurrent()) return currentActiveId;
           if (sessionId === currentActiveId) {
             const nextActive = remainingSessions.find(isFallbackSession);
             return nextActive ? nextActive.id : null;
@@ -823,9 +839,12 @@ export function TerminalSessionProvider({ children }) {
       });
 
       await loadSessions();
+      if (!scopeCurrent()) return scopeChanged();
     } catch (error) {
+      if (!scopeCurrent()) return scopeChanged();
       console.error('Failed to close session', error);
       await loadSessions();
+      if (!scopeCurrent()) return scopeChanged();
       return { ok: false, error };
     }
   }, [loadSessions, removeStructuredSessionMetadata]);
@@ -1326,52 +1345,31 @@ export function TerminalSessionProvider({ children }) {
     fetchAppStateRef.current = fetchAppState;
   }, [fetchAppState]);
 
+  useEffect(() => {
+    if (loadingSessions || !hasLoadedOnceRef.current || initialSelectionHandledRef.current) return;
+    initialSelectionHandledRef.current = true;
+    if (selectionGenerationRef.current !== initialSelectionGenerationRef.current) return;
+
+    try {
+      const lastSessionId = storage.getItem('lastActiveSession');
+      const lastSession = sessions.find((session) => session.id === lastSessionId && !isCompanionSession(session));
+      const selected = lastSession || sessions.find(isFallbackSession);
+      if (selected) {
+        setSelectedSession(selected.id);
+        storage.setItem('lastActiveSession', selected.id);
+      } else if (lastSessionId) {
+        storage.removeItem('lastActiveSession');
+        setSelectedSession(null);
+      }
+    } catch (error) {
+      console.error('Failed to restore last session', error);
+    }
+  }, [loadingSessions, sessions, setSelectedSession, storage]);
+
   // Initial load and polling setup
   useEffect(() => {
     isMountedRef.current = true;
-
-    const initializeSessions = async () => {
-      const selectionGeneration = selectionGenerationRef.current;
-      const initialSessions = await loadSessionsRef.current();
-      if (!isMountedRef.current || environmentSignal.current.aborted
-        || selectionGeneration !== selectionGenerationRef.current || !Array.isArray(initialSessions)) return;
-
-      const lastSessionId = storage.getItem('lastActiveSession');
-      if (lastSessionId) {
-        try {
-          const lastSession = initialSessions.find((session) => session.id === lastSessionId && !isCompanionSession(session));
-
-          if (lastSession) {
-            setSelectedSession(lastSession.id);
-            storage.setItem('lastActiveSession', lastSession.id);
-            return;
-          }
-
-          const activeSession = initialSessions.find(isFallbackSession);
-          if (activeSession) {
-            setSelectedSession(activeSession.id);
-            storage.setItem('lastActiveSession', activeSession.id);
-          } else {
-            storage.removeItem('lastActiveSession');
-            setSelectedSession(null);
-          }
-        } catch (error) {
-          console.error('Failed to restore last session', error);
-        }
-      } else {
-        try {
-          const activeSession = initialSessions.find(isFallbackSession);
-          if (activeSession) {
-            setSelectedSession(activeSession.id);
-            storage.setItem('lastActiveSession', activeSession.id);
-          }
-        } catch (error) {
-          console.error('Failed to find active session', error);
-        }
-      }
-    };
-
-    initializeSessions();
+    loadSessionsRef.current();
 
     // Visibility-aware polling
     let pollTimeoutId = null;
@@ -1452,7 +1450,7 @@ export function TerminalSessionProvider({ children }) {
   // Auto-restore inactive sessions
   useEffect(() => {
     if (loadingSessions) return;
-    if (!activeSessionId) return;
+    if (!activeSessionId || activeSessionIdRef.current !== activeSessionId) return;
     const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
     if (!activeSnapshot || activeSnapshot.isActive) return;
     if (restoreInFlightRef.current.has(activeSessionId)) return;

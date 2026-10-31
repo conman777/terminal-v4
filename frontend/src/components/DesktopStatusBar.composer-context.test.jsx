@@ -15,10 +15,10 @@ vi.mock('./TerminalMicButton', () => ({ TerminalMicButton: () => null }));
 const threads = [{ id: 'thr_1', title: 'Fix login bug' }, { id: 'thr_2', title: 'Refactor billing' }];
 const terminal = buildTerminalContext({ text: 'npm test\nFAIL auth', label: 'Terminal' });
 
-function Harness({ initial = '', submit, sessionId = 's1', mentionThreads = threads }) {
+function Harness({ initial = '', submit, sessionId = 's1', mentionThreads = threads, mentionRoot, mentionFiles, skills }) {
   const [value, setValue] = useState(initial);
   return <DesktopStatusBar sessionId={sessionId} composerValue={value} onComposerChange={setValue} onComposerSubmit={text => { submit(text); setValue(''); }}
-    mentionThreads={mentionThreads} showMicButtons={false} />;
+    mentionThreads={mentionThreads} mentionRoot={mentionRoot} mentionFiles={mentionFiles} skills={skills} showMicButtons={false} />;
 }
 const box = () => screen.getByRole('textbox', { name: 'Command composer' });
 
@@ -63,10 +63,61 @@ describe('inline composer context', () => {
     expect(splitContext(submit.mock.calls[0][0]).chips).toMatchObject([{ kind: 'thread', id: 'thr_1' }]);
   });
 
+  it('adds a thread reference while editing the middle of a draft without losing its suffix', () => {
+    render(<Harness initial="See @login before deploying" submit={vi.fn()} />);
+    box().focus();
+    box().setSelectionRange(10, 10);
+    fireEvent.select(box());
+    fireEvent.click(screen.getByRole('option', { name: /Fix login bug/ }));
+    expect(screen.getByRole('list', { name: 'Attached context' })).toHaveTextContent('Fix login bug');
+    expect(box()).toHaveValue('See before deploying');
+    expect(box()).toHaveFocus();
+    expect(box().selectionStart).toBe(4);
+  });
+
+  it('replaces a file mention at the cursor while preserving following text', () => {
+    render(<Harness initial="Inspect @log before release" submit={vi.fn()} mentionRoot="/project" mentionFiles={['src/logout.js']} />);
+    box().focus();
+    box().setSelectionRange(12, 12);
+    fireEvent.select(box());
+    fireEvent.click(screen.getByRole('option', { name: /src\/logout.js/ }));
+    expect(box()).toHaveValue('Inspect @src/logout.js before release');
+    expect(box()).toHaveFocus();
+    expect(box().selectionStart).toBe('Inspect @src/logout.js'.length);
+  });
+
+  it('replaces the rest of the mention token when the cursor is inside it', () => {
+    render(<Harness initial="See @login-extra before deploying" submit={vi.fn()} />);
+    box().focus();
+    box().setSelectionRange(8, 8);
+    fireEvent.select(box());
+    fireEvent.click(screen.getByRole('option', { name: /Fix login bug/ }));
+    expect(box()).toHaveValue('See before deploying');
+    expect(box().selectionStart).toBe(4);
+  });
+
+  it('does not show mention suggestions while a range of draft text is selected', () => {
+    render(<Harness initial="See @login before deploying" submit={vi.fn()} />);
+    box().focus();
+    box().setSelectionRange(4, 10);
+    fireEvent.select(box());
+    expect(screen.queryByRole('option', { name: /Fix login bug/ })).toBeNull();
+  });
+
   it('offers only threads from the supplied owner list', () => {
     render(<Harness submit={vi.fn()} mentionThreads={[]} />);
     fireEvent.change(box(), { target: { value: '@thr' } });
     expect(screen.queryByRole('option')).toBeNull();
+  });
+
+  it('retains attached thread context when inserting a skill suggestion', () => {
+    const submit = vi.fn();
+    const initial = addContext('/review', buildThreadContext(threads[0]));
+    render(<Harness initial={initial} submit={submit} skills={[{ name: 'review', path: '/project/review/SKILL.md' }]} />);
+    fireEvent.click(screen.getByRole('option', { name: /\/review/ }));
+    expect(screen.getByRole('list', { name: 'Attached context' })).toHaveTextContent('Fix login bug');
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(splitContext(submit.mock.calls[0][0])).toMatchObject({ chips: [{ kind: 'thread', id: 'thr_1' }], text: 'Use the "review" skill (instructions: /project/review/SKILL.md). ' });
   });
 
   it('blocks sending a thread reference that is no longer in the owner list', () => {

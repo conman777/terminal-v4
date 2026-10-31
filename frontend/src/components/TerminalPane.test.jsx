@@ -7,6 +7,7 @@ import { MobileShell } from './MobileShell';
 import { RawInputPending } from './RawInputPending';
 import { getSupervisedInputQueues } from '../utils/supervisedRawInputQueue';
 import { getNativeFollowupQueue } from '../utils/nativeFollowupQueue';
+import { withAttachmentWriteLock } from '../utils/attachmentWriteLock';
 
 const refreshSessionGitStats = vi.fn();
 const listSessionGitBranches = vi.fn();
@@ -506,7 +507,7 @@ describe('TerminalPane', () => {
     const session = { id: 'ss-desktop-attachment-conflict-review', runtime: 'codex', cwd: '/work/project' };
     render(<TerminalPane {...buildProps({ pane: { id: 'pane-1', sessionId: session.id }, sessions: [session] })} />);
     fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this message' } });
-    act(() => lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }));
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
     const key = Object.keys(localStorage).find(value => value.includes('composerFiles:') && value.includes(session.id));
     const saved = JSON.stringify({ version: 1, sessionId: session.id, items: [{ name: 'saved.txt', path: '/work/project/saved.txt' }] });
     localStorage.setItem(key, saved);
@@ -520,6 +521,50 @@ describe('TerminalPane', () => {
     expect(lastStatusBarProps.composerAttachments).toEqual([{ name: 'saved.txt', path: '/work/project/saved.txt' }]);
     await act(async () => { await lastStatusBarProps.onComposerSubmit('Keep this message'); });
     expect(structuredSendMessage).toHaveBeenCalledWith('Keep this message\n\nAttached files:\n- /work/project/saved.txt');
+    act(() => clearTokens(true));
+  });
+
+  it('does not send stale desktop file selections when another tab wins the lock first', async () => {
+    setUser({ id: 'desktop-attachment-send-lock' });
+    const session = { id: 'ss-desktop-attachment-send-lock', runtime: 'codex', cwd: '/work/project' };
+    render(<TerminalPane {...buildProps({ pane: { id: 'pane-1', sessionId: session.id }, sessions: [session] })} />);
+    fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this message' } });
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
+    let release;
+    withAttachmentWriteLock.mockImplementationOnce(action => new Promise(resolve => { release = () => resolve(action()); }));
+    let sending;
+    act(() => { sending = lastStatusBarProps.onComposerSubmit('Keep this message'); });
+    expect(structuredSendMessage).not.toHaveBeenCalled();
+    await act(async () => {});
+    const key = Object.keys(localStorage).find(value => value.includes('composerFiles:') && value.includes(session.id));
+    localStorage.setItem(key, JSON.stringify({ version: 1, sessionId: session.id, items: [{ name: 'theirs.txt', path: '/work/project/theirs.txt' }] }));
+    await act(async () => { release(); await sending; });
+    expect(structuredSendMessage).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Command composer')).toHaveValue('Keep this message');
+    expect(lastStatusBarProps.composerAttachments).toEqual([{ name: 'mine.txt', path: '/work/project/mine.txt' }]);
+    expect(screen.getByRole('alert')).toHaveTextContent('changed in another tab');
+    act(() => clearTokens(true));
+  });
+
+  it('keeps a desktop draft if the conversation stops streaming while file validation waits', async () => {
+    setUser({ id: 'desktop-attachment-route-change' });
+    structuredIsStreaming = true;
+    mockServerQueue = { ...unavailableServerQueue(), status: 'available', snapshot: { revision: 1, mode: 'running', order: [] } };
+    const session = { id: 'ss-desktop-attachment-route-change', runtime: 'codex', cwd: '/work/project' };
+    const props = buildProps({ pane: { id: 'pane-1', sessionId: session.id }, sessions: [session] });
+    const view = render(<TerminalPane {...props} />);
+    fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep this message' } });
+    await act(async () => { lastStatusBarProps.onComposerAttachmentAdd({ name: 'mine.txt', path: '/work/project/mine.txt' }); });
+    let release, sending;
+    withAttachmentWriteLock.mockImplementationOnce(action => new Promise(resolve => { release = () => resolve(action()); }));
+    act(() => { sending = lastStatusBarProps.onComposerSubmit('Keep this message'); });
+    structuredIsStreaming = false;
+    view.rerender(<TerminalPane {...props} fontSize={15} />);
+    await act(async () => { release(); await sending; });
+    expect(structuredSendMessage).not.toHaveBeenCalled();
+    expect(enqueueServerFollowup).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Command composer')).toHaveValue('Keep this message');
+    expect(lastConversationViewProps.conversationNotice).toMatch(/conversation or file selection changed while preparing/i);
     act(() => clearTokens(true));
   });
 
@@ -725,6 +770,7 @@ describe('TerminalPane', () => {
     for (const text of ['First queued', 'Second queued']) {
       fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: text } });
       fireEvent.click(screen.getByRole('button', { name: 'Send composer' }));
+      await waitFor(() => expect(screen.getAllByRole('status', { name: 'Queued message' }).some(node => node.textContent.includes(text))).toBe(true));
     }
     structuredIsStreaming = false;
     view.rerender(<TerminalPane {...props} fontSize={15} />);
@@ -799,8 +845,10 @@ describe('TerminalPane', () => {
     const view = render(<TerminalPane {...props} />);
     fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'First queued' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send composer' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Queued message' })).toHaveTextContent('First queued'));
     fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Second queued' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send composer' }));
+    await waitFor(() => expect(screen.getAllByRole('status', { name: 'Queued message' })).toHaveLength(2));
     structuredIsStreaming = false;
     view.rerender(<TerminalPane {...props} fontSize={15} />);
     await waitFor(() => expect(structuredSendMessage).toHaveBeenCalledTimes(1));
