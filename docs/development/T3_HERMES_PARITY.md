@@ -67,6 +67,14 @@ Nothing here has run against a real provider, a real Docker daemon, a real Teleg
 - A refused task worker (newer data directory marker) is now reported: schedule capabilities carry `workerAvailable`, scheduling operations return 503, and the panel shows a banner. Status is per server process.
 - Not addressed here: the file-preview defects (literal `?`, `#`, `%` filenames; empty-file paging) concern `ProjectFilePreview.jsx`, which exists only in an uncommitted checkout elsewhere and is not in this branch.
 
+## Matched-build verification (browser emulation, scratch data)
+
+A debug API and a frontend built from clean commit `c534e38` were served from scratch data on loopback with a synthetic provider. `node scripts/verify-deployment.mjs --url <base> --expect-commit c534e38 --dist <dist>` printed OK (commit, asset manifest and bytes matched; the tree was not dirty). The real app was then driven in isolated Chromium at 320, 390 and 1280 pixels. Passed at all three widths: login, empty state, thread creation, composer focus, multiline, send, stop and draft recovery after reload, approvals and questions, thread search, rename, pin and archive, mobile drawer and menus, thread terminals (create, switch, restore), terminal Add to chat, code highlighting and copy, citation chips, schedule create, enable, run now and pause, the provider modal's Azure fields, Files browsing, and no horizontal overflow.
+
+Fixed during that pass: question-card actions were clipped under the composer in short viewports (now sticky like approval actions), file breadcrumb segments were narrower than 44 pixels on touch, citation chips were 20 pixels tall (now 24), and a missing or signed-out GitHub CLI no longer shows raw `gh` text in the pull-request row.
+
+Known gaps from that pass: the mobile composer has no Stash control and the mobile Git panel has no pull-request or commit-push-PR row (desktop only); the provider-authentication modal is reachable only from a plain terminal session, not from the new-thread screen or a V4 thread; the thread details panel opens by default on desktop; the desktop terminal has a large left indent; the mobile Add to chat menu appears only after text is already selected and did not open from a long press on a wrapped first row at 320 pixels; the mobile drawer stays open after closing Project tools and keeps its search query; mobile keyboard Tab order, the scheduling-unavailable banner, a real GitHub pull-request row and a physical phone were not exercised.
+
 ## Release evidence
 
 - Verify the current source on a stable snapshot with the full frontend and Rust
