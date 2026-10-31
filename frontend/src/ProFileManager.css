@@ -102,6 +102,7 @@
 }
 @media (pointer: coarse), (max-width: 768px) {
   .pro-file-manager button, .pro-file-manager .file-manager-toolbar button, .pro-file-manager .file-actions button, .pro-file-manager .breadcrumb-item { min-height: 44px; }
+  .pro-file-manager .breadcrumb-item { min-width: 44px; min-height: 44px; }
   .pro-file-manager .file-manager-toolbar button, .pro-file-manager .file-actions button, .pro-file-manager .file-manager-close { width: 44px; height: 44px; min-height: 44px; }
   .pro-file-manager input:not([type=file]) { min-height: 44px; font-size: 16px; }
   .pro-file-manager .file-item { min-height: 48px; flex-wrap: nowrap; gap: 4px; padding: 2px; }

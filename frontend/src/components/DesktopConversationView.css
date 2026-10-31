@@ -242,6 +242,7 @@
 .desktop-conversation-view [data-conversation-scroll-region]:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
 .desktop-conversation-view .desktop-interactive-prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .desktop-conversation-view .desktop-pending-requests .desktop-interactive-prompt-actions { position: sticky; bottom: 0; z-index: 1; padding: 8px 0; margin-bottom: -8px; background: var(--bg-surface); }
+.desktop-conversation-view .desktop-pending-requests .agent-question-actions { position: sticky; bottom: 0; z-index: 1; padding: 8px 0; margin-bottom: -8px; background: var(--bg-surface); }
 .desktop-conversation-view .desktop-conversation-scroll-btn { width: 32px; height: 32px; border-radius: 6px; box-shadow: none; }
 @media (pointer: coarse) {
   .desktop-conversation-view .structured-tool-details summary { min-height: 44px; }
