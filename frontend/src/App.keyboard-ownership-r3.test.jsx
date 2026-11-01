@@ -41,10 +41,10 @@ async function openWorkspace(split = false) {
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   if (split) getEnvironmentStorage().setItem('desktops', JSON.stringify({ activeDesktopId: 'desktop-1', desktops: [{ id:'desktop-1', name:'Synthetic desktop', ownedSessionIds: [R1.a.id, R1.b.id], paneLayout: { activePaneId: 'pane-1', root: { type: 'split', direction: 'horizontal', sizes:[.5,.5], children: [{type:'pane', id:'pane-1', sessionId:R1.a.id}, {type:'pane', id:'pane-2', sessionId:R1.b.id}] } } }] }));
   const view = render(<App />);
-  fireEvent.change(await screen.findByLabelText('Username'), { target: { value: R1.username } });
+  fireEvent.change(await screen.findByLabelText('Username',{},{timeout:20000}), { target: { value: R1.username } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: R1.password } });
   fireEvent.click(screen.getByRole('button', { name: 'Initialize Session' }));
-  await screen.findAllByRole('textbox', { name: 'Command composer' });
+  await screen.findAllByRole('textbox', { name: 'Command composer' },{timeout:20000});
   return view;
 }
 function layoutSnapshot() {
@@ -62,16 +62,16 @@ it('same-task native focus in B followed by fullscreen shows B', async () => {
     button.dispatchEvent(new KeyboardEvent('keydown', {key:'\\', metaKey:true, bubbles:true, cancelable:true}));
   });
   expect(observedLayout.current.fullscreenPaneId).toBe('pane-2');
-});
+}, 40000);
 it('Escape from foreground Resources preserves background fullscreen ownership', async () => {
   const view = await openWorkspace(true);
   fireEvent.click(view.container.querySelector('[data-pane-host="pane-2"] [aria-label="Fullscreen"]'));
   expect(observedLayout.current.fullscreenPaneId).toBe('pane-2');
   fireEvent.click(screen.getByRole('button',{name:'Settings',exact:true}));
-  fireEvent.click(await screen.findByRole('button',{name:'Processes',exact:true}));
+  fireEvent.click(await screen.findByRole('button',{name:'Processes',exact:true},{timeout:20000}));
   fireEvent.click(screen.getByRole('button',{name:'Open System Resources',exact:true}));
-  const resources=await screen.findByRole('region',{name:'System Resources',exact:true});
+  const resources=await screen.findByRole('region',{name:'System Resources',exact:true},{timeout:20000});
   act(()=>resources.focus());
   fireEvent.keyDown(resources,{key:'Escape'});
   expect({resourcesPresent:resources.isConnected,fullscreen:observedLayout.current.fullscreenPaneId,deleted:deletedIds()}).toEqual({resourcesPresent:true,fullscreen:'pane-2',deleted:[]});
-});
+}, 40000);

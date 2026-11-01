@@ -831,14 +831,20 @@ describe('PreviewPanel', () => {
       if (options?.method === 'POST') return new Promise(resolve => { finishMutation = () => resolve({ ok: true }); });
       return { ok: true, json: async () => String(input).endsWith('/cookies') ? { cookies: [{ name: 'session', value: String(input).includes('/5173/') ? 'current-app' : 'previous-app' }] } : {} };
     });
-    const { rerender } = render(<PreviewPanel {...buildProps({ url: '/preview/4173/app' })} />);
+    const { rerender, container } = render(<PreviewPanel {...buildProps({ url: '/preview/4173/app' })} />);
     await waitFor(() => expect(devToolsSpy.mock.lastCall[0].storage.cookies).toEqual({ session: 'previous-app' }));
     let mutation;
     act(() => { mutation = devToolsSpy.mock.lastCall[0].onUpdateStorage('cookies', 'set', 'session', 'updated'); });
     await waitFor(() => expect(finishMutation).toBeTypeOf('function'));
     rerender(<PreviewPanel {...buildProps({ url: '/preview/5173/app' })} />);
     await waitFor(() => expect(devToolsSpy.mock.lastCall[0].storage.cookies).toEqual({ session: 'current-app' }));
-    const readsBeforeCompletion = apiFetchMock.mock.calls.filter(([input]) => String(input).endsWith('/cookies')).length;
+    await waitFor(() => expect(container.querySelector('iframe')?.getAttribute('src')).toContain('/5173/'));
+    const countReads = () => apiFetchMock.mock.calls.filter(([input]) => String(input).endsWith('/cookies')).length;
+    let readsBeforeCompletion = -1;
+    while (readsBeforeCompletion !== countReads()) {
+      readsBeforeCompletion = countReads();
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); });
+    }
     await act(async () => { finishMutation(); await mutation; });
     expect(apiFetchMock.mock.calls.filter(([input]) => String(input).endsWith('/cookies'))).toHaveLength(readsBeforeCompletion);
     expect(devToolsSpy.mock.lastCall[0].storage.cookies).toEqual({ session: 'current-app' });

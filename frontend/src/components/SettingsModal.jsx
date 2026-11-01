@@ -13,6 +13,7 @@ import { McpSettingsPanel } from './McpSettingsPanel';
 import { AccountKnowledgePanel } from './AccountKnowledgePanel';
 import { AgentBrowserSettingsPanel } from './AgentBrowserSettingsPanel';
 import { ProviderConnectionsPanel } from './ProviderConnectionsPanel';
+import { DeliveryChannelsPanel } from './DeliveryChannelsPanel';
 import { MountOnFirstOpen } from './MountOnFirstOpen';
 import { apiFetch } from '../utils/api';
 import { isStructuredSessionId } from '../utils/structuredSessions';
@@ -63,16 +64,18 @@ export function SettingsModal({
   const collapseOnScroll = useSyncExternalStore(subscribeComposerScrollPreference, getComposerScrollPreference, () => true);
   const [composerPreferenceWarning, setComposerPreferenceWarning] = useState(false);
   const [dirtySections, setDirtySections] = useState({});
-  const dirtyHandlers = useMemo(() => Object.fromEntries(['mcp', 'browser', 'knowledge', 'connections'].map(section => [section, dirty => {
+  const [deliveryUnavailable, setDeliveryUnavailable] = useState(false);
+  const deliveryUnavailableHandler = useMemo(() => () => { setDeliveryUnavailable(true); setActiveSection(section => section === 'delivery' ? 'workspace' : section); }, []);
+  const dirtyHandlers = useMemo(() => Object.fromEntries(['mcp', 'browser', 'knowledge', 'connections', 'delivery'].map(section => [section, dirty => {
     setDirtySections(previous => previous[section] === dirty ? previous : { ...previous, [section]: dirty });
   }])), []);
-  const unsavedLabels = [['mcp', 'MCP servers'], ['browser', 'Agent browser'], ['knowledge', 'Account knowledge'], ['connections', 'Provider connections']]
+  const unsavedLabels = [['mcp', 'MCP servers'], ['browser', 'Agent browser'], ['knowledge', 'Account knowledge'], ['connections', 'Provider connections'], ['delivery', 'Delivery channels']]
     .filter(([section]) => dirtySections[section]).map(([, label]) => label);
   const [saveError, setSaveError] = useState('');
   const [downloadError, setDownloadError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const sectionSavesOwnSettings = ['mcp', 'browser', 'knowledge', 'connections'].includes(activeSection);
+  const sectionSavesOwnSettings = ['mcp', 'browser', 'knowledge', 'connections', 'delivery'].includes(activeSection);
   const resolvedWebglEnabled = resolveTerminalWebglEnabled(terminalWebglEnabled);
   const webglGuardReason = getTerminalRendererGuardReason();
   const webglLocked = Boolean(webglGuardReason);
@@ -265,10 +268,11 @@ export function SettingsModal({
               ['voice', 'Voice'],
               ['processes', 'Processes'],
               ['messaging', 'Messaging'],
+              ['delivery', 'Delivery channels'],
               ['usage', 'Usage'],
               ['shortcuts', 'Keyboard shortcuts'],
               ['setup', 'Setup check'],
-            ].map(([id, label]) => (
+            ].filter(([id]) => id !== 'delivery' || !deliveryUnavailable).map(([id, label]) => (
               <button
                 key={id}
                 type="button"
@@ -547,6 +551,8 @@ export function SettingsModal({
           <section className="session-settings-section" hidden={activeSection !== 'browser'}><MountOnFirstOpen isOpen={activeSection === 'browser'}><AgentBrowserSettingsPanel onDirtyChange={dirtyHandlers.browser} /></MountOnFirstOpen></section>
           <section className="session-settings-section" hidden={activeSection !== 'knowledge'}><MountOnFirstOpen isOpen={activeSection === 'knowledge'}><AccountKnowledgePanel onDirtyChange={dirtyHandlers.knowledge} /></MountOnFirstOpen></section>
           <section className="session-settings-section" hidden={activeSection !== 'connections'}><MountOnFirstOpen isOpen={activeSection === 'connections'}><ProviderConnectionsPanel onDirtyChange={dirtyHandlers.connections} /></MountOnFirstOpen></section>
+
+          <section className="session-settings-section" hidden={activeSection !== 'delivery'}><MountOnFirstOpen isOpen={activeSection === 'delivery'}><DeliveryChannelsPanel onUnavailable={deliveryUnavailableHandler} onDirtyChange={dirtyHandlers.delivery} /></MountOnFirstOpen></section>
 
           <section className="session-settings-section" hidden={activeSection !== 'voice' && activeSection !== 'processes'}>
             <div className="session-settings-section-heading">

@@ -46,3 +46,22 @@ dialog.tv4-provider-auth-overlay::backdrop { background: transparent; }
   .tv4-provider-auth-modal .modal-header { padding-block: 3px; }
   .tv4-provider-auth-modal .modal-close { min-height: 44px; }
 }
+
+.tv4-provider-auth-secret-area {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #61513a);
+  border-radius: 7px;
+  background: var(--bg-base, #191712);
+  color: var(--text-primary, #f0e9de);
+  font: 13px/1.4 var(--font-mono, monospace);
+  resize: vertical;
+  -webkit-text-security: disc;
+}
+@media (max-width: 560px) {
+  .tv4-provider-auth-secret-area { font-size: 16px; }
+  .tv4-provider-auth-key-row :is(button, input) { min-height: 44px; }
+}

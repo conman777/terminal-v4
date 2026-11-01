@@ -68,7 +68,7 @@ Nothing here has run against a real provider, a real Docker daemon, a real Teleg
 
 - **Pull-request and git routes:** every `/api/workspace/git` and `/api/workspace/rewind` route authorizes the repository path against the file roots or the caller's own managed checkouts before any git or `gh` process runs. Pull-request actions are bound to the repository, PR number, URL and head commit, and merge passes `--match-head-commit`. A project outside the allowed roots needs its root added to `TERMINAL_V4_ALLOWED_FILE_ROOTS`.
 - **Background commands:** registered in the agent turn behind `TERMINAL_V4_BACKGROUND_COMMANDS=1` (default off, read once at startup, operator decision). Verified through scripted-provider turns and real subprocesses; not an OS sandbox; no live-provider run.
-- **`execute_code` and `run_command` backends:** `execute_code` runs under a macOS `sandbox-exec` profile where available (network denied, writes limited to the workspace and temp), otherwise with an accurately described best-effort Python guard. Docker uses tracked containers and cleanup, but has only been tested against a fake daemon. Production SSH selection is disabled: a loopback test confirmed that a remote command can continue after its client is killed, and remote cleanup cannot yet be verified.
+- **`execute_code` and `run_command` backends:** `execute_code` runs under a macOS `sandbox-exec` profile where available (network denied, writes limited to the workspace and temp), otherwise with an accurately described best-effort Python guard. Docker uses tracked containers and cleanup, but has only been tested against a fake daemon. Production SSH selection is enabled only with its remote cleanup: the remote command runs in its own process group with a 120 s watchdog and a stop marker, and every completion, timeout and cancellation runs a verified kill over a second SSH connection (fake detached-remote fixture plus a gated macOS loopback `sshd` run). Descendants that leave the process group, an unreachable host (cleanup unconfirmed) and the absence of a restart reaper for stale remote files remain gaps. Docker additionally removes a container created after its client was killed (2.5 s window) and retries failed reaper removals; it is still fake-daemon only.
 - **Worktrees:** creation shows stages with a cancel that kills the process group and removes only what the run created. A repository `.v4/worktree-setup.sh` is not run unless the server sets `TERMINAL_V4_WORKTREE_SETUP_SCRIPTS=1`; a per-run review and approval flow is not built.
 - **Terminal drawer:** horizontal splits with a resizable divider (desktop), tabs on mobile, terminal "Add to chat" on desktop and mobile, pull-request mentions, and worktree lineage. An isolated Chromium fixture exercised real xterm selection at 1280px and simulated touch at 320px and 390px while preserving drafts. Its terminal history was mocked; it was not a live PTY or physical-phone test.
 - **Schedules:** the panel creates and describes cron schedules and falls back to schedule status/error fields when the linked task is unavailable. Results can be delivered to the owner's paired Telegram chat at most once (`deliverTo`), with a durable marker. `WORKER_PROTOCOL` is 2: an older worker refuses data a newer one wrote.
@@ -135,11 +135,12 @@ Subsequent isolated-worktree changes add per-setting appearance resets, a
 per-message image gallery with zoom, and terminal file links into the scoped
 project preview. Terminal links are limited to unambiguous absolute paths in a
 structured thread's workspace; touch users can open a supported selected path
-from the selection menu. Optional `apply_patch` syntax validation currently
-supports JSON only. The workspace task board (`/api/workspace/board`) is compiled and
+from the selection menu. Optional `apply_patch` syntax validation supports
+JSON, TOML and YAML (TOML and YAML use conservative structural checks, not full
+parsers; Python is rejected). The workspace task board (`/api/workspace/board`) is compiled and
 registered only in Rust builds with the `workspace-board-preview` cargo feature,
 which is off by default; default builds return 404 for every board route and the
-panel is not mounted in any shell. With the feature, every route requires a live
+Task board tab stays hidden. With the feature, every route requires a live
 local session (owner, session and incarnation are rechecked at admission and
 again before commit), rejects paired-device authority, authorizes the workspace
 path as the Git routes do, and writes items and idempotency receipts in one
@@ -149,7 +150,7 @@ fence in-flight board requests but keep board data; `purge_owner` exists for
 account deletion, but the server has no account-deletion path (users are only
 deleted directly in a test), so nothing calls it yet. Unit and
 feature-gated integration tests cover this; no browser, real-device or
-multi-process run was done, and the panel has no entry point to open it. Focused tests cover
+multi-process run was done. The Workspace tools dialog now probes `GET /api/workspace/board` when it opens and shows a Task board tab only on a successful response; a 404, error or network failure leaves the tab hidden, so default builds look unchanged (the probe is one extra request per dialog open). Frontend tests cover this with a mocked API only. Focused tests cover
 the other changes; the current full suites must be rerun after all integration
 changes, and physical-device behavior has not been established.
 

@@ -12,21 +12,26 @@ import { SessionHistorySearch } from './SessionHistorySearch';
 import { WorkspaceTasksPanel } from './WorkspaceTasksPanel';
 import { WorkspaceProposalsPanel } from './WorkspaceProposalsPanel';
 import { WorkspaceSkillsPanel } from './WorkspaceSkillsPanel';
+import { WorkspaceBoardPanel } from './WorkspaceBoardPanel';
+import { apiFetch } from '../utils/api';
 import './WorkspaceToolsButton.css';
 
-const tabs = [['git', 'Git & worktrees'], ['history', 'History'], ['rewind', 'Rewind'], ['tasks', 'Tasks & schedules'], ['learning', 'Learning'], ['skills', 'Installed skills'], ['transfers', 'File transfers'], ['collaboration', 'Share workspace'], ['replays', 'Session replay']];
+const baseTabs = [['git', 'Git & worktrees'], ['history', 'History'], ['rewind', 'Rewind'], ['tasks', 'Tasks & schedules'], ['learning', 'Learning'], ['skills', 'Installed skills'], ['transfers', 'File transfers'], ['collaboration', 'Share workspace'], ['replays', 'Session replay']];
 const groups = [
   { label: 'Code & history', ids: ['git', 'history', 'rewind'] },
   { label: 'Plan & improve', ids: ['tasks', 'learning', 'skills'] },
   { label: 'Share & move', ids: ['transfers', 'collaboration', 'replays'] },
 ];
-const descriptions = { git: 'Changes, branches and worktrees', history: 'Find a saved conversation', rewind: 'Restore an earlier checkpoint', tasks: 'Manage tasks and schedules', learning: 'Review project suggestions', skills: 'Browse installed skills', transfers: 'Send and receive files', collaboration: 'Invite someone to your workspace', replays: 'Review a recorded session' };
+const boardTab = ['board', 'Task board'];
+const descriptions = { board: 'Track work items in this workspace', git: 'Changes, branches and worktrees', history: 'Find a saved conversation', rewind: 'Restore an earlier checkpoint', tasks: 'Manage tasks and schedules', learning: 'Review project suggestions', skills: 'Browse installed skills', transfers: 'Send and receive files', collaboration: 'Invite someone to your workspace', replays: 'Review a recorded session' };
 
 function WorkspaceToolsDialog({ workspacePath, currentSessionId, latestAssistantText, initialTool, onStartTask, onSelectSession, onInsertPrompt, onClose }) {
-  const hasInitialTool = tabs.some(([id]) => id === initialTool);
+  const hasInitialTool = baseTabs.some(([id]) => id === initialTool);
   const startingTool = hasInitialTool ? initialTool : 'git';
   const [tab, setTab] = useState(startingTool);
   const [navigationError, setNavigationError] = useState('');
+  const [boardAvailable, setBoardAvailable] = useState(false);
+  const tabs = boardAvailable ? baseTabs.flatMap(tab => tab[0] === 'skills' ? [tab, boardTab] : [tab]) : baseTabs;
   const [showTool, setShowTool] = useState(hasInitialTool);
   const isMobile = useMobileDetect();
   const [visited, setVisited] = useState(() => isMobile && !hasInitialTool ? [] : [startingTool]);
@@ -53,6 +58,14 @@ function WorkspaceToolsDialog({ workspacePath, currentSessionId, latestAssistant
   useEffect(() => {
     if (!isMobile) setVisited(current => current.includes(tab) ? current : [...current, tab]);
   }, [isMobile, tab]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setBoardAvailable(false);
+    apiFetch('/api/workspace/board?' + new URLSearchParams({ path: workspacePath }), { signal: controller.signal })
+      .then(response => { if (response.ok && !controller.signal.aborted) setBoardAvailable(true); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [workspacePath]);
   function selectTool(id) {
     setTab(id);
     setVisited(current => current.includes(id) ? current : [...current, id]);
@@ -101,7 +114,7 @@ function WorkspaceToolsDialog({ workspacePath, currentSessionId, latestAssistant
         <button type="button" aria-label="Close workspace tools" onClick={onClose}>&times;</button></header>
       <div className="workspace-tools-body">
       <nav role="tablist" aria-label="Workspace tools" aria-orientation="vertical" className="workspace-tools-tabs" hidden={isMobile && showTool}>
-        {groups.map(group => <div className="workspace-tools-group" key={group.label}><h3>{group.label}</h3>{group.ids.map(id => {
+        {groups.map(group => <div className="workspace-tools-group" key={group.label}><h3>{group.label}</h3>{(group.label === 'Plan & improve' && boardAvailable ? [...group.ids, 'board'] : group.ids).map(id => {
           const index = tabs.findIndex(([tabId]) => tabId === id);
           const label = tabs[index][1];
           return <button key={id} type="button" role="tab" id={titleId + '-tab-' + id} aria-label={label}
@@ -127,6 +140,7 @@ function WorkspaceToolsDialog({ workspacePath, currentSessionId, latestAssistant
             {id === 'transfers' && <FileTransferPanel workspacePath={workspacePath} />}
             {id === 'collaboration' && <CollaborationPanel workspacePath={workspacePath} sessionId={currentSessionId} onInsertPrompt={onInsertPrompt ? prompt => navigate(onInsertPrompt, prompt) : undefined} />}
             {id === 'replays' && <SessionReplayPanel workspacePath={workspacePath} sessionId={currentSessionId} />}
+            {id === 'board' && <WorkspaceBoardPanel workspacePath={workspacePath} />}
             {id === 'skills' && <WorkspaceSkillsPanel workspacePath={workspacePath} onInsertContext={onInsertPrompt ? prompt => navigate(onInsertPrompt, prompt) : undefined} />}
           </>}
         </div>)}

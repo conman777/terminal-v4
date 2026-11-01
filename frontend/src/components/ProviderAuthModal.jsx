@@ -6,6 +6,8 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../utils/api';
 import { PreviewIcon } from './preview/PreviewIcon';
 import { isStructuredSessionId } from '../utils/structuredSessions';
 
+const MULTILINE_PROVIDERS = new Set(['vertex', 'bedrock']);
+
 function statusLabel(provider) {
   if (provider.status === 'ready') {
     if (provider.methods?.includes('oauth')) return provider.configured ? 'OAuth connected' : 'OAuth available';
@@ -65,7 +67,7 @@ function OpenProviderAuthModal({ onClose, sessionId, focusProviderId, remoteEnvi
       return;
     }
     if (event.key !== 'Tab') return;
-    const fields = dialog.current?.querySelectorAll(':is(button, input, a[href]):not(:disabled)');
+    const fields = dialog.current?.querySelectorAll(':is(button, input, textarea, a[href]):not(:disabled)');
     if (!fields?.length) return;
     const first = fields[0], last = fields[fields.length - 1];
     if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last.focus(); }
@@ -107,7 +109,7 @@ function OpenProviderAuthModal({ onClose, sessionId, focusProviderId, remoteEnvi
   useEffect(() => {
     if (!focusProviderId || focusedProvider.current || loading || !providers.length) return;
     const card = [...dialog.current.querySelectorAll('[data-provider-id]')].find(node => node.dataset.providerId === focusProviderId);
-    const target = card?.querySelector('input:not(:disabled)');
+    const target = card?.querySelector('input:not(:disabled), textarea:not(:disabled)');
     if (!target) return;
     focusedProvider.current = true;
     target.focus();
@@ -264,15 +266,30 @@ function OpenProviderAuthModal({ onClose, sessionId, focusProviderId, remoteEnvi
                   )}
                   {provider.methods?.includes('api-key') && (
                     <div className="tv4-provider-auth-key-row">
-                      <input
-                        type="password"
-                        disabled={Boolean(remoteEnvironment) || saving !== null || pending}
-                        value={values[provider.id] || ''}
-                        onChange={event => setValues(current => ({ ...current, [provider.id]: event.target.value }))}
-                        placeholder={provider.masked || 'Paste API key'}
-                        autoComplete="off"
-                        aria-label={`${provider.label} API key`}
-                      />
+                      {MULTILINE_PROVIDERS.has(provider.id) ? (
+                        <textarea
+                          className="tv4-provider-auth-secret-area"
+                          rows={4}
+                          disabled={Boolean(remoteEnvironment) || saving !== null || pending}
+                          value={values[provider.id] || ''}
+                          onChange={event => setValues(current => ({ ...current, [provider.id]: event.target.value }))}
+                          placeholder={provider.masked || 'Paste API key or JSON credentials'}
+                          autoComplete="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
+                          aria-label={`${provider.label} API key`}
+                        />
+                      ) : (
+                        <input
+                          type="password"
+                          disabled={Boolean(remoteEnvironment) || saving !== null || pending}
+                          value={values[provider.id] || ''}
+                          onChange={event => setValues(current => ({ ...current, [provider.id]: event.target.value }))}
+                          placeholder={provider.masked || 'Paste API key'}
+                          autoComplete="off"
+                          aria-label={`${provider.label} API key`}
+                        />
+                      )}
                       <button type="button" className="btn-primary" disabled={Boolean(remoteEnvironment) || !values[provider.id]?.trim() || missingSettings(provider) || saving !== null || pending} onClick={() => save(provider)}>{saving === provider.id ? 'Saving…' : provider.configured ? 'Replace' : 'Save'}</button>
                       {provider.configured && <button type="button" className="btn-secondary" disabled={Boolean(remoteEnvironment) || saving !== null || pending} onClick={() => remove(provider)}>Remove</button>}
                     </div>
