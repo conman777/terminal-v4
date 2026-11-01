@@ -85,6 +85,87 @@ mod tests {
         );
     }
     #[test]
+    fn control_characters_are_rejected_in_titles_and_single_line_fields() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        for (n, title) in ["bad\\u0007bell", "line\\nbreak", "esc\\u001b[0m"]
+            .iter()
+            .enumerate()
+        {
+            let body = format!(
+                r#"{{"path":"/workspace","operationId":"1111111{n}-1111-4111-8111-111111111111","title":"{title}"}}"#
+            );
+            assert_eq!(
+                mutate(&mut db, "owner", "/workspace", "POST", "", body.as_bytes())
+                    .unwrap_err()
+                    .status,
+                StatusCode::BAD_REQUEST,
+                "{title}"
+            );
+        }
+        let ok = br#"{"path":"/workspace","operationId":"11111111-1111-4111-8111-111111111111","title":"Fine","description":"multi\nline\ttext"}"#;
+        assert!(mutate(&mut db, "owner", "/workspace", "POST", "", ok).is_ok());
+        let bad = br#"{"path":"/workspace","operationId":"22222222-2222-4222-8222-222222222222","title":"Fine","description":"bell\u0007"}"#;
+        assert!(mutate(&mut db, "owner", "/workspace", "POST", "", bad).is_err());
+    }
+    #[test]
+    fn leaving_blocked_status_clears_the_blocked_reason() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        let create = br#"{"path":"/workspace","operationId":"11111111-1111-4111-8111-111111111111","title":"Task"}"#;
+        let id = mutate(&mut db, "owner", "/workspace", "POST", "", create).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let block = br#"{"path":"/workspace","operationId":"22222222-2222-4222-8222-222222222222","expectedRevision":1,"status":"blocked","blockedReason":"waiting"}"#;
+        let blocked = mutate(&mut db, "owner", "/workspace", "PATCH", &id, block).unwrap();
+        assert_eq!(blocked["blockedReason"], "waiting");
+        let unblock = br#"{"path":"/workspace","operationId":"33333333-3333-4333-8333-333333333333","expectedRevision":2,"status":"open","blockedReason":"stale text"}"#;
+        let open = mutate(&mut db, "owner", "/workspace", "PATCH", &id, unblock).unwrap();
+        assert_eq!(open["blockedReason"], Value::Null);
+        assert_eq!(open["status"], "open");
+    }
+    #[test]
+    fn purging_an_owner_removes_only_that_owners_items_and_receipts() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        let body = br#"{"path":"/workspace","operationId":"11111111-1111-4111-8111-111111111111","title":"Task"}"#;
+        mutate(&mut db, "gone", "/workspace", "POST", "", body).unwrap();
+        mutate(&mut db, "kept", "/workspace", "POST", "", body).unwrap();
+        let tx = db.transaction().unwrap();
+        purge_owner(&tx, "gone").unwrap();
+        tx.commit().unwrap();
+        let count = |table: &str, owner: &str| -> i64 {
+            db.query_row(
+                &format!("SELECT count(*) FROM {table} WHERE owner=?1"),
+                [owner],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            (
+                count("workspace_board_items", "gone"),
+                count("workspace_board_receipts", "gone"),
+                count("workspace_board_items", "kept"),
+                count("workspace_board_receipts", "kept"),
+            ),
+            (0, 0, 1, 1)
+        );
+    }
+    #[test]
+    fn purging_an_owner_without_board_storage_is_a_no_op() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        let tx = db.transaction().unwrap();
+        purge_owner(&tx, "anyone").unwrap();
+        tx.commit().unwrap();
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name LIKE 'workspace_board%')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!exists);
+    }
+    #[test]
     fn operation_id_cannot_be_reused_in_another_workspace() {
         let mut db = rusqlite::Connection::open_in_memory().unwrap();
         let body = br#"{"path":"/alias","operationId":"11111111-1111-4111-8111-111111111111","title":"Task"}"#;
@@ -308,12 +389,17 @@ fn string_field<'a>(
     key: &str,
     max: usize,
     nonempty: bool,
+    multiline: bool,
 ) -> Result<&'a str, ApiError> {
     let s = v
         .get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::bad_request(format!("Invalid {key}")))?;
-    if s.len() > max || s.contains('\0') || (nonempty && s.trim().is_empty()) {
+    if s.len() > max
+        || s.chars()
+            .any(|c| c.is_control() && !(multiline && matches!(c, '\n' | '\r' | '\t')))
+        || (nonempty && s.trim().is_empty())
+    {
         return Err(ApiError::bad_request(format!("Invalid {key}")));
     }
     Ok(s)
@@ -343,8 +429,8 @@ fn parse(body: &[u8], method: &str) -> Result<Value, ApiError> {
     if object.keys().any(|k| !allowed.contains(&k.as_str())) {
         return Err(ApiError::bad_request("Unknown board field"));
     }
-    string_field(&v, "path", 2048, true)?;
-    let operation = string_field(&v, "operationId", 36, true)?;
+    string_field(&v, "path", 2048, true, false)?;
+    let operation = string_field(&v, "operationId", 36, true, false)?;
     if uuid::Uuid::parse_str(operation).is_err() {
         return Err(ApiError::bad_request("Invalid operationId"));
     }
@@ -357,10 +443,10 @@ fn parse(body: &[u8], method: &str) -> Result<Value, ApiError> {
         return Err(ApiError::bad_request("Invalid expectedRevision"));
     }
     if method == "POST" || v.get("title").is_some() {
-        string_field(&v, "title", 512, true)?;
+        string_field(&v, "title", 512, true, false)?;
     }
     if v.get("description").is_some() {
-        string_field(&v, "description", 16_384, false)?;
+        string_field(&v, "description", 16_384, false, true)?;
     }
     if let Some(status) = v.get("status") {
         if !matches!(
@@ -372,7 +458,7 @@ fn parse(body: &[u8], method: &str) -> Result<Value, ApiError> {
     }
     if let Some(reason) = v.get("blockedReason") {
         if !reason.is_null() {
-            string_field(&v, "blockedReason", 4096, false)?;
+            string_field(&v, "blockedReason", 4096, false, true)?;
         }
     }
     if method == "PATCH"
@@ -513,6 +599,9 @@ fn mutate_in_transaction(
             if let Some(s) = v.get("blockedReason") {
                 item.blocked_reason = s.as_str().map(str::to_owned);
             }
+            if item.status != "blocked" {
+                item.blocked_reason = None;
+            }
             item.revision = item
                 .revision
                 .checked_add(1)
@@ -526,6 +615,27 @@ fn mutate_in_transaction(
     };
     tx.execute("INSERT INTO workspace_board_receipts(owner,workspace,operation,method,target,payload,result) VALUES (?1,?2,?3,?4,?5,?6,?7)", params![owner,workspace,&operation,method,id,body,result.to_string()]).map_err(storage_error)?;
     Ok(result)
+}
+
+/// Removes every board row and receipt for an owner whose account is deleted.
+/// Logout and session revocation intentionally keep board data; they only
+/// fence in-flight requests through `with_owner_review`.
+#[allow(dead_code)]
+pub(crate) fn purge_owner(db: &rusqlite::Connection, owner: &str) -> Result<(), ApiError> {
+    for table in ["workspace_board_items", "workspace_board_receipts"] {
+        let exists: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |r| r.get(0),
+            )
+            .map_err(storage_error)?;
+        if exists {
+            db.execute(&format!("DELETE FROM {table} WHERE owner=?1"), [owner])
+                .map_err(storage_error)?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn routes() -> Router<AppState> {

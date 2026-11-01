@@ -193,6 +193,8 @@ struct Claims {
     auth_protocol: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pair: Option<i64>,
 }
 
 pub async fn require_auth(
@@ -373,11 +375,12 @@ pub(crate) fn authenticate_local_with_authority(
     )
     .and_then(|user| {
         let claims = decode_claims(&state.config().jwt_secret, token)?;
-        state.validate_auth_claims(
+        state.validate_access_claims(
             &user.user_id,
             claims.generation,
             claims.auth_protocol,
             claims.session_id.as_deref(),
+            claims.pair,
         )?;
         let user = runtime_identity(state, user)?;
         let authority = LocalAuthority {
@@ -590,7 +593,27 @@ pub(crate) fn issue_access_token_for_protocol(
     auth_protocol: i64,
     session_id: Option<&str>,
 ) -> String {
-    issue_token(
+    issue_access_token_for_pair(
+        secret,
+        user_id,
+        username,
+        generation,
+        auth_protocol,
+        session_id,
+        None,
+    )
+}
+
+pub(crate) fn issue_access_token_for_pair(
+    secret: &str,
+    user_id: &str,
+    username: &str,
+    generation: i64,
+    auth_protocol: i64,
+    session_id: Option<&str>,
+    pair: Option<i64>,
+) -> String {
+    issue_token_for_pair(
         secret,
         user_id,
         username,
@@ -599,7 +622,36 @@ pub(crate) fn issue_access_token_for_protocol(
         generation,
         auth_protocol,
         session_id,
+        pair,
     )
+}
+
+/// Identity and pair binding of an access token, read without enforcing expiry.
+/// The signature is still verified; only a refresh request uses this, to prove
+/// the presented access token belongs to the same pair as the refresh token.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct AccessPairClaims {
+    pub(crate) owner: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) pair: Option<i64>,
+}
+
+pub(crate) fn access_pair_claims(secret: &str, token: &str) -> Option<AccessPairClaims> {
+    let mut validation = Validation::default();
+    validation.validate_exp = false;
+    validation.required_spec_claims.clear();
+    let claims = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .ok()?
+    .claims;
+    (claims.token_kind == "access").then_some(AccessPairClaims {
+        owner: claims.sub,
+        session_id: claims.session_id,
+        pair: claims.pair,
+    })
 }
 
 pub(crate) fn preview_token_for_access(state: &AppState, access: &str) -> Result<String, String> {
@@ -627,6 +679,30 @@ fn issue_token(
     auth_protocol: i64,
     session_id: Option<&str>,
 ) -> String {
+    issue_token_for_pair(
+        secret,
+        user_id,
+        username,
+        token_kind,
+        ttl_seconds,
+        generation,
+        auth_protocol,
+        session_id,
+        None,
+    )
+}
+
+fn issue_token_for_pair(
+    secret: &str,
+    user_id: &str,
+    username: &str,
+    token_kind: &str,
+    ttl_seconds: usize,
+    generation: i64,
+    auth_protocol: i64,
+    session_id: Option<&str>,
+    pair: Option<i64>,
+) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time should be after unix epoch")
@@ -643,6 +719,7 @@ fn issue_token(
             generation,
             auth_protocol,
             session_id: session_id.map(str::to_owned),
+            pair,
         },
         &EncodingKey::from_secret(secret.as_bytes()),
     )
@@ -728,9 +805,18 @@ mod revocation_tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as usize;
+        let session_id = uuid::Uuid::new_v4().to_string();
+        state
+            .lock_db()
+            .unwrap()
+            .execute(
+                "INSERT INTO auth_sessions (id,user_id,generation,logout_capability_hash,revoked_at,created_at) VALUES (?1,?2,0,'unused',NULL,'2026-01-01T00:00:00Z')",
+                rusqlite::params![session_id, login.user.id],
+            )
+            .unwrap();
         let upgraded = encode(&Header::default(), &json!({
             "sub": login.user.id, "username": login.user.username, "exp": now + 3600, "iat": now,
-            "token_kind": "access", "generation": 0, "auth_protocol": 1
+            "token_kind": "access", "generation": 0, "auth_protocol": 1, "session_id": session_id
         }), &EncodingKey::from_secret(state.config().jwt_secret.as_bytes())).unwrap();
         let legacy_without_protocol = encode(&Header::default(), &json!({
             "sub": login.user.id, "username": login.user.username, "exp": now + 3600, "iat": now,

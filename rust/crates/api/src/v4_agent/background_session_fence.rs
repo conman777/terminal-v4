@@ -213,3 +213,144 @@ pub(crate) fn retire(data: &Path, owner: &str, session: &str) -> Result<(), Stri
 pub(crate) fn is_retired(data: &Path, owner: &str, session: &str) -> Result<bool, String> {
     retired(&directory(data)?, owner, session)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    fn data() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        dir
+    }
+
+    fn tombstones(root: &Path) -> usize {
+        tombstone_count(&root.canonicalize().unwrap().join(DIRECTORY)).unwrap()
+    }
+
+    #[test]
+    fn retire_is_idempotent_and_blocks_only_the_exact_owner_and_session() {
+        let root = data();
+        retire(root.path(), "owner", "session").unwrap();
+        retire(root.path(), "owner", "session").unwrap();
+        assert_eq!(
+            (
+                tombstones(root.path()),
+                acquire_launch(root.path(), "owner", "session").is_err(),
+                acquire_launch(root.path(), "owner", "other").is_ok(),
+                acquire_launch(root.path(), "other", "session").is_ok(),
+            ),
+            (1, true, true, true)
+        );
+    }
+
+    #[test]
+    fn owner_and_session_boundaries_cannot_be_shifted_into_each_other() {
+        assert_ne!(digest("a", "bc"), digest("ab", "c"));
+    }
+
+    #[test]
+    fn invalid_identities_are_rejected_before_touching_storage() {
+        let root = data();
+        let long = "x".repeat(257);
+        for (owner, session) in [
+            ("", "s"),
+            ("o", ""),
+            ("o\n", "s"),
+            ("o", "s\0"),
+            (long.as_str(), "s"),
+            ("o", long.as_str()),
+        ] {
+            assert!(acquire_launch(root.path(), owner, session).is_err());
+            assert!(retire(root.path(), owner, session).is_err());
+            assert!(can_retire(root.path(), owner, session, 0).is_err());
+        }
+        assert!(!root.path().join(DIRECTORY).exists());
+    }
+
+    #[test]
+    fn a_launch_lease_blocks_retirement_until_it_is_dropped() {
+        let root = data();
+        let lease = acquire_launch(root.path(), "owner", "session").unwrap();
+        assert_eq!(
+            retire(root.path(), "owner", "session").unwrap_err(),
+            BUSY.to_owned()
+        );
+        assert!(!is_retired(root.path(), "owner", "session").unwrap());
+        drop(lease);
+        retire(root.path(), "owner", "session").unwrap();
+        assert!(is_retired(root.path(), "owner", "session").unwrap());
+    }
+
+    #[test]
+    fn a_second_launch_lease_for_the_same_stripe_fails_closed_without_waiting() {
+        let root = data();
+        let _first = acquire_launch(root.path(), "owner", "session").unwrap();
+        assert_eq!(
+            acquire_launch(root.path(), "owner", "session").err(),
+            Some(BUSY.to_owned())
+        );
+    }
+
+    #[test]
+    fn capacity_is_checked_before_a_new_tombstone_but_not_for_an_existing_one() {
+        let root = data();
+        retire(root.path(), "owner", "kept").unwrap();
+        let dir = root.path().canonicalize().unwrap().join(DIRECTORY);
+        for index in 1..MAX_TOMBSTONES {
+            std::fs::write(dir.join(format!("retired-filler-{index}")), b"").unwrap();
+        }
+        assert_eq!(tombstone_count(&dir).unwrap(), MAX_TOMBSTONES);
+        assert!(can_retire(root.path(), "owner", "kept", 0).is_ok());
+        assert!(retire(root.path(), "owner", "kept").is_ok());
+        assert!(can_retire(root.path(), "owner", "new", 0).is_err());
+        assert!(retire(root.path(), "owner", "new").is_err());
+        assert!(!is_retired(root.path(), "owner", "new").unwrap());
+        assert!(acquire_launch(root.path(), "owner", "new").is_ok());
+    }
+
+    #[test]
+    fn reserved_in_flight_deletions_count_against_capacity() {
+        let root = data();
+        let dir = directory(root.path()).unwrap();
+        for index in 0..MAX_TOMBSTONES - 2 {
+            std::fs::write(dir.join(format!("retired-filler-{index}")), b"").unwrap();
+        }
+        assert!(can_retire(root.path(), "owner", "one", 1).is_ok());
+        assert!(can_retire(root.path(), "owner", "one", 2).is_err());
+    }
+
+    #[test]
+    fn unsafe_roots_directories_and_tombstones_fail_closed() {
+        let root = data();
+        let real = root.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let link = root.path().join("link");
+        symlink(&real, &link).unwrap();
+        assert!(acquire_launch(&link, "owner", "session").is_err());
+
+        let writable = root.path().join("writable");
+        std::fs::create_dir(&writable).unwrap();
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
+        assert!(retire(&writable, "owner", "session").is_err());
+
+        let dir = directory(&real).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750)).unwrap();
+        assert!(acquire_launch(&real, "owner", "session").is_err());
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        symlink(root.path(), tombstone(&dir, "owner", "session")).unwrap();
+        assert!(acquire_launch(&real, "owner", "session").is_err());
+        assert!(is_retired(&real, "owner", "session").is_err());
+    }
+
+    #[test]
+    fn a_missing_data_root_is_unavailable_and_creates_nothing() {
+        let root = data();
+        let missing = root.path().join("missing");
+        assert!(acquire_launch(&missing, "owner", "session").is_err());
+        assert!(!missing.exists());
+    }
+}

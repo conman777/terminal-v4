@@ -1778,3 +1778,152 @@ async fn codex_proof_for_another_incarnation_is_refused_and_held() {
 async fn claude_proof_for_another_incarnation_is_refused_and_held() {
     foreign_incarnation_scenario("claude").await;
 }
+
+async fn cleanup_hold(app: &crate::state::AppState) -> owner_cleanup::Request {
+    let mut db = app.lock_db().unwrap();
+    let tx = db
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    let hold =
+        owner_cleanup::OwnerCleanup::hold_in_transaction(&tx, "owner", Uuid::new_v4()).unwrap();
+    tx.commit().unwrap();
+    hold
+}
+
+async fn repeated_cleanup_scenario(provider_id: &'static str) {
+    let fx = fixture_for(true, provider_id).await;
+    let app =
+        crate::state::AppState::new_with_services(config(fx.data.path()), None, fx.manager.clone())
+            .unwrap();
+    let cleanup = app.provision_owner_cleanup().unwrap();
+    fx.manager.bind_owner_cleanup(cleanup.clone()).unwrap();
+    fx.start_turn().await;
+    let first = fx.enqueue("pending at logout");
+    let hold = cleanup_hold(&app).await;
+    for _ in 0..2 {
+        fx.manager.service_owner_cleanup("owner").await.unwrap();
+        assert!(cleanup.receipt(&hold).unwrap().is_some());
+    }
+    let second = fx.enqueue("added after cleanup");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let queue = fx.on_disk();
+    assert_eq!(
+        (
+            queue.mode,
+            queue.hold_reason,
+            queue
+                .items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            queue
+                .items
+                .iter()
+                .map(|item| item.state)
+                .collect::<Vec<_>>(),
+            fx.provider.starts(),
+        ),
+        (
+            QueueMode::Held,
+            Some(HoldReason::Manual),
+            vec![first, second],
+            vec![ItemState::Pending, ItemState::Pending],
+            1
+        )
+    );
+    let Fixture {
+        data,
+        manager,
+        id,
+        workspace,
+        ..
+    } = fx;
+    drop(manager);
+    let provider = provider_for(provider_id);
+    let restarted =
+        StructuredSessionManager::new_with_providers(config(data.path()), vec![provider.clone()]);
+    native_queue::opt_in("owner", &id);
+    let snapshot = restarted.queue_snapshot("owner", &id).await.unwrap();
+    let _ = workspace;
+    assert_eq!(
+        (
+            snapshot.mode,
+            snapshot
+                .items
+                .iter()
+                .map(|item| item.state)
+                .collect::<Vec<_>>(),
+            provider.starts()
+        ),
+        (
+            QueueMode::Held,
+            vec![ItemState::Pending, ItemState::Pending],
+            0
+        )
+    );
+}
+
+#[tokio::test]
+async fn repeated_owner_cleanup_keeps_a_codex_queue_held_across_restart() {
+    repeated_cleanup_scenario("codex").await;
+}
+
+#[tokio::test]
+async fn repeated_owner_cleanup_keeps_a_claude_queue_held_across_restart() {
+    repeated_cleanup_scenario("claude").await;
+}
+
+async fn foreign_owner_scenario(provider_id: &'static str) {
+    let fx = fixture_for(false, provider_id).await;
+    fx.start_turn().await;
+    let item = fx.enqueue("owner only");
+    let before = std::fs::read(fx.queue_path()).unwrap();
+    let revision = fx.on_disk().revision;
+    let mutation = || Mutation {
+        operation_id: Uuid::new_v4(),
+        expected_queue_revision: revision,
+        operation: QueueOperation::Edit {
+            item_id: item,
+            expected_item_revision: 1,
+            text: "stolen".into(),
+        },
+    };
+    let operation = mutation();
+    let operation_id = operation.operation_id;
+    let mut codes = vec![
+        fx.manager
+            .queue_mutate("intruder", &fx.id, operation)
+            .await
+            .unwrap_err()
+            .code,
+        fx.manager
+            .queue_snapshot("intruder", &fx.id)
+            .await
+            .unwrap_err()
+            .code,
+        fx.manager
+            .queue_operation_receipt("intruder", &fx.id, operation_id)
+            .await
+            .unwrap_err()
+            .code,
+    ];
+    codes.dedup();
+    assert_eq!(codes, vec!["not_found"]);
+    assert_eq!(std::fs::read(fx.queue_path()).unwrap(), before);
+    assert!(!fx
+        .data
+        .path()
+        .join("followup-queues")
+        .join(hex::encode(sha2::Sha256::digest(b"intruder")))
+        .exists());
+}
+
+#[tokio::test]
+async fn a_foreign_owner_cannot_mutate_read_or_look_up_a_codex_queue() {
+    foreign_owner_scenario("codex").await;
+}
+
+#[tokio::test]
+async fn a_foreign_owner_cannot_mutate_read_or_look_up_a_claude_queue() {
+    foreign_owner_scenario("claude").await;
+}

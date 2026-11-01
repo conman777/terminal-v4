@@ -39,9 +39,9 @@ pub mod screenshots;
 mod system_doctor;
 mod telegram_gateway;
 mod workspace_files;
-// Board routes stay disabled until admission and receipt durability are safe.
-#[cfg(test)]
-#[allow(dead_code)]
+// Board routes are registered only in builds with the `workspace-board-preview` feature (off by default).
+#[cfg(any(test, feature = "workspace-board-preview"))]
+#[cfg_attr(not(feature = "workspace-board-preview"), allow(dead_code))]
 mod workspace_board;
 mod workspace_scripts;
 
@@ -219,6 +219,11 @@ pub fn app(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    #[cfg(all(unix, feature = "workspace-board-preview"))]
+    let workspace_board_routes = workspace_board::routes();
+    #[cfg(not(all(unix, feature = "workspace-board-preview")))]
+    let workspace_board_routes = Router::new();
+
     #[cfg(unix)]
     let ownership_recovery_routes = structured::ownership_recovery::routes();
     #[cfg(not(unix))]
@@ -300,6 +305,7 @@ pub fn app(state: AppState) -> Router {
         .merge(workspace_rewind::routes())
         .merge(session_search::routes())
         .merge(workspace_tasks::routes())
+        .merge(workspace_board_routes)
         .merge(structured::start_requests::routes())
         .merge(ownership_recovery_routes)
         .merge(supervised_input_routes)
@@ -973,12 +979,18 @@ struct LoginInput {
     username: Option<String>,
     email: Option<String>,
     password: String,
+    #[serde(default, rename = "pairBinding")]
+    pair_binding: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RefreshInput {
     refresh_token: String,
+    #[serde(default)]
+    access_token: Option<String>,
+    #[serde(default)]
+    pair_binding: bool,
 }
 
 async fn login(
@@ -998,10 +1010,18 @@ async fn login(
     }
 
     match state
-        .login(identifier, &input.password)
+        .login_with(identifier, &input.password, input.pair_binding)
         .await
-        .map_err(ApiError::internal)?
-    {
+        .map_err(|error| {
+            if error == state::UPGRADE_REQUIRED_MESSAGE {
+                ApiError {
+                    status: StatusCode::UPGRADE_REQUIRED,
+                    message: error,
+                }
+            } else {
+                ApiError::internal(error)
+            }
+        })? {
         Some(result) => Ok(Json(result)),
         None => Err(ApiError {
             status: StatusCode::UNAUTHORIZED,
@@ -1013,22 +1033,50 @@ async fn login(
 async fn refresh(
     State(state): State<AppState>,
     Json(input): Json<RefreshInput>,
-) -> Result<Json<terminal_v4_core::AuthResult>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     if input.refresh_token.is_empty() {
         return Err(ApiError::bad_request("Refresh token is required"));
     }
 
-    match state
-        .refresh_auth(&input.refresh_token)
+    let outcome = state
+        .refresh_auth_pair(state::RefreshRequest {
+            refresh_token: &input.refresh_token,
+            access_token: input
+                .access_token
+                .as_deref()
+                .filter(|value| !value.is_empty()),
+            pair_binding: input.pair_binding,
+        })
         .await
-        .map_err(ApiError::internal)?
-    {
-        Some(result) => Ok(Json(result)),
-        None => Err(ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            message: "Invalid refresh token".to_string(),
-        }),
-    }
+        .map_err(ApiError::internal)?;
+    let no_store = [(axum::http::header::CACHE_CONTROL, "no-store")];
+    Ok(match outcome {
+        state::RefreshOutcome::Issued(result) => (no_store, Json(result)).into_response(),
+        state::RefreshOutcome::Rejected(rejection) => {
+            let (status, message) = match rejection {
+                state::RefreshRejection::Invalid => {
+                    (StatusCode::UNAUTHORIZED, "Invalid refresh token")
+                }
+                state::RefreshRejection::Spent => {
+                    (StatusCode::UNAUTHORIZED, "Refresh token was already used")
+                }
+                state::RefreshRejection::PairMismatch => (
+                    StatusCode::CONFLICT,
+                    "Access and refresh tokens belong to different pairs",
+                ),
+                state::RefreshRejection::PairRequired => (
+                    StatusCode::PRECONDITION_REQUIRED,
+                    "This session requires the matching access token",
+                ),
+            };
+            (
+                status,
+                no_store,
+                Json(json!({ "error": message, "code": rejection.code() })),
+            )
+                .into_response()
+        }
+    })
 }
 
 async fn logout(

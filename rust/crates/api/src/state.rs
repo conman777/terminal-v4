@@ -31,6 +31,9 @@ pub(crate) const NOTE_OWNER_AMBIGUOUS: &str =
 
 #[cfg(unix)]
 mod auth_admission;
+mod auth_pairs;
+#[cfg(test)]
+mod auth_pairs_tests;
 #[cfg(test)]
 mod auth_policy_tests;
 #[cfg(unix)]
@@ -40,6 +43,9 @@ pub(crate) mod owner_input;
 mod passkey_tests;
 #[cfg(test)]
 mod refresh_tests;
+pub(crate) use auth_pairs::{
+    RefreshOutcome, RefreshRejection, RefreshRequest, UPGRADE_REQUIRED_MESSAGE,
+};
 #[cfg(test)]
 mod schema_tests;
 #[cfg(test)]
@@ -75,6 +81,7 @@ struct AppStateInner {
     logout_marker_pause:
         std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     file_lock: Mutex<()>,
+    auth_session_cutover: std::sync::atomic::AtomicBool,
     external_auth: Option<Arc<dyn ExternalAuthProvider>>,
     terminal_manager: TerminalManager,
     structured_session_manager: StructuredSessionManager,
@@ -353,6 +360,7 @@ struct StoredUser {
 #[derive(Debug, Clone)]
 struct StoredRefreshToken {
     id: String,
+    token_hash: String,
     user_id: String,
     expires_at: String,
     auth_protocol: i64,
@@ -554,6 +562,10 @@ impl AppState {
                 #[cfg(all(test, unix))]
                 logout_marker_pause: Default::default(),
                 file_lock: Mutex::new(()),
+                auth_session_cutover: std::sync::atomic::AtomicBool::new(
+                    std::env::var("TERMINAL_V4_AUTH_SESSION_CUTOVER")
+                        .is_ok_and(|value| value == "1"),
+                ),
                 external_auth,
             }),
         };
@@ -846,11 +858,24 @@ impl AppState {
         identifier: &str,
         password: &str,
     ) -> Result<Option<AuthResult>, String> {
+        self.login_with(identifier, password, false).await
+    }
+
+    pub async fn login_with(
+        &self,
+        identifier: &str,
+        password: &str,
+        pair_binding: bool,
+    ) -> Result<Option<AuthResult>, String> {
         let Some(user) = self.get_user_by_username(identifier)? else {
-            return self.login_external(identifier, password).await;
+            return self
+                .login_external(identifier, password, pair_binding)
+                .await;
         };
         if is_external_auth_mirror_user(&user) {
-            return self.login_external(identifier, password).await;
+            return self
+                .login_external(identifier, password, pair_binding)
+                .await;
         }
         if user.password_hash == crate::local_testing::PASSWORD_MARKER {
             return Ok(None);
@@ -869,7 +894,7 @@ impl AppState {
         {
             return Ok(None);
         }
-        self.issue_auth_result(&user).map(Some)
+        self.issue_auth_result(&user, pair_binding).map(Some)
     }
 
     pub(crate) fn login_local_testing(&self, username: &str) -> Result<AuthResult, String> {
@@ -884,7 +909,7 @@ impl AppState {
             if user.password_hash == crate::local_testing::PASSWORD_MARKER
                 && user.id.starts_with(crate::local_testing::ACCOUNT_PREFIX)
             {
-                return self.issue_auth_result(&user);
+                return self.issue_auth_result(&user, false);
             }
         }
         let stored_username = format!("{}{username}", crate::local_testing::USERNAME_PREFIX);
@@ -904,35 +929,54 @@ impl AppState {
         {
             return Err("This testing profile could not be opened safely".into());
         }
-        self.issue_auth_result(&user)
+        self.issue_auth_result(&user, false)
     }
 
     pub async fn refresh_auth(&self, refresh_token: &str) -> Result<Option<AuthResult>, String> {
+        match self
+            .refresh_auth_pair(RefreshRequest::unpaired(refresh_token))
+            .await?
+        {
+            RefreshOutcome::Issued(result) => Ok(Some(result)),
+            RefreshOutcome::Rejected(_) => Ok(None),
+        }
+    }
+
+    pub(crate) async fn refresh_auth_pair(
+        &self,
+        request: RefreshRequest<'_>,
+    ) -> Result<RefreshOutcome, String> {
         self.delete_expired_refresh_tokens()?;
-        let token_hash = hash_token(refresh_token);
+        let token_hash = hash_token(request.refresh_token);
         let Some(stored_token) = self.get_refresh_token_by_hash(&token_hash)? else {
-            return Ok(None);
+            return Ok(RefreshOutcome::Rejected(
+                if self.refresh_token_was_spent(&token_hash)? {
+                    RefreshRejection::Spent
+                } else {
+                    RefreshRejection::Invalid
+                },
+            ));
         };
         let expires_at = OffsetDateTime::parse(&stored_token.expires_at, &Rfc3339)
             .map_err(|error| error.to_string())?;
         if expires_at < OffsetDateTime::now_utc() {
             self.delete_refresh_token(&stored_token.id)?;
-            return Ok(None);
+            return Ok(RefreshOutcome::Rejected(RefreshRejection::Invalid));
         }
 
         let Some(user) = self.get_user_by_id(&stored_token.user_id)? else {
-            return self.refresh_external(stored_token).await;
+            return self.refresh_external(stored_token, &request).await;
         };
         if is_external_auth_mirror_user(&user) {
-            return self.refresh_external(stored_token).await;
+            return self.refresh_external(stored_token, &request).await;
         }
         if user.password_hash == crate::local_testing::PASSWORD_MARKER
             && !crate::local_testing::enabled(self)
         {
-            return Ok(None);
+            return Ok(RefreshOutcome::Rejected(RefreshRejection::Invalid));
         }
 
-        self.rotate_refresh_token(&stored_token, to_public_user(&user))
+        self.rotate_refresh_token(&stored_token, to_public_user(&user), &request)
     }
 
     pub fn logout_user(&self, user_id: &str) -> Result<(), String> {
@@ -1056,6 +1100,12 @@ impl AppState {
                     params![user_id, session_id],
                 )
                 .map_err(|_| "Cannot revoke authentication session")?;
+            transaction
+                .execute(
+                    "DELETE FROM auth_spent_refresh_tokens WHERE user_id=?1 AND session_id=?2",
+                    params![user_id, session_id],
+                )
+                .map_err(|_| "Cannot revoke authentication session")?;
             if authority
                 .valid_for(user_id, crate::v4_agent::interaction::now_ms())
                 .is_none_or(|(generation, _)| generation != current)
@@ -1124,6 +1174,12 @@ impl AppState {
         transaction
             .execute(
                 "DELETE FROM refresh_tokens WHERE user_id = ?",
+                params![user_id],
+            )
+            .map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM auth_spent_refresh_tokens WHERE user_id = ?",
                 params![user_id],
             )
             .map_err(|error| error.to_string())?;
@@ -1277,6 +1333,12 @@ impl AppState {
         transaction
             .execute(
                 "DELETE FROM refresh_tokens WHERE user_id=?1 AND session_id=?2",
+                params![owner, session],
+            )
+            .map_err(|_| "Authentication revocation unavailable")?;
+        transaction
+            .execute(
+                "DELETE FROM auth_spent_refresh_tokens WHERE user_id=?1 AND session_id=?2",
                 params![owner, session],
             )
             .map_err(|_| "Authentication revocation unavailable")?;
@@ -1704,6 +1766,28 @@ impl AppState {
         protocol: i64,
         session_id: Option<&str>,
     ) -> Result<(), String> {
+        self.validate_claims(user_id, generation, protocol, session_id, None)
+    }
+
+    pub(crate) fn validate_access_claims(
+        &self,
+        user_id: &str,
+        generation: i64,
+        protocol: i64,
+        session_id: Option<&str>,
+        pair: Option<i64>,
+    ) -> Result<(), String> {
+        self.validate_claims(user_id, generation, protocol, session_id, Some(pair))
+    }
+
+    fn validate_claims(
+        &self,
+        user_id: &str,
+        generation: i64,
+        protocol: i64,
+        session_id: Option<&str>,
+        access_pair: Option<Option<i64>>,
+    ) -> Result<(), String> {
         let mut connection = self.lock_db()?;
         let transaction = connection
             .transaction()
@@ -1722,6 +1806,9 @@ impl AppState {
             return Err("Credential has been revoked or requires an upgraded client".into());
         }
         Self::validate_auth_session(&transaction, user_id, generation, protocol, session_id)?;
+        if let (Some(pair), Some(session_id)) = (access_pair, session_id) {
+            Self::validate_access_pair(&transaction, user_id, session_id, pair)?;
+        }
         transaction
             .commit()
             .map_err(|_| "Credential authority unavailable")?;
@@ -2985,6 +3072,7 @@ impl AppState {
                     created_at TEXT NOT NULL,
                     auth_protocol INTEGER NOT NULL DEFAULT 0,
                     session_id TEXT,
+                    pair_seq INTEGER,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
@@ -3000,7 +3088,16 @@ impl AppState {
                     logout_capability_hash TEXT NOT NULL,
                     revoked_at TEXT,
                     receipt_count INTEGER NOT NULL DEFAULT 0 CHECK(receipt_count >= 0),
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    pair_seq INTEGER NOT NULL DEFAULT 0 CHECK(pair_seq >= 0),
+                    pair_binding INTEGER NOT NULL DEFAULT 0 CHECK(pair_binding IN (0, 1))
+                );
+
+                CREATE TABLE IF NOT EXISTS auth_spent_refresh_tokens (
+                    token_hash TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT,
+                    expires_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS auth_session_logout_receipts (
@@ -3137,6 +3234,36 @@ impl AppState {
             transaction.execute_batch("ALTER TABLE auth_sessions ADD COLUMN receipt_count INTEGER NOT NULL DEFAULT 0 CHECK(receipt_count >= 0)")
                 .map_err(|error| format!("Failed to migrate auth_sessions.receipt_count: {error}"))?;
         }
+        for (table, column, definition) in [
+            ("refresh_tokens", "pair_seq", "INTEGER"),
+            (
+                "auth_sessions",
+                "pair_seq",
+                "INTEGER NOT NULL DEFAULT 0 CHECK(pair_seq >= 0)",
+            ),
+            (
+                "auth_sessions",
+                "pair_binding",
+                "INTEGER NOT NULL DEFAULT 0 CHECK(pair_binding IN (0, 1))",
+            ),
+        ] {
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+                    params![table, column],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if !exists {
+                transaction
+                    .execute_batch(&format!(
+                        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                    ))
+                    .map_err(|error| format!("Failed to migrate {table}.{column}: {error}"))?;
+            }
+        }
+        transaction.execute_batch("CREATE TABLE IF NOT EXISTS auth_spent_refresh_tokens (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT, expires_at TEXT NOT NULL);")
+            .map_err(|error| format!("Failed to initialize spent refresh history: {error}"))?;
         transaction.execute_batch("CREATE TABLE IF NOT EXISTS auth_protocol_account_integrity (id INTEGER PRIMARY KEY CHECK(id=1), activated_count INTEGER NOT NULL CHECK(activated_count>=0));
             INSERT OR IGNORE INTO auth_protocol_account_integrity (id, activated_count) VALUES (1, 0);
             CREATE TRIGGER IF NOT EXISTS auth_protocol_account_insert AFTER INSERT ON users WHEN NEW.auth_protocol_min=1 BEGIN
@@ -3205,14 +3332,34 @@ impl AppState {
             .join("mobile-keyboard-debug.json"))
     }
 
-    fn issue_auth_result(&self, user: &StoredUser) -> Result<AuthResult, String> {
-        self.issue_auth_result_for_public_user(to_public_user(user))
+    fn issue_auth_result(
+        &self,
+        user: &StoredUser,
+        pair_binding: bool,
+    ) -> Result<AuthResult, String> {
+        self.issue_auth_result_for_public_user_with(to_public_user(user), pair_binding)
     }
 
     pub(crate) fn issue_auth_result_for_public_user(
         &self,
         user: UserPublic,
     ) -> Result<AuthResult, String> {
+        self.issue_auth_result_for_public_user_with(user, false)
+    }
+
+    fn issue_auth_result_for_public_user_with(
+        &self,
+        user: UserPublic,
+        pair_binding: bool,
+    ) -> Result<AuthResult, String> {
+        #[cfg(unix)]
+        if self.auth_session_cutover_enabled() {
+            if let Some(result) = self.issue_session_login(&user, pair_binding)? {
+                return Ok(result);
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = pair_binding;
         self.issue_auth_result_for_public_user_protocol(user, 0)
     }
 
@@ -3314,7 +3461,7 @@ impl AppState {
             transaction.execute("INSERT INTO auth_generations (user_id, generation) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET generation=generation+1", params![user.id]).map_err(|error| error.to_string())?;
             Self::verify_auth_protocol_integrity(&transaction)?;
         } else if required != protocol {
-            return Err("This account requires an upgraded client".into());
+            return Err(UPGRADE_REQUIRED_MESSAGE.into());
         }
         let generation = Self::auth_generation(&transaction, &user.id)?;
         let session = if protocol == 1 {
@@ -3329,6 +3476,8 @@ impl AppState {
             Some(AuthSession {
                 id: session_id,
                 logout_capability: Some(capability),
+                pair_seq: None,
+                pair_binding: false,
             })
         } else {
             None
@@ -3373,14 +3522,31 @@ impl AppState {
         &self,
         stored_token: &StoredRefreshToken,
         user: UserPublic,
-    ) -> Result<Option<AuthResult>, String> {
+        request: &RefreshRequest<'_>,
+    ) -> Result<RefreshOutcome, String> {
+        let invalid = RefreshOutcome::Rejected(RefreshRejection::Invalid);
         if crate::auth::validate_allowed_username(
             self.config().allowed_username.as_deref(),
             &user.username,
         )
         .is_err()
         {
-            return Ok(None);
+            return Ok(invalid);
+        }
+        #[cfg(unix)]
+        {
+            if stored_token.auth_protocol == 1 {
+                return self.rotate_session_pair(stored_token, user, request);
+            }
+            if self.auth_session_cutover_enabled() {
+                let required = {
+                    let connection = self.lock_db()?;
+                    Self::auth_protocol_minimum(&connection, &user.id)?
+                };
+                if required == 1 || (required == 0 && request.pair_binding) {
+                    return self.upgrade_legacy_refresh(stored_token, user, request);
+                }
+            }
         }
         let mut connection = self.lock_db()?;
         let transaction = connection
@@ -3388,7 +3554,7 @@ impl AppState {
             .map_err(|error| error.to_string())?;
         let required = Self::auth_protocol_minimum(&transaction, &user.id)?;
         if !matches!(required, 0 | 1) || stored_token.auth_protocol != required {
-            return Ok(None);
+            return Ok(invalid);
         }
         let generation = Self::auth_generation(&transaction, &user.id)?;
         if Self::validate_auth_session(
@@ -3400,7 +3566,7 @@ impl AppState {
         )
         .is_err()
         {
-            return Ok(None);
+            return Ok(invalid);
         }
         let consumed = transaction
             .execute(
@@ -3409,8 +3575,9 @@ impl AppState {
             )
             .map_err(|error| error.to_string())?;
         if consumed == 0 {
-            return Ok(None);
+            return Ok(RefreshOutcome::Rejected(RefreshRejection::Spent));
         }
+        Self::record_spent_refresh_token(&transaction, stored_token)?;
         let refresh_token = Self::insert_scoped_refresh_token(
             &transaction,
             &user.id,
@@ -3420,6 +3587,8 @@ impl AppState {
         let session = stored_token.session_id.as_ref().map(|id| AuthSession {
             id: id.clone(),
             logout_capability: None,
+            pair_seq: None,
+            pair_binding: false,
         });
         let result = self.auth_result_for_user(
             user,
@@ -3429,13 +3598,14 @@ impl AppState {
             session,
         );
         transaction.commit().map_err(|error| error.to_string())?;
-        Ok(Some(result))
+        Ok(RefreshOutcome::Issued(result))
     }
 
     async fn login_external(
         &self,
         identifier: &str,
         password: &str,
+        pair_binding: bool,
     ) -> Result<Option<AuthResult>, String> {
         let Some(provider) = self.inner.external_auth.clone() else {
             return Ok(None);
@@ -3456,20 +3626,23 @@ impl AppState {
             return Ok(None);
         }
         self.upsert_external_auth_mirror_user(&user.id)?;
-        self.issue_auth_result_for_external_user(user).map(Some)
+        self.issue_auth_result_for_external_user_with(user, pair_binding)
+            .map(Some)
     }
 
     async fn refresh_external(
         &self,
         stored_token: StoredRefreshToken,
-    ) -> Result<Option<AuthResult>, String> {
+        request: &RefreshRequest<'_>,
+    ) -> Result<RefreshOutcome, String> {
+        let invalid = RefreshOutcome::Rejected(RefreshRejection::Invalid);
         let Some(provider) = self.inner.external_auth.clone() else {
             self.delete_refresh_token(&stored_token.id)?;
-            return Ok(None);
+            return Ok(invalid);
         };
         let Some(user) = provider.get_user_by_id(&stored_token.user_id).await? else {
             self.delete_refresh_token(&stored_token.id)?;
-            return Ok(None);
+            return Ok(invalid);
         };
         self.upsert_external_auth_mirror_user(&user.id)?;
         let username = user.resolved_username();
@@ -3480,19 +3653,32 @@ impl AppState {
                 username,
                 created_at: user.created_at,
             },
+            request,
         )
     }
 
+    #[cfg(test)]
     fn issue_auth_result_for_external_user(
         &self,
         user: ExternalAuthUser,
     ) -> Result<AuthResult, String> {
+        self.issue_auth_result_for_external_user_with(user, false)
+    }
+
+    fn issue_auth_result_for_external_user_with(
+        &self,
+        user: ExternalAuthUser,
+        pair_binding: bool,
+    ) -> Result<AuthResult, String> {
         let username = user.resolved_username();
-        self.issue_auth_result_for_public_user(UserPublic {
-            id: user.id,
-            username,
-            created_at: user.created_at,
-        })
+        self.issue_auth_result_for_public_user_with(
+            UserPublic {
+                id: user.id,
+                username,
+                created_at: user.created_at,
+            },
+            pair_binding,
+        )
     }
 
     pub(crate) async fn get_passkey_user_by_identifier(
@@ -3614,6 +3800,7 @@ impl AppState {
                 |row| {
                     Ok(StoredRefreshToken {
                         id: row.get(0)?,
+                        token_hash: token_hash.to_owned(),
                         user_id: row.get(1)?,
                         expires_at: row.get(2)?,
                         auth_protocol: row.get(3)?,

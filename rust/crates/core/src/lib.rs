@@ -175,6 +175,10 @@ pub struct AuthSession {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logout_capability: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pair_seq: Option<i64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pair_binding: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
