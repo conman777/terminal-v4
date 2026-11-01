@@ -1,5 +1,5 @@
 import { environmentAllows } from '../utils/runtimePermissions';
-import { getActiveEnvironment, getEnvironmentCacheScope, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
 import { captureAuthScope, isAuthScopeCurrent } from '../utils/auth';
 import { resolveAgentLaunchCommand } from '../utils/agentLauncher';
 import { useRef, useState, useCallback, useEffect, useMemo, useId, memo, useSyncExternalStore } from 'react';
@@ -38,7 +38,8 @@ import { ProviderAuthModal } from './ProviderAuthModal';
 import { withAttachedFiles } from '../utils/attachedFiles';
 import { PLAN_MARKER } from '../utils/planMode';
 import { notifyAgent } from '../utils/agentNotifications';
-import { loadStash, stashDraft, stashFailureMessage, takeStashed } from '../utils/draftStash';
+import { ACCESS_OPTIONS } from '../utils/accessModes';
+import { useDraftStash } from '../hooks/useDraftStash';
 import { getNativeFollowupQueue, newNativeFollowup } from '../utils/nativeFollowupQueue';
 import { enqueueServerFollowup } from '../utils/serverFollowupQueue';
 import { useServerFollowupQueue } from '../hooks/useServerFollowupQueue';
@@ -58,11 +59,6 @@ import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import { ConversationLinksProvider, scopeConversationLinks, useConversationLinks } from '../contexts/ConversationLinksContext';
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
-const ACCESS_OPTIONS = [
-  { value: 'supervised', label: 'Supervised', description: 'Ask before editing files or running commands' },
-  { value: 'auto-edit', label: 'Auto-edit', description: "Edit files in the thread's folder without asking" },
-  { value: 'full', label: 'Full access', description: 'Edit and run anything without asking' },
-];
 
 function extractTerminalPreviewLines(chunk) {
   if (typeof chunk !== 'string' || chunk.length === 0) return [];
@@ -263,10 +259,7 @@ export const TerminalPane = memo(function TerminalPane(props) {
   const nativeQueue = useMemo(() => getNativeFollowupQueue(pane.sessionId), [pane.sessionId, composerStore]);
   const { items: queuedMessages, error: queueError } = useSyncExternalStore(nativeQueue.subscribe, nativeQueue.getSnapshot);
   const serverQueue = useServerFollowupQueue(isClaudeChat || isCodexSession ? pane.sessionId : null);
-  const [stashed, setStashed] = useState(loadStash);
-  const [stashError, setStashError] = useState('');
-  const stashScope = useSyncExternalStore(subscribeEnvironment, () => { const scope = getEnvironmentCacheScope(); return `${scope.identity}|${scope.environment}`; });
-  useEffect(() => { setStashed(loadStash()); setStashError(''); }, [stashScope]);
+  const { items: stashed, error: stashError, stash, restore } = useDraftStash();
   useEffect(() => { setPlanMode(false); }, [pane.sessionId]);
   const detailsDocked = useMediaQuery('(min-width: 1280px)');
   const [floatingDetailsOpen, setFloatingDetailsOpen] = useState(false);
@@ -884,20 +877,12 @@ export const TerminalPane = memo(function TerminalPane(props) {
   }, [isClaudeChat, isCodexSession, nativeQueue, queuedMessages, serverQueue.status, sessionInputAllowed, structuredConnectionState, structuredHistoryOnly, structuredIsStreaming, structuredRequiresCleanup, structuredSendMessage]);
   const stashCurrentDraft = useCallback(() => {
     if (!composerValue.trim()) return;
-    const result = stashDraft(composerValue);
-    if (!result.ok) {
-      setStashError(stashFailureMessage(result));
-      return;
-    }
-    setStashError('');
-    setStashed(result.items);
-    setComposerValue('');
-  }, [composerValue, setComposerValue]);
+    if (stash(composerValue)) setComposerValue('');
+  }, [composerValue, setComposerValue, stash]);
   const restoreStashed = useCallback(id => {
-    const text = takeStashed(id);
-    setStashed(loadStash());
+    const text = restore(id);
     if (text) setComposerValue(composerValue.trim() ? `${composerValue.trimEnd()}\n${text}` : text);
-  }, [composerValue, setComposerValue]);
+  }, [composerValue, restore, setComposerValue]);
 
   const handleImplementPlan = useCallback(async () => {
     setPlanMode(false);

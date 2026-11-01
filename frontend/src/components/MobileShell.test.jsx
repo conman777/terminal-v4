@@ -160,6 +160,7 @@ vi.mock('../hooks/useSessionBrowserApprovals', () => ({
   },
 }));
 
+const mockUpdateStructuredSessionAccess = vi.fn();
 vi.mock('../contexts/TerminalSessionContext', () => ({
   useTerminalSession() {
     return {
@@ -170,6 +171,7 @@ vi.mock('../contexts/TerminalSessionContext', () => ({
       updateThreadMetadata: mockUpdateThreadMetadata,
       restoreSession: mockRestoreSession,
       updateStructuredSessionSelection: mockUpdateStructuredSessionSelection,
+      updateStructuredSessionAccess: mockUpdateStructuredSessionAccess,
       sendRawToSession: mockSendRawToSession,
     };
   },
@@ -376,6 +378,25 @@ describe('MobileShell', () => {
     renderMobileShell();
     await screen.findByTestId('terminal-chat');
     expect(screen.queryByRole('button', { name: /^Stash/ })).toBeNull();
+  });
+
+  it('lets mobile agent chats change access like desktop, and shows no access control for plain terminals', async () => {
+    mockUpdateStructuredSessionAccess.mockReset().mockResolvedValue({});
+    const session = { id: 'ss-mobile-access', runtime: 'codex', cwd: '/work/project', accessMode: 'supervised' };
+    mockUseStructuredSession.mockReturnValue(createStructuredSessionState());
+    const view = renderMobileShell({ sessions: [session], activeSessionId: session.id });
+    await screen.findByTestId('desktop-conversation-view');
+    const trigger = screen.getByRole('button', { name: 'Access' });
+    expect(trigger).toHaveTextContent('Supervised');
+    fireEvent.click(trigger);
+    expect(screen.getAllByRole('menuitemradio').map(item => item.textContent)).toEqual([
+      expect.stringContaining('Supervised'), expect.stringContaining('Auto-edit'), expect.stringContaining('Full access')]);
+    fireEvent.click(screen.getAllByRole('menuitemradio')[2]);
+    await waitFor(() => expect(mockUpdateStructuredSessionAccess).toHaveBeenCalledWith('ss-mobile-access', 'full'));
+    view.unmount();
+    renderMobileShell();
+    await screen.findByTestId('terminal-chat');
+    expect(screen.queryByRole('button', { name: 'Access' })).toBeNull();
   });
 
   it('sends a plan request and implements a plan without losing a separate draft', async () => {

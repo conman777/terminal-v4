@@ -14,6 +14,8 @@ import { DesktopStatusBar } from './DesktopStatusBar';
 import { MobileModelSettings } from './MobileModelSettings';
 import { serviceTierEntry } from '../utils/agentServiceTier';
 import { MobileKeybar } from './MobileKeybar';
+import { ComposerPicker } from './ComposerPicker';
+import { ACCESS_OPTIONS } from '../utils/accessModes';
 import { MobileDraftStash } from './MobileDraftStash';
 import { WorkspaceStartView } from './WorkspaceStartView';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
@@ -146,7 +148,7 @@ export function MobileShell(props) {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
-  const { listSessionGitBranches, checkoutSessionGitBranch, updateStructuredSessionSelection, createSession, closeSession, updateThreadMetadata, restoreSession, sendRawToSession } = useTerminalSession();
+  const { listSessionGitBranches, checkoutSessionGitBranch, updateStructuredSessionSelection, updateStructuredSessionAccess, createSession, closeSession, updateThreadMetadata, restoreSession, sendRawToSession } = useTerminalSession();
 
   const currentSession = useMemo(
     () => showWorkspaceStart ? null : activeSessionId ? sessions.find((session) => session.id === activeSessionId) || null : sessions[0] || null,
@@ -372,6 +374,16 @@ export function MobileShell(props) {
   const modelChangeDisabled = !sessionInputAllowed || modelUpdatePending || composerSubmitting
     || structuredIsStreaming || structuredIsSending || structuredIsInterrupting || structuredRequiresCleanup
     || structuredHistoryOnly || structuredConnectionState !== 'online';
+
+  const handleSelectAccess = useCallback(async mode => {
+    const sessionId = currentSession?.id;
+    if (!sessionId || modelChangeDisabled || mode === (currentSession.accessMode || 'auto-edit')) return;
+    try {
+      await updateStructuredSessionAccess(sessionId, mode);
+    } catch (error) {
+      setModelUpdate({ sessionId, pending: false, error: error.message || 'Unable to change access. The previous setting is still in use.' });
+    }
+  }, [currentSession?.id, currentSession?.accessMode, modelChangeDisabled, updateStructuredSessionAccess]);
 
   useEffect(() => {
     modelRequestRef.current = null;
@@ -915,6 +927,8 @@ export function MobileShell(props) {
                   {isStructuredSession && <MobileDraftStash composerValue={composerValue} onComposerChange={setComposerValue} />}
                   {(isCodexSession || isClaudeChat) && sessionInputAllowed && <button type="button" className={`mobile-plan-toggle${planMode ? ' active' : ''}`} aria-label="Plan mode" aria-pressed={planMode}
                     disabled={modelChangeDisabled} onClick={() => setPlanMode(value => !value)}>Plan mode: {planMode ? 'On' : 'Off'}</button>}
+                  {(isCodexSession || isClaudeChat) && sessionInputAllowed && <ComposerPicker label="Access" menuTitle="Access" className="session-access-picker"
+                    value={currentSession.accessMode || 'auto-edit'} options={ACCESS_OPTIONS} disabled={modelChangeDisabled} onChange={handleSelectAccess} />}
                   {(isV4Session || serverQueue.status === 'available') && <FollowupQueueButton sessionId={currentSession?.id} queue={serverQueue} />}
                   {isV4Session && <ConversationContextButton
                     sessionId={currentSession?.id} active={true}

@@ -9,6 +9,11 @@ const item = { id: 'task-1', title: 'Existing', description: 'Original', status:
 beforeEach(() => { apiFetch.mockReset(); });
 afterEach(cleanup);
 describe('WorkspaceBoardPanel', () => {
+  it('explains when the server does not provide the board', async () => {
+    apiFetch.mockResolvedValueOnce(response({ error: 'Not found' }, 404));
+    render(<WorkspaceBoardPanel workspacePath="/disabled" />);
+    await screen.findByText('The task board is not enabled on this server.');
+  });
   it('retries an uncertain create with the same operation', async () => {
     apiFetch.mockResolvedValueOnce(response({ items: [] })).mockRejectedValueOnce(new Error('Network lost')).mockResolvedValueOnce(response(item)).mockResolvedValueOnce(response({ items: [item] }));
     render(<WorkspaceBoardPanel workspacePath="/create" />);

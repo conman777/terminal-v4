@@ -32,6 +32,7 @@ function BoardContent({ workspacePath, scopeKey, authScope, environmentSignal })
     setError('');
     apiFetch('/api/workspace/board?' + new URLSearchParams({ path: workspacePath }), { signal: controller.signal })
       .then(async response => {
+        if (response.status === 404) throw new Error('The task board is not enabled on this server.');
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Unable to load task board');
         if (!Array.isArray(data.items)) throw new Error('Invalid task board response');
