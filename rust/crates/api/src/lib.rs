@@ -991,6 +991,8 @@ struct RefreshInput {
     access_token: Option<String>,
     #[serde(default)]
     pair_binding: bool,
+    #[serde(default)]
+    request_id: Option<String>,
 }
 
 async fn login(
@@ -1046,6 +1048,7 @@ async fn refresh(
                 .as_deref()
                 .filter(|value| !value.is_empty()),
             pair_binding: input.pair_binding,
+            request_id: input.request_id.as_deref(),
         })
         .await
         .map_err(ApiError::internal)?;

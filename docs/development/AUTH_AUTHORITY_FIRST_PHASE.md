@@ -8,7 +8,8 @@
 | Rust server: no-forced-sign-out migration of legacy accounts and refresh tokens | Implemented behind the same switch; covered by unit and HTTP tests |
 | Rust server: refresh replay detection (`refresh_token_spent`), mixed-pair rejection, logout/refresh ordering | Implemented and tested (including a threaded logout/refresh race) |
 | Browser: use of the protocol (`pairBinding`, `accessToken` on refresh, atomic pair publication) | **Not implemented.** The active frontend still writes two localStorage keys and cannot use the guarantees |
-| Server: older server binaries sharing the data directory, paired grants, every effect boundary rechecking the session | Not implemented; see "What is not done" |
+| Server: durable cutover fence against older binaries, retry of a lost refresh response, paired grants and pairing codes in the session lifecycle | Implemented behind the same switch (see "Fence, retry window and paired grants" below); covered by colocated and HTTP tests |
+| Server: every effect boundary rechecking the session | Not implemented; see "What is not done" |
 | Verification | 17 colocated tests (`state/auth_pairs_tests.rs`) and 3 HTTP tests (`tests/auth_session_pairs.rs`) pass. The full `terminal-v4-api` library run on a loaded machine showed load-dependent failures in unrelated queue and ownership tests that pass when rerun alone; no real browser, older-binary or multi-process test of the new protocol exists |
 | Production activation | Not done. Do not set the switch until the deployment plan below is followed |
 
@@ -475,6 +476,35 @@ verification starts with the first protocol-1 pair.
 5. Rollback is a forced re-login for legacy logins only if some account was cut
    over (see above). Prefer fixing forward.
 
+### Fence, retry window and paired grants
+
+* **Fence.** The first account activation (or startup on a database cut over before
+  this existed) writes `auth_cutover_fence(schema_version)`, `auth_refresh_replays`
+  and the trigger `auth_cutover_no_legacy_refresh`. The trigger aborts any
+  `refresh_tokens` insert with `auth_protocol=0` for a user whose
+  `auth_protocol_min=1`, so a binary that does not know the protocol fails closed
+  inside SQLite. Every protocol check (`verify_auth_protocol_integrity`) and schema
+  initialisation verifies that the marker is not newer than the binary
+  (`AUTH_CUTOVER_SCHEMA_VERSION`, currently 1) and that the trigger and table still
+  exist; otherwise the server refuses with an explicit "newer server" or "fence was
+  removed" error. The server also refuses in code to mint a protocol-0 refresh token
+  for a cut-over account. Nothing is written until a cutover happens.
+* **Retry window.** `POST /api/auth/refresh` accepts an optional `requestId` (16-128
+  characters of `[A-Za-z0-9_-]`). For a session-pair rotation made while the switch is
+  on, the successor refresh token is derived from the server secret, the spent token
+  and the request id, and `auth_refresh_replays` stores only SHA-256 hashes of the old
+  token, the request id and the new token plus an expiry (30 s). Repeating the same
+  token with the same id returns the same refresh token and pair sequence (with a
+  freshly signed access token) while that pair is still the session's live one; the
+  access token of the previous pair must still be presented, as for any refresh. A
+  different id, a missing id, an expired window, a later rotation, a revoked session or
+  a logout all behave as before (`refresh_token_spent`/invalid). Session revocation and
+  account sign-out delete the rows.
+* **Paired grants.** `paired_codes` and `paired_grants` gain a nullable `session_id`.
+  A code created by a session-bound request (switch on) records its session, the grant
+  exchanged for it inherits it, and both revocation transactions (session logout and
+  receipt-based revocation) delete them. Rows without a session are untouched.
+
 ### What is not done
 
 * Frontend adoption is partial. `auth.js` and the login path now send
@@ -484,17 +514,28 @@ verification starts with the first protocol-1 pair.
   ledger) but not removed: pairs are still written as two keys, not atomically, and
   tabs from before this client do not send the binding. No mixed-version or
   deployed-environment result exists.
-* The cutover is not fenced against an older binary sharing the data directory, and
-  an old writer can still mint protocol-0 credentials for a cut-over account.
-* Paired grants and pairing codes are not part of the session lifecycle.
+* The fence stops an older binary at the database (its protocol-0 refresh insert for a
+  cut-over account aborts) and stops a newer one from running against an unknown
+  marker, but it cannot stop an older binary from other writes that predate the
+  protocol (for example it can still delete rows, or write a legacy account's data),
+  and no multi-binary or multi-process test exists. Binaries that never open this
+  database file are outside it.
+* Pairing codes and paired grants are tied to their issuing session only when it was
+  created with the cutover switch on. Grants and codes created earlier, by legacy
+  accounts, or by an account-wide (protocol-0) logout carry no session and are not
+  revoked by session logout. Guest conversation shares are still revoked only by the
+  account-wide legacy sign-out, not by a session-scoped logout.
 * Effect boundaries other than those listed earlier still check the session only at
   admission; a request admitted before a logout may complete after it. Streams
   revalidate every two seconds, so a bound session's stream on a pair older than the
   one-rotation grace stops at the next check.
-* A refresh response lost in transit leaves the client with a spent token (the
-  server reports `refresh_token_spent`); there is no server-side replay of the
-  last response, so that client must sign in again. The browser authority's
-  uncertain-attempt handling is the only mitigation.
+* A refresh response lost in transit is recoverable only for session-pair rotations
+  (pair 2 and later) when the client sent a `requestId` and retried within 30
+  seconds. The lost response of a legacy-token upgrade (the first pair of a session)
+  and of any request without `requestId` still leaves a spent token
+  (`refresh_token_spent`); that client must sign in again. The browser retries once
+  per refresh attempt after a network failure only; a non-OK retry is reported as
+  uncertain, and no real-network or deployed-environment run exists.
 * Non-Unix builds cannot create sessions or cut accounts over.
 * `session-logout` receipts (the unmounted router) are unchanged; they do not yet
   verify `pairSeq`.

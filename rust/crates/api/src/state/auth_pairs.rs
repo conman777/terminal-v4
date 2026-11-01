@@ -42,14 +42,27 @@ pub(crate) struct RefreshRequest<'a> {
     pub(crate) refresh_token: &'a str,
     pub(crate) access_token: Option<&'a str>,
     pub(crate) pair_binding: bool,
+    /// Client-generated identifier of one logical refresh attempt. A retry of
+    /// the same token with the same identifier recovers a lost response.
+    pub(crate) request_id: Option<&'a str>,
 }
 
 impl<'a> RefreshRequest<'a> {
+    pub(crate) fn valid_request_id(&self) -> Option<&'a str> {
+        self.request_id.filter(|id| {
+            (16..=128).contains(&id.len())
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+    }
+
     pub(crate) fn unpaired(refresh_token: &'a str) -> Self {
         Self {
             refresh_token,
             access_token: None,
             pair_binding: false,
+            request_id: None,
         }
     }
 }
@@ -62,6 +75,12 @@ impl AppState {
         self.inner
             .auth_session_cutover
             .store(enabled, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Pairing codes and grants are tied to their issuing session only while
+    /// the cutover switch is on, so nothing changes for legacy deployments.
+    pub(crate) fn session_scoped_paired_access(&self) -> bool {
+        self.auth_session_cutover_enabled()
     }
 
     pub(super) fn auth_session_cutover_enabled(&self) -> bool {
@@ -125,13 +144,30 @@ impl AppState {
         }
     }
 
+    /// Deterministic successor token for a retryable refresh. It is derived
+    /// from the server secret, the spent token and the client's request id, so
+    /// the plaintext never has to be stored to hand the same token back.
+    fn replay_refresh_token(&self, old_token: &str, request_id: &str) -> String {
+        hash_token(&format!(
+            "tv4-refresh-replay-v1\0{}\0{old_token}\0{request_id}",
+            self.inner.config.jwt_secret
+        ))
+    }
+
     fn insert_pair_refresh_token(
         connection: &Connection,
         user_id: &str,
         session_id: &str,
         pair: i64,
+        token: Option<String>,
     ) -> Result<String, String> {
-        let token = Self::insert_scoped_refresh_token(connection, user_id, 1, Some(session_id))?;
+        let token = Self::insert_scoped_refresh_token_with(
+            connection,
+            user_id,
+            1,
+            Some(session_id),
+            token.unwrap_or_else(|| Uuid::new_v4().to_string()),
+        )?;
         let updated = connection
             .execute(
                 "UPDATE refresh_tokens SET pair_seq=?1 WHERE token_hash=?2",
@@ -194,7 +230,7 @@ impl AppState {
                 params![session_id, user.id, generation, hash_token(&capability), iso_timestamp(), binding],
             )
             .map_err(|_| "Cannot create authentication session")?;
-        let refresh = Self::insert_pair_refresh_token(connection, &user.id, &session_id, 1)?;
+        let refresh = Self::insert_pair_refresh_token(connection, &user.id, &session_id, 1, None)?;
         Ok(self.pair_auth_result(
             user,
             refresh,
@@ -274,6 +310,7 @@ impl AppState {
         if updated != 1 {
             return Err("Credential authority unavailable".into());
         }
+        Self::record_cutover_fence(transaction)?;
         Self::verify_auth_protocol_integrity(transaction)
     }
 
@@ -417,7 +454,38 @@ impl AppState {
             return Ok(RefreshOutcome::Rejected(RefreshRejection::Spent));
         }
         Self::record_spent_refresh_token(&transaction, stored)?;
-        let refresh = Self::insert_pair_refresh_token(&transaction, &user.id, session_id, next)?;
+        let request_id = request
+            .valid_request_id()
+            .filter(|_| self.auth_session_cutover_enabled());
+        let refresh = Self::insert_pair_refresh_token(
+            &transaction,
+            &user.id,
+            session_id,
+            next,
+            request_id.map(|id| self.replay_refresh_token(request.refresh_token, id)),
+        )?;
+        if let Some(id) = request_id {
+            let now = crate::v4_agent::interaction::now_ms();
+            transaction
+                .execute(
+                    "DELETE FROM auth_refresh_replays WHERE expires_ms<=?1",
+                    params![now],
+                )
+                .and_then(|_| {
+                    transaction.execute(
+                        "INSERT OR REPLACE INTO auth_refresh_replays (old_token_hash,request_hash,user_id,session_id,new_token_hash,expires_ms) VALUES (?1,?2,?3,?4,?5,?6)",
+                        params![
+                            stored.token_hash,
+                            hash_token(id),
+                            user.id,
+                            session_id,
+                            hash_token(&refresh),
+                            now + super::auth_fence::REFRESH_REPLAY_WINDOW_MS
+                        ],
+                    )
+                })
+                .map_err(|_| "Cannot record refresh retry window")?;
+        }
         let result =
             self.pair_auth_result(user, refresh, generation, session_id, next, binding, None);
         admission.validate(&transaction)?;
@@ -425,5 +493,137 @@ impl AppState {
             .commit()
             .map_err(|_| "Authentication outcome is uncertain")?;
         Ok(RefreshOutcome::Issued(result))
+    }
+
+    /// Returns the pair a lost refresh response carried, when the very same
+    /// request (spent token plus client request id) is repeated inside the
+    /// retry window and the pair it produced is still the session's live one.
+    /// Anything else stays an ordinary replay of a spent token.
+    #[cfg(unix)]
+    pub(super) fn replay_lost_refresh(
+        &self,
+        request: &RefreshRequest<'_>,
+    ) -> Result<Option<RefreshOutcome>, String> {
+        let Some(request_id) = request.valid_request_id() else {
+            return Ok(None);
+        };
+        if !self.auth_session_cutover_enabled() {
+            return Ok(None);
+        }
+        let old_hash = hash_token(request.refresh_token);
+        let request_hash = hash_token(request_id);
+        let lookup = |connection: &Connection| -> Result<Option<(String, String, String)>, String> {
+            if !Self::table_present(connection, "auth_refresh_replays")? {
+                return Ok(None);
+            }
+            connection
+                .query_row(
+                    "SELECT user_id,session_id,new_token_hash FROM auth_refresh_replays WHERE old_token_hash=?1 AND request_hash=?2 AND expires_ms>?3",
+                    params![old_hash, request_hash, crate::v4_agent::interaction::now_ms()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(|_| "Credential authority unavailable".to_string())
+        };
+        let peeked = {
+            let connection = self.lock_db()?;
+            lookup(&connection)?
+        };
+        let Some((user_id, _, _)) = peeked else {
+            return Ok(None);
+        };
+        let Some(user) = self.get_user_by_id(&user_id)? else {
+            return Ok(None);
+        };
+        let user = to_public_user(&user);
+        if crate::auth::validate_allowed_username(
+            self.config().allowed_username.as_deref(),
+            &user.username,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
+        let _owner_guard = owner_input::acquire(
+            &self.inner.config.data_dir,
+            &user.id,
+            std::time::Duration::from_secs(3),
+        )?;
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        if Self::auth_protocol_minimum(&transaction, &user.id)? != 1 {
+            return Ok(None);
+        }
+        let Some((user_id, session_id, new_hash)) = lookup(&transaction)? else {
+            return Ok(None);
+        };
+        if user_id != user.id {
+            return Ok(None);
+        }
+        let generation = Self::auth_generation(&transaction, &user.id)?;
+        let Some((current, binding)) = transaction
+            .query_row(
+                "SELECT pair_seq, pair_binding FROM auth_sessions WHERE id=?1 AND user_id=?2 AND generation=?3 AND revoked_at IS NULL",
+                params![session_id, user.id, generation],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?)),
+            )
+            .optional()
+            .map_err(|_| "Credential authority unavailable")?
+        else {
+            return Ok(None);
+        };
+        let live: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM refresh_tokens WHERE token_hash=?1 AND user_id=?2 AND session_id=?3 AND auth_protocol=1 AND expires_at>=?4 AND COALESCE(pair_seq,0)=?5)",
+                params![new_hash, user.id, session_id, iso_timestamp(), current],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Credential authority unavailable")?;
+        let refresh = self.replay_refresh_token(request.refresh_token, request_id);
+        if !live || current < 2 || hash_token(&refresh) != new_hash {
+            return Ok(None);
+        }
+        match request.access_token {
+            Some(access) => {
+                let matches =
+                    crate::auth::access_pair_claims(&self.inner.config.jwt_secret, access)
+                        .is_some_and(|claims| {
+                            claims.owner == user.id
+                                && claims.session_id.as_deref() == Some(session_id.as_str())
+                                && claims.pair == Some(current - 1)
+                        });
+                if !matches {
+                    return Ok(Some(RefreshOutcome::Rejected(
+                        RefreshRejection::PairMismatch,
+                    )));
+                }
+            }
+            None if binding => {
+                return Ok(Some(RefreshOutcome::Rejected(
+                    RefreshRejection::PairRequired,
+                )));
+            }
+            None => {}
+        }
+        admission.validate(&transaction)?;
+        let result = self.pair_auth_result(
+            user,
+            refresh,
+            generation,
+            &session_id,
+            current,
+            binding,
+            None,
+        );
+        Ok(Some(RefreshOutcome::Issued(result)))
     }
 }

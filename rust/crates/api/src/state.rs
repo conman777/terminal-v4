@@ -31,6 +31,7 @@ pub(crate) const NOTE_OWNER_AMBIGUOUS: &str =
 
 #[cfg(unix)]
 mod auth_admission;
+mod auth_fence;
 mod auth_pairs;
 #[cfg(test)]
 mod auth_pairs_tests;
@@ -43,6 +44,8 @@ pub(crate) mod owner_input;
 mod passkey_tests;
 #[cfg(test)]
 mod refresh_tests;
+#[cfg(test)]
+pub(crate) use auth_fence::AUTH_CUTOVER_SCHEMA_VERSION;
 pub(crate) use auth_pairs::{
     RefreshOutcome, RefreshRejection, RefreshRequest, UPGRADE_REQUIRED_MESSAGE,
 };
@@ -949,6 +952,10 @@ impl AppState {
         self.delete_expired_refresh_tokens()?;
         let token_hash = hash_token(request.refresh_token);
         let Some(stored_token) = self.get_refresh_token_by_hash(&token_hash)? else {
+            #[cfg(unix)]
+            if let Some(outcome) = self.replay_lost_refresh(&request)? {
+                return Ok(outcome);
+            }
             return Ok(RefreshOutcome::Rejected(
                 if self.refresh_token_was_spent(&token_hash)? {
                     RefreshRejection::Spent
@@ -1106,6 +1113,10 @@ impl AppState {
                     params![user_id, session_id],
                 )
                 .map_err(|_| "Cannot revoke authentication session")?;
+            Self::purge_refresh_replays(&transaction, user_id, Some(session_id))
+                .map_err(|_| "Cannot revoke authentication session")?;
+            crate::paired_environments::revoke_session_access(&transaction, user_id, session_id)
+                .map_err(|_| "Cannot revoke authentication session")?;
             if authority
                 .valid_for(user_id, crate::v4_agent::interaction::now_ms())
                 .is_none_or(|(generation, _)| generation != current)
@@ -1183,6 +1194,7 @@ impl AppState {
                 params![user_id],
             )
             .map_err(|error| error.to_string())?;
+        Self::purge_refresh_replays(&transaction, user_id, None)?;
         transaction.execute("INSERT INTO auth_generations (user_id, generation) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET generation = generation + 1", params![user_id]).map_err(|error| error.to_string())?;
         #[cfg(unix)]
         self.inner
@@ -1341,6 +1353,10 @@ impl AppState {
                 "DELETE FROM auth_spent_refresh_tokens WHERE user_id=?1 AND session_id=?2",
                 params![owner, session],
             )
+            .map_err(|_| "Authentication revocation unavailable")?;
+        Self::purge_refresh_replays(&transaction, owner, Some(session))
+            .map_err(|_| "Authentication revocation unavailable")?;
+        crate::paired_environments::revoke_session_access(&transaction, owner, session)
             .map_err(|_| "Authentication revocation unavailable")?;
         transaction.execute(
             "INSERT INTO auth_session_logout_receipts(operation,user_id,session_id,incarnation,created_at) VALUES (?1,?2,?3,?4,?5)",
@@ -2121,7 +2137,7 @@ impl AppState {
         if recorded < 0 || recorded != actual || !insert_trigger || !update_trigger {
             return Err("Credential authority unavailable".into());
         }
-        Ok(())
+        Self::verify_cutover_fence(connection)
     }
 
     fn auth_protocol_minimum(connection: &Connection, user_id: &str) -> Result<i64, String> {
@@ -3275,6 +3291,8 @@ impl AppState {
                 SELECT CASE WHEN changes()!=1 THEN RAISE(ABORT, 'authentication protocol installation unavailable') END;
             END;")
             .map_err(|error| format!("Failed to initialize authentication protocol integrity: {error}"))?;
+        Self::verify_cutover_fence(&transaction)?;
+        Self::adopt_existing_cutover(&transaction)?;
         transaction.commit().map_err(|error| error.to_string())
     }
 
@@ -3452,6 +3470,7 @@ impl AppState {
             if updated != 1 {
                 return Err("Credential authority unavailable".into());
             }
+            Self::record_cutover_fence(&transaction)?;
             transaction
                 .execute(
                     "DELETE FROM refresh_tokens WHERE user_id=?",
@@ -3728,7 +3747,25 @@ impl AppState {
         auth_protocol: i64,
         session_id: Option<&str>,
     ) -> Result<String, String> {
-        let token = Uuid::new_v4().to_string();
+        Self::insert_scoped_refresh_token_with(
+            connection,
+            user_id,
+            auth_protocol,
+            session_id,
+            Uuid::new_v4().to_string(),
+        )
+    }
+
+    fn insert_scoped_refresh_token_with(
+        connection: &Connection,
+        user_id: &str,
+        auth_protocol: i64,
+        session_id: Option<&str>,
+        token: String,
+    ) -> Result<String, String> {
+        if auth_protocol == 0 && Self::auth_protocol_minimum(connection, user_id)? == 1 {
+            return Err(auth_fence::LEGACY_MINT_REFUSED.into());
+        }
         let token_hash = hash_token(&token);
         let expires_at = OffsetDateTime::now_utc() + time::Duration::days(REFRESH_TOKEN_TTL_DAYS);
         connection

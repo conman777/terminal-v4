@@ -22,8 +22,18 @@ fn request<'a>(refresh: &'a str, access: Option<&'a str>, binding: bool) -> Refr
         refresh_token: refresh,
         access_token: access,
         pair_binding: binding,
+        request_id: None,
     }
 }
+
+fn retry<'a>(refresh: &'a str, access: Option<&'a str>, request_id: &'a str) -> RefreshRequest<'a> {
+    RefreshRequest {
+        request_id: Some(request_id),
+        ..request(refresh, access, false)
+    }
+}
+
+const REQUEST_ID: &str = "0123456789abcdef0123456789abcdef";
 
 async fn issued(state: &AppState, request: RefreshRequest<'_>) -> AuthResult {
     match state.refresh_auth_pair(request).await.unwrap() {
@@ -630,4 +640,320 @@ async fn spent_history_is_pruned_when_it_expires_and_cleared_by_logout() {
         )
         .unwrap();
     assert_eq!(history, 0);
+}
+
+fn fence_version(state: &AppState) -> Option<i64> {
+    let connection = state.lock_db().unwrap();
+    connection
+        .query_row(
+            "SELECT schema_version FROM auth_cutover_fence WHERE id=1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+}
+
+#[tokio::test]
+async fn fence_marker_is_absent_until_cutover_is_used() {
+    let (_data, state) = fixture(false);
+    let login = bound_login(&state).await;
+    assert_eq!(login.session, None);
+    assert_eq!(fence_version(&state), None);
+    let connection = state.lock_db().unwrap();
+    assert!(AppState::verify_cutover_fence(&connection).is_ok());
+}
+
+#[tokio::test]
+async fn cutover_records_a_durable_marker_and_refuses_protocol_zero_credentials() {
+    let (_data, state) = fixture(true);
+    let login = bound_login(&state).await;
+    assert_eq!(fence_version(&state), Some(AUTH_CUTOVER_SCHEMA_VERSION));
+    let connection = state.lock_db().unwrap();
+    let minted = AppState::insert_scoped_refresh_token(&connection, &login.user.id, 0, None);
+    assert!(minted.unwrap_err().contains("cut over"));
+}
+
+#[tokio::test]
+async fn older_binary_refresh_insert_is_aborted_by_the_database() {
+    let (_data, state) = fixture(true);
+    let login = bound_login(&state).await;
+    let connection = state.lock_db().unwrap();
+    let error = connection
+        .execute(
+            "INSERT INTO refresh_tokens (id,user_id,token_hash,expires_at,created_at) VALUES ('old-writer',?1,'h','2999-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+            params![login.user.id],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cut-over account"), "{error}");
+}
+
+#[tokio::test]
+async fn a_marker_from_a_newer_server_makes_this_server_fail_closed() {
+    let (_data, state) = fixture(true);
+    let login = bound_login(&state).await;
+    state
+        .lock_db()
+        .unwrap()
+        .execute(
+            "UPDATE auth_cutover_fence SET schema_version=99 WHERE id=1",
+            [],
+        )
+        .unwrap();
+    {
+        let connection = state.lock_db().unwrap();
+        let error = AppState::auth_protocol_minimum(&connection, &login.user.id).unwrap_err();
+        assert!(error.contains("newer server"), "{error}");
+    }
+    assert!(state
+        .initialize_schema()
+        .unwrap_err()
+        .contains("newer server"));
+    assert!(state
+        .login_with("fixture", "fixture-password", true)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn a_removed_fence_trigger_is_detected() {
+    let (_data, state) = fixture(true);
+    let login = bound_login(&state).await;
+    let connection = state.lock_db().unwrap();
+    connection
+        .execute_batch("DROP TRIGGER auth_cutover_no_legacy_refresh")
+        .unwrap();
+    let error = AppState::auth_protocol_minimum(&connection, &login.user.id).unwrap_err();
+    assert!(error.contains("fence"), "{error}");
+}
+
+fn replay_rows(state: &AppState) -> i64 {
+    let connection = state.lock_db().unwrap();
+    connection
+        .query_row("SELECT count(*) FROM auth_refresh_replays", [], |row| {
+            row.get(0)
+        })
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn a_lost_refresh_response_is_recovered_by_retrying_the_same_request() {
+    let (_data, state) = fixture(true);
+    let first = bound_login(&state).await;
+    let (old_refresh, old_access) = (
+        first.tokens.refresh_token.clone(),
+        first.tokens.access_token.clone(),
+    );
+    let lost = issued(&state, retry(&old_refresh, Some(&old_access), REQUEST_ID)).await;
+    let recovered = issued(&state, retry(&old_refresh, Some(&old_access), REQUEST_ID)).await;
+    assert_eq!(recovered.tokens.refresh_token, lost.tokens.refresh_token);
+    assert_eq!(
+        recovered
+            .session
+            .as_ref()
+            .map(|s| (s.id.clone(), s.pair_seq)),
+        lost.session.as_ref().map(|s| (s.id.clone(), s.pair_seq))
+    );
+    assert!(authorizes(&state, &recovered.tokens.access_token));
+    let next = issued(
+        &state,
+        request(
+            &recovered.tokens.refresh_token,
+            Some(&recovered.tokens.access_token),
+            false,
+        ),
+    )
+    .await;
+    assert_eq!(next.session.unwrap().pair_seq, Some(3));
+}
+
+#[tokio::test]
+async fn retries_without_the_matching_request_id_remain_replays() {
+    let (_data, state) = fixture(true);
+    let first = bound_login(&state).await;
+    let (refresh, access) = (
+        first.tokens.refresh_token.clone(),
+        first.tokens.access_token.clone(),
+    );
+    issued(&state, retry(&refresh, Some(&access), REQUEST_ID)).await;
+    assert_eq!(
+        rejected(&state, request(&refresh, Some(&access), false)).await,
+        RefreshRejection::Spent
+    );
+    assert_eq!(
+        rejected(
+            &state,
+            retry(&refresh, Some(&access), "fedcba9876543210fedcba9876543210")
+        )
+        .await,
+        RefreshRejection::Spent
+    );
+    assert_eq!(
+        rejected(&state, retry(&refresh, Some(&access), "short")).await,
+        RefreshRejection::Spent
+    );
+}
+
+#[tokio::test]
+async fn a_retry_is_refused_after_the_new_pair_has_rotated_or_the_window_closed() {
+    let (_data, state) = fixture(true);
+    let first = bound_login(&state).await;
+    let (refresh, access) = (
+        first.tokens.refresh_token.clone(),
+        first.tokens.access_token.clone(),
+    );
+    let second = issued(&state, retry(&refresh, Some(&access), REQUEST_ID)).await;
+    state
+        .lock_db()
+        .unwrap()
+        .execute("UPDATE auth_refresh_replays SET expires_ms=0", [])
+        .unwrap();
+    assert_eq!(
+        rejected(&state, retry(&refresh, Some(&access), REQUEST_ID)).await,
+        RefreshRejection::Spent
+    );
+    state
+        .lock_db()
+        .unwrap()
+        .execute(
+            "UPDATE auth_refresh_replays SET expires_ms=?1",
+            params![i64::MAX],
+        )
+        .unwrap();
+    issued(
+        &state,
+        request(
+            &second.tokens.refresh_token,
+            Some(&second.tokens.access_token),
+            false,
+        ),
+    )
+    .await;
+    assert_eq!(
+        rejected(&state, retry(&refresh, Some(&access), REQUEST_ID)).await,
+        RefreshRejection::Spent
+    );
+}
+
+#[tokio::test]
+async fn a_retry_must_still_present_the_matching_access_token() {
+    let (_data, state) = fixture(true);
+    let first = bound_login(&state).await;
+    let other = bound_login(&state).await;
+    let (refresh, access) = (
+        first.tokens.refresh_token.clone(),
+        first.tokens.access_token.clone(),
+    );
+    issued(&state, retry(&refresh, Some(&access), REQUEST_ID)).await;
+    assert_eq!(
+        rejected(
+            &state,
+            retry(&refresh, Some(&other.tokens.access_token), REQUEST_ID)
+        )
+        .await,
+        RefreshRejection::PairMismatch
+    );
+    assert_eq!(
+        rejected(&state, retry(&refresh, None, REQUEST_ID)).await,
+        RefreshRejection::PairRequired
+    );
+}
+
+#[tokio::test]
+async fn logout_discards_the_retry_window() {
+    let (_data, state) = fixture(true);
+    let first = bound_login(&state).await;
+    let (refresh, access) = (
+        first.tokens.refresh_token.clone(),
+        first.tokens.access_token.clone(),
+    );
+    let second = issued(&state, retry(&refresh, Some(&access), REQUEST_ID)).await;
+    assert_eq!(replay_rows(&state), 1);
+    let authority = crate::auth::authenticate_runtime_with_authority(
+        &state,
+        &second.tokens.access_token,
+        "POST",
+        "/api/auth/logout",
+    )
+    .unwrap()
+    .1
+    .unwrap();
+    assert!(state
+        .logout_user_authorized(&first.user.id, &authority)
+        .unwrap());
+    assert_eq!(replay_rows(&state), 0);
+    assert!(matches!(
+        state
+            .refresh_auth_pair(retry(&refresh, Some(&access), REQUEST_ID))
+            .await
+            .unwrap(),
+        RefreshOutcome::Rejected(_)
+    ));
+}
+
+#[tokio::test]
+async fn the_retry_window_stores_hashes_only() {
+    let (_data, state) = fixture(true);
+    let first = bound_login(&state).await;
+    let second = issued(
+        &state,
+        retry(
+            &first.tokens.refresh_token,
+            Some(&first.tokens.access_token),
+            REQUEST_ID,
+        ),
+    )
+    .await;
+    let connection = state.lock_db().unwrap();
+    let mut statement = connection
+        .prepare("SELECT old_token_hash||request_hash||new_token_hash FROM auth_refresh_replays")
+        .unwrap();
+    let rows: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(rows.len(), 1);
+    for secret in [
+        first.tokens.refresh_token.as_str(),
+        second.tokens.refresh_token.as_str(),
+        REQUEST_ID,
+    ] {
+        assert!(!rows[0].contains(secret));
+    }
+}
+
+#[tokio::test]
+async fn with_cutover_off_a_request_id_changes_nothing() {
+    let (_data, state) = fixture(false);
+    let login = state
+        .login("fixture", "fixture-password")
+        .await
+        .unwrap()
+        .unwrap();
+    let refresh = login.tokens.refresh_token.clone();
+    issued(&state, retry(&refresh, None, REQUEST_ID)).await;
+    assert_eq!(replay_rows(&state), 0);
+    assert_eq!(
+        rejected(&state, retry(&refresh, None, REQUEST_ID)).await,
+        RefreshRejection::Spent
+    );
+}
+
+#[tokio::test]
+async fn a_database_cut_over_before_the_marker_existed_adopts_it_at_startup() {
+    let (_data, state) = fixture(true);
+    bound_login(&state).await;
+    state
+        .lock_db()
+        .unwrap()
+        .execute_batch(
+            "DROP TRIGGER auth_cutover_no_legacy_refresh; DROP TABLE auth_cutover_fence; DROP TABLE auth_refresh_replays;",
+        )
+        .unwrap();
+    state.initialize_schema().unwrap();
+    assert_eq!(fence_version(&state), Some(AUTH_CUTOVER_SCHEMA_VERSION));
+    assert_eq!(replay_rows(&state), 0);
 }

@@ -257,3 +257,121 @@ async fn disabling_cutover_after_activation_makes_the_forced_relogin_explicit() 
     .await;
     assert_eq!(status, StatusCode::OK);
 }
+
+async fn pairing_code(router: &Router, pair: &Value) -> String {
+    let (status, body) = call(
+        router,
+        "POST",
+        "/api/environments/pairing-code",
+        pair["tokens"]["accessToken"].as_str(),
+        json!({"label":"fixture-client"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["code"].as_str().unwrap().to_owned()
+}
+
+async fn exchange(router: &Router, code: &str) -> (StatusCode, Value) {
+    call(
+        router,
+        "POST",
+        "/api/environments/exchange",
+        None,
+        json!({ "code": code }),
+    )
+    .await
+}
+
+async fn grant_is_valid(router: &Router, credential: &str) -> bool {
+    call(
+        router,
+        "GET",
+        "/api/environments/check",
+        Some(credential),
+        json!({}),
+    )
+    .await
+    .0 == StatusCode::OK
+}
+
+#[tokio::test]
+async fn paired_grants_and_codes_end_with_the_session_that_issued_them() {
+    let (_data, _state, router) = setup(true);
+    let session = login(&router, true).await;
+    let other = login(&router, true).await;
+
+    let exchanged_code = pairing_code(&router, &session).await;
+    let (status, grant) = exchange(&router, &exchanged_code).await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    let credential = grant["credential"].as_str().unwrap().to_owned();
+    assert!(grant_is_valid(&router, &credential).await);
+    let unused_code = pairing_code(&router, &session).await;
+    let other_code = pairing_code(&router, &other).await;
+    let (_, other_grant) = exchange(&router, &other_code).await;
+    let other_credential = other_grant["credential"].as_str().unwrap().to_owned();
+
+    let (status, _) = call(
+        &router,
+        "POST",
+        "/api/auth/logout",
+        session["tokens"]["accessToken"].as_str(),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert!(!grant_is_valid(&router, &credential).await);
+    assert_eq!(
+        exchange(&router, &unused_code).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(grant_is_valid(&router, &other_credential).await);
+}
+
+#[tokio::test]
+async fn without_cutover_paired_grants_ignore_the_session_lifecycle() {
+    let (_data, _state, router) = setup(false);
+    let session = login(&router, false).await;
+    let code = pairing_code(&router, &session).await;
+    let (_, grant) = exchange(&router, &code).await;
+    let credential = grant["credential"].as_str().unwrap().to_owned();
+    let (status, _) = call(
+        &router,
+        "POST",
+        "/api/auth/logout",
+        session["tokens"]["accessToken"].as_str(),
+        json!({}),
+    )
+    .await;
+    assert!(status.is_success());
+    assert!(grant_is_valid(&router, &credential).await);
+}
+
+#[tokio::test]
+async fn refresh_request_id_recovers_a_lost_response_over_http() {
+    let (_data, _state, router) = setup(true);
+    let first = login(&router, true).await;
+    let mut body = refresh_body(&first, true, false);
+    body["requestId"] = json!("abcdefabcdefabcdefabcdefabcdefab");
+    let (status, lost) = call(&router, "POST", "/api/auth/refresh", None, body.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, again) = call(&router, "POST", "/api/auth/refresh", None, body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        again["tokens"]["refreshToken"],
+        lost["tokens"]["refreshToken"]
+    );
+    assert_eq!(me(&router, &again).await, StatusCode::OK);
+    let (status, spent) = call(
+        &router,
+        "POST",
+        "/api/auth/refresh",
+        None,
+        refresh_body(&first, true, false),
+    )
+    .await;
+    assert_eq!(
+        (status, spent["code"].as_str()),
+        (StatusCode::UNAUTHORIZED, Some("refresh_token_spent"))
+    );
+}

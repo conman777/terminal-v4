@@ -399,9 +399,10 @@ export async function refreshTokens() {
           const tokenFingerprint = fingerprint(refreshToken);
           // Cross-process localStorage can lag the lock hand-off; a ledger entry proves this token was already spent.
           if (!reserved && consumed.includes(tokenFingerprint) && getRefreshToken() === refreshToken) await awaitStorageCatchUp(refreshToken);
+          const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), value => value.toString(16).padStart(2, '0')).join('');
           const sendRefresh = access => fetch(scope.home.replace(/\/$/, '') + '/api/auth/refresh', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refreshToken, ...(access ? { accessToken: access } : {}), pairBinding: true })
+            body: JSON.stringify({ refreshToken, ...(access ? { accessToken: access } : {}), pairBinding: true, requestId })
           });
           let sentAccess = accessToken;
           let started;
@@ -432,7 +433,10 @@ export async function refreshTokens() {
           let response;
           try { response = await started.response; }
           catch {
-            throw new Error('Token refresh outcome uncertain; sign in again');
+            // A lost response is recoverable: the server returns the same pair for the same token and request id.
+            const uncertain = () => new Error('Token refresh outcome uncertain; sign in again');
+            response = await sendRefresh(sentAccess).catch(() => { throw uncertain(); });
+            if (!response.ok) throw uncertain();
           }
           let rejection = null;
           if (!response.ok) rejection = await readRejectionCode(response);

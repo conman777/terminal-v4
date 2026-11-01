@@ -6,7 +6,7 @@ import { chromium } from '@playwright/test';
 import { managedChromiumPath } from '../test/managedChromium';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-let browser, server, origin, context, first, second, requests, rawRequests, script, held, heldBodies, consumed, apiRequests, previewRequests, disconnectAfterConsumption, managedPath;
+let browser, server, origin, context, first, second, requests, rawRequests, script, held, heldBodies, consumed, apiRequests, previewRequests, disconnectAfterConsumption, dropAlways, managedPath;
 const initial = { access: 'synthetic-expired-access', refresh: 'synthetic-original-refresh' };
 const rotated = { access: 'synthetic-rotated-access', refresh: 'synthetic-rotated-refresh' };
 const identity = { id: 'synthetic-owner' };
@@ -22,8 +22,9 @@ beforeAll(async () => {
       let body = ''; for await (const chunk of req) body += chunk;
       const parsed = JSON.parse(body);
       rawRequests.push(parsed);
+      if (dropAlways) return req.socket.destroy();
       requests.push({ refreshToken: parsed.refreshToken });
-      if (script.length) { const step = await script.shift()(); return json(res, step.status, step.body); }
+      if (script.length) { const step = await script.shift()(); if (step.drop) return req.socket.destroy(); return json(res, step.status, step.body); }
       if (consumed) return json(res, 401, { error: 'Synthetic single-use token consumed' });
       consumed = true;
       if (disconnectAfterConsumption) {
@@ -62,7 +63,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await browser?.close(); server?.closeAllConnections(); await new Promise(resolve => server?.close(resolve)); });
 beforeEach(async () => {
-  requests = []; rawRequests = []; script = []; held = []; heldBodies = []; consumed = false; apiRequests = []; previewRequests = []; disconnectAfterConsumption = false;
+  requests = []; rawRequests = []; script = []; held = []; heldBodies = []; consumed = false; apiRequests = []; previewRequests = []; disconnectAfterConsumption = false; dropAlways = false;
   context = await browser.newContext();
   context.setDefaultTimeout(10000);
   first = await context.newPage(); second = await context.newPage();
@@ -769,13 +770,13 @@ describe('refreshTokens across independent same-origin browser tabs', () => {
       if (mode === 'fallback') await first.evaluate(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
       await start(first); await finished(first);
       expect(await snapshot(first)).toEqual({ outcome: { error: 'Token refresh outcome uncertain; sign in again' }, ...initial, user: identity });
-      expect(requests).toEqual([{ refreshToken: initial.refresh }]);
+      expect(requests).toEqual([{ refreshToken: initial.refresh }, { refreshToken: initial.refresh }]);
       await first.evaluate(() => auth.setTokens('synthetic-new-access', 'synthetic-new-refresh'));
       consumed = false; disconnectAfterConsumption = false;
-      await start(first); await expect.poll(() => requests.length).toBe(2);
+      await start(first); await expect.poll(() => requests.length).toBe(3);
       release(); await finished(first);
       expect((await snapshot(first)).outcome).toEqual({ accessToken: rotated.access });
-      expect(requests).toEqual([{ refreshToken: initial.refresh }, { refreshToken: 'synthetic-new-refresh' }]);
+      expect(requests).toEqual([{ refreshToken: initial.refresh }, { refreshToken: initial.refresh }, { refreshToken: 'synthetic-new-refresh' }]);
     } finally {
       await context.close();
       await rm(profile, { recursive: true, force: true });
@@ -822,7 +823,7 @@ describe('refreshTokens session-pair protocol', () => {
   it('sends the current access token and opts in to pair binding', async () => {
     await start(first); await expect.poll(() => requests.length).toBe(1);
     release(); await finished(first);
-    expect(rawRequests).toEqual([{ refreshToken: initial.refresh, accessToken: initial.access, pairBinding: true }]);
+    expect(rawRequests).toEqual([{ refreshToken: initial.refresh, accessToken: initial.access, pairBinding: true, requestId: expect.stringMatching(/^[0-9a-f]{32}$/) }]);
   });
 
   it('stores the returned pairSeq with the rotated tokens', async () => {
@@ -863,10 +864,27 @@ describe('refreshTokens session-pair protocol', () => {
     script.push(async () => ({ status: 200, body: rotatedBody(3) }));
     await start(first); await finished(first);
     expect(rawRequests).toEqual([
-      { refreshToken: initial.refresh, pairBinding: true },
-      { refreshToken: initial.refresh, accessToken: 'synthetic-late-access', pairBinding: true },
+      { refreshToken: initial.refresh, pairBinding: true, requestId: expect.stringMatching(/^[0-9a-f]{32}$/) },
+      { refreshToken: initial.refresh, accessToken: 'synthetic-late-access', pairBinding: true, requestId: expect.stringMatching(/^[0-9a-f]{32}$/) },
     ]);
     expect(await snapshot(first)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+  });
+
+  it('retries a lost response once with the same request id so the server can replay it', async () => {
+    script.push(async () => ({ drop: true }));
+    script.push(async () => ({ status: 200, body: rotatedBody(2) }));
+    await start(first); await finished(first);
+    expect(rawRequests.map(({ requestId }) => requestId)).toEqual([rawRequests[0].requestId, rawRequests[0].requestId]);
+    expect(rawRequests[0].requestId).toMatch(/^[0-9a-f]{32}$/);
+    expect(await snapshot(first)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+  });
+
+  it('gives up as uncertain when the retry of a lost response also fails', async () => {
+    dropAlways = true;
+    await start(first); await finished(first);
+    expect(rawRequests.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(rawRequests.map(({ requestId }) => requestId)).size).toBe(1);
+    expect((await snapshot(first)).outcome).toEqual({ error: 'Token refresh outcome uncertain; sign in again' });
   });
 
   it('retries pair_required only once and keeps the tokens', async () => {

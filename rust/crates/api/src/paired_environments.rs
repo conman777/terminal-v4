@@ -61,6 +61,34 @@ fn unauthorized() -> ApiError {
         message: "Invalid, expired, or revoked environment credential".into(),
     }
 }
+fn has_column(db: &rusqlite::Connection, table: &str, column: &str) -> bool {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+        params![table, column],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
+/// Removes the pairing codes and paired grants minted from one authentication
+/// session. Rows created outside a session (or before this column existed)
+/// carry no session and are untouched.
+pub(crate) fn revoke_session_access(
+    db: &rusqlite::Connection,
+    owner: &str,
+    session: &str,
+) -> rusqlite::Result<usize> {
+    let mut removed = 0;
+    for table in ["paired_codes", "paired_grants"] {
+        if has_column(db, table, "session_id") {
+            removed += db.execute(
+                &format!("DELETE FROM {table} WHERE owner=?1 AND session_id=?2"),
+                params![owner, session],
+            )?;
+        }
+    }
+    Ok(removed)
+}
 fn storage(state: &AppState) -> Result<std::sync::MutexGuard<'_, rusqlite::Connection>, ApiError> {
     let db = state
         .lock_db()
@@ -92,6 +120,12 @@ fn storage(state: &AppState) -> Result<std::sync::MutexGuard<'_, rusqlite::Conne
                 ))
                 .map_err(|_| ApiError::internal("Environment migration unavailable"))?;
             }
+        }
+    }
+    for table in ["paired_codes", "paired_grants"] {
+        if !has_column(&db, table, "session_id") {
+            db.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN session_id TEXT"))
+                .map_err(|_| ApiError::internal("Environment migration unavailable"))?;
         }
     }
     for (column, definition) in [
@@ -595,12 +629,16 @@ fn profile(input: &LabelInput) -> Result<(String, Capabilities), ApiError> {
 async fn create_code(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<crate::auth::LocalAuthority>>,
     Json(input): Json<LabelInput>,
 ) -> Result<Response, ApiError> {
     let label = label(&input.label)?;
     let (profile, capabilities) = profile(&input)?;
     let code = random_secret();
     let expires = now() + 120;
+    let session = authority
+        .and_then(|Extension(authority)| authority.session_id().map(str::to_owned))
+        .filter(|_| state.session_scoped_paired_access());
     let db = storage(&state)?;
     db.execute("DELETE FROM paired_codes WHERE expires<=?1", [now()])
         .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -617,13 +655,14 @@ async fn create_code(
         ));
     }
     db.execute(
-        "INSERT INTO paired_codes (hash,owner,username,label,expires,profile,capabilities) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO paired_codes (hash,owner,username,label,expires,profile,capabilities,session_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
         params![
             fingerprint(&code),
             user.user_id,
             user.username,
             label,
-            expires, profile,serde_json::to_string(&capabilities).map_err(|_|ApiError::internal("Invalid capabilities"))?
+            expires, profile,serde_json::to_string(&capabilities).map_err(|_|ApiError::internal("Invalid capabilities"))?,
+            session
         ],
     )
     .map_err(|error| ApiError::internal(error.to_string()))?;
@@ -667,15 +706,15 @@ async fn exchange(
     let tx = db
         .transaction()
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let code: Option<(String, String, String,String,String)> = tx
+    let code: Option<(String, String, String,String,String,Option<String>)> = tx
         .query_row(
-            "SELECT owner,username,label,profile,capabilities FROM paired_codes WHERE hash=?1 AND expires>?2",
+            "SELECT owner,username,label,profile,capabilities,session_id FROM paired_codes WHERE hash=?1 AND expires>?2",
             params![fingerprint(&input.code), now()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?,r.get(3)?,r.get(4)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)),
         )
         .optional()
         .map_err(|error| ApiError::internal(error.to_string()))?;
-    let Some((owner, username, label, profile, capabilities)) = code else {
+    let Some((owner, username, label, profile, capabilities, session)) = code else {
         return Err(unauthorized());
     };
     let count: i64 = tx
@@ -699,7 +738,7 @@ async fn exchange(
     )
     .map_err(|error| ApiError::internal(error.to_string()))?;
     tx.execute(
-        "INSERT INTO paired_grants (id,hash,owner,username,label,created,expires,profile,capabilities) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        "INSERT INTO paired_grants (id,hash,owner,username,label,created,expires,profile,capabilities,session_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             grant_id,
             fingerprint(&credential),
@@ -707,7 +746,7 @@ async fn exchange(
             username,
             label,
             now(),
-            expires_at,profile,capabilities
+            expires_at,profile,capabilities,session
         ],
     )
     .map_err(|error| ApiError::internal(error.to_string()))?;

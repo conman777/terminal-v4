@@ -686,8 +686,23 @@ async fn protocol_cutover_atomically_revokes_old_authority_and_issues_usable_cre
         &old.user.username,
         1,
     );
-    let old_writer_refresh =
-        AppState::insert_refresh_token(&state.lock_db().unwrap(), &old.user.id, 0).unwrap();
+    assert!(
+        AppState::insert_refresh_token(&state.lock_db().unwrap(), &old.user.id, 0)
+            .unwrap_err()
+            .contains("cut over")
+    );
+    let old_writer_refresh = "old-writer-refresh-token".to_owned();
+    {
+        let connection = state.lock_db().unwrap();
+        connection
+            .execute_batch("DROP TRIGGER auth_cutover_no_legacy_refresh")
+            .unwrap();
+        connection.execute(
+            "INSERT INTO refresh_tokens (id,user_id,token_hash,expires_at,created_at,auth_protocol) VALUES ('old-writer',?1,?2,'2999-01-01T00:00:00Z','2026-01-01T00:00:00Z',0)",
+            rusqlite::params![old.user.id, hash_token(&old_writer_refresh)],
+        ).unwrap();
+        AppState::record_cutover_fence(&connection).unwrap();
+    }
     assert!(other
         .refresh_auth(&old_writer_refresh)
         .await
