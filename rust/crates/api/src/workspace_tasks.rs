@@ -12,6 +12,8 @@ use uuid::Uuid;
 mod cron;
 #[path = "workspace_tasks/delivery.rs"]
 mod delivery;
+#[path = "workspace_tasks/delivery_channels.rs"]
+mod delivery_channels;
 #[path = "workspace_tasks/schedule_change.rs"]
 mod schedule_change;
 pub use delivery::{DeliveryState, DeliveryStatus, DeliveryTarget};
@@ -21,6 +23,21 @@ pub(crate) use schedule_change::{
     commit_reviewed_schedule_change, prepare_reviewed_schedule_change,
     prepare_reviewed_schedule_edit, ScheduleChange, ScheduleEdit,
 };
+
+/// Whether the owner may schedule delivery to `target`. Telegram pairing is checked at send time.
+pub(crate) fn delivery_target_available(
+    data_dir: &FsPath,
+    owner: &str,
+    target: DeliveryTarget,
+) -> bool {
+    let name = match target {
+        DeliveryTarget::Telegram => return true,
+        DeliveryTarget::Slack => "slack",
+        DeliveryTarget::Discord => "discord",
+        DeliveryTarget::Webhook => "webhook",
+    };
+    delivery_channels::is_configured(data_dir, owner, name)
+}
 
 const TASK_LIMIT: usize = 200;
 const RECEIPT_LIMIT: usize = 512 * 1024;
@@ -4264,6 +4281,7 @@ pub fn routes() -> Router<AppState> {
             "/api/workspace/schedules/{id}/run",
             axum::routing::post(run_schedule),
         )
+        .merge(delivery_channels::routes())
         .layer(axum::middleware::map_response(no_store))
 }
 

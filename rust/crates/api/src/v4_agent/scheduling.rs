@@ -10,8 +10,21 @@ use serde_json::{json, Value};
 use sha2::Digest;
 use std::path::Path;
 
-pub(super) fn definition() -> Value {
-    json!({"name":"create_schedule","description":"Create an app-owned scheduled unattended task after explicit review. Supply intervalSeconds, at, or runOnceAt; calendar schedules may also include intervalSeconds. Times are Unix milliseconds. In at, give hour, minute and weekdays, or a 5-field cron expression (minute hour day-of-month month day-of-week) in cron; timeZone is an IANA name. deliverTo telegram sends a bounded summary of each finished run to the user's paired Telegram chat; it appears in the approval. Provide a prompt, or skillRef (workspace:<id> or account:<id> from discover_skills) to run a saved skill's current instructions as the task prompt; skillInput adds input after them. The task cannot run commands. The workspace, owner, provider, model and parent session come from this conversation.","parameters":{"type":"object","properties":{"name":{"type":"string"},"prompt":{"type":"string"},"skillRef":{"type":"string"},"skillInput":{"type":"string"},"enabled":{"type":"boolean"},"intervalSeconds":{"type":"integer"},"at":{"type":"object","properties":{"hour":{"type":"integer"},"minute":{"type":"integer"},"weekdays":{"type":"array","items":{"type":"integer"}},"cron":{"type":"string"},"utcOffsetMinutes":{"type":"integer"},"timeZone":{"type":"string"}},"additionalProperties":false},"runOnceAt":{"type":"integer"},"deliverTo":{"type":"string","enum":["telegram"]}},"required":["name","enabled"],"additionalProperties":false}})
+const TARGETS: [(DeliveryTarget, &str); 3] = [
+    (DeliveryTarget::Slack, "slack"),
+    (DeliveryTarget::Discord, "discord"),
+    (DeliveryTarget::Webhook, "webhook"),
+];
+
+pub(super) fn definition(data: &Path, owner: &str) -> Value {
+    let mut targets = vec!["telegram"];
+    targets.extend(
+        TARGETS
+            .iter()
+            .filter(|(target, _)| workspace_tasks::delivery_target_available(data, owner, *target))
+            .map(|(_, name)| *name),
+    );
+    json!({"name":"create_schedule","description":"Create an app-owned scheduled unattended task after explicit review. Supply intervalSeconds, at, or runOnceAt; calendar schedules may also include intervalSeconds. Times are Unix milliseconds. In at, give hour, minute and weekdays, or a 5-field cron expression (minute hour day-of-month month day-of-week) in cron; timeZone is an IANA name. deliverTo sends a bounded redacted summary of each finished run to the named channel (telegram is the user's paired chat; other channels are offered only when the user configured them); the target appears in the approval. Provide a prompt, or skillRef (workspace:<id> or account:<id> from discover_skills) to run a saved skill's current instructions as the task prompt; skillInput adds input after them. The task cannot run commands. The workspace, owner, provider, model and parent session come from this conversation.","parameters":{"type":"object","properties":{"name":{"type":"string"},"prompt":{"type":"string"},"skillRef":{"type":"string"},"skillInput":{"type":"string"},"enabled":{"type":"boolean"},"intervalSeconds":{"type":"integer"},"at":{"type":"object","properties":{"hour":{"type":"integer"},"minute":{"type":"integer"},"weekdays":{"type":"array","items":{"type":"integer"}},"cron":{"type":"string"},"utcOffsetMinutes":{"type":"integer"},"timeZone":{"type":"string"}},"additionalProperties":false},"runOnceAt":{"type":"integer"},"deliverTo":{"type":"string","enum":targets}},"required":["name","enabled"],"additionalProperties":false}})
 }
 
 #[derive(Deserialize)]
@@ -99,6 +112,11 @@ pub(super) async fn execute(
     {
         return Err("Choose an interval or one-shot time, not both".into());
     }
+    if let Some(target) = args.deliver_to {
+        if !workspace_tasks::delivery_target_available(data, owner, target) {
+            return Err("That delivery channel is not configured; nothing was queued. Configure it in settings or choose another target".into());
+        }
+    }
     let (skill, prompt) = match (&args.skill_ref, args.prompt) {
         (Some(reference), None) => {
             let (skill, prompt) = skill_prompt(
@@ -162,6 +180,9 @@ pub(super) async fn execute(
         });
     let delivery_note = match args.deliver_to {
         Some(DeliveryTarget::Telegram) => "Result delivery: after each run, a redacted summary (status, name, up to 3000 characters of the final text) is sent to your paired Telegram chat.\n",
+        Some(DeliveryTarget::Slack) => "Result delivery: after each run, a redacted summary is posted to your configured Slack incoming webhook.\n",
+        Some(DeliveryTarget::Discord) => "Result delivery: after each run, a redacted summary is posted to your configured Discord webhook.\n",
+        Some(DeliveryTarget::Webhook) => "Result delivery: after each run, a redacted summary is sent as a signed HTTP POST to your configured webhook URL.\n",
         None => "",
     };
     let approved = cancellation.run(interaction.approve(ApprovalRequest {
@@ -323,6 +344,121 @@ mod tests {
             ),
             (json!("telegram"), true, true, None, false, true)
         );
+    }
+    fn configure(data: &Path, owner: &str, channels: &[&str]) {
+        let dir = data.join("delivery-channels");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = json!({"owner": owner});
+        for channel in channels {
+            config[channel] = json!({"url": "sealed"});
+        }
+        std::fs::write(
+            dir.join(format!(
+                "{}.json",
+                hex::encode(sha2::Sha256::digest(owner.as_bytes()))
+            )),
+            config.to_string(),
+        )
+        .unwrap();
+    }
+    fn offered(data: &Path, owner: &str) -> Value {
+        definition(data, owner)["parameters"]["properties"]["deliverTo"]["enum"].clone()
+    }
+    #[test]
+    fn schema_offers_only_channels_configured_for_the_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = offered(dir.path(), "owner");
+        configure(dir.path(), "owner", &["discord", "webhook"]);
+        assert_eq!(
+            (
+                before,
+                offered(dir.path(), "owner"),
+                offered(dir.path(), "other")
+            ),
+            (
+                json!(["telegram"]),
+                json!(["telegram", "discord", "webhook"]),
+                json!(["telegram"])
+            )
+        );
+    }
+    #[tokio::test]
+    async fn unconfigured_channel_is_rejected_and_nothing_is_queued_or_approved() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        configure(dir.path(), "owner", &["slack"]);
+        let session = super::super::new_session("openai-api", "gpt-4.1", workspace.path());
+        let mut results = vec![];
+        let mut approvals = 0;
+        for target in ["slack", "discord", "webhook"] {
+            let gate = Gate {
+                approved: true,
+                requests: Mutex::new(vec![]),
+            };
+            let mut args = input();
+            args["deliverTo"] = json!(target);
+            let result = execute(
+                dir.path(),
+                "owner",
+                &session,
+                &scope(&session),
+                "call",
+                &args,
+                &gate,
+                &Cancellation::default(),
+            )
+            .await;
+            approvals += gate.requests.lock().unwrap().len();
+            results.push((
+                result.is_ok(),
+                result.err().unwrap_or_default().contains("not configured"),
+            ));
+        }
+        let saved = std::fs::read_dir(dir.path().join("workspace-tasks"))
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+                    .count()
+            })
+            .unwrap_or(0);
+        assert_eq!(
+            (results, approvals, saved),
+            (vec![(true, false), (false, true), (false, true)], 1, 1)
+        );
+    }
+    #[tokio::test]
+    async fn approval_note_names_each_configured_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        configure(dir.path(), "owner", &["slack", "discord", "webhook"]);
+        let session = super::super::new_session("openai-api", "gpt-4.1", workspace.path());
+        let mut notes = vec![];
+        for target in ["slack", "discord", "webhook"] {
+            let gate = Gate {
+                approved: false,
+                requests: Mutex::new(vec![]),
+            };
+            let mut args = input();
+            args["deliverTo"] = json!(target);
+            let _ = execute(
+                dir.path(),
+                "owner",
+                &session,
+                &scope(&session),
+                "call",
+                &args,
+                &gate,
+                &Cancellation::default(),
+            )
+            .await;
+            let description = gate.requests.lock().unwrap()[0].description.clone();
+            notes.push((
+                description.contains(&format!("\"deliverTo\": \"{target}\"")),
+                description.contains("Result delivery:"),
+            ));
+        }
+        assert_eq!(notes, vec![(true, true); 3]);
     }
     #[tokio::test]
     async fn denial_foreign_scope_and_unexpected_arguments_never_save() {

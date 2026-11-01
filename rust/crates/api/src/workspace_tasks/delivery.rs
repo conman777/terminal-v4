@@ -9,6 +9,9 @@ const UNKNOWN_AFTER_RESTART: &str =
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryTarget {
     Telegram,
+    Slack,
+    Discord,
+    Webhook,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -103,6 +106,7 @@ pub(super) fn summary(task: &TaskRecord, schedule_name: Option<&str>) -> String 
 pub(super) struct PendingDelivery {
     owner: String,
     task_id: Uuid,
+    target: DeliveryTarget,
     text: String,
 }
 
@@ -150,6 +154,7 @@ pub(super) fn claim_deliveries(
             claimed.push(PendingDelivery {
                 owner: store.owner_id.clone(),
                 task_id: task.id,
+                target: task.delivery.deliver_to.unwrap_or(DeliveryTarget::Telegram),
                 text: summary(task, name),
             });
         }
@@ -196,14 +201,33 @@ async fn record_outcome(
 }
 
 pub(super) async fn deliver(data_dir: PathBuf, item: PendingDelivery) {
-    let (status, reason) =
-        match crate::telegram_gateway::send_to_owner(&data_dir, &item.owner, &item.text).await {
-            Ok(()) => (DeliveryStatus::Delivered, None),
-            Err(error) if error.skipped() => {
-                (DeliveryStatus::Skipped, Some(error.reason().to_owned()))
+    let (status, reason) = match item.target {
+        DeliveryTarget::Telegram => {
+            match crate::telegram_gateway::send_to_owner(&data_dir, &item.owner, &item.text).await {
+                Ok(()) => (DeliveryStatus::Delivered, None),
+                Err(error) if error.skipped() => {
+                    (DeliveryStatus::Skipped, Some(error.reason().to_owned()))
+                }
+                Err(error) => (DeliveryStatus::Failed, Some(error.reason().to_owned())),
             }
-            Err(error) => (DeliveryStatus::Failed, Some(error.reason().to_owned())),
-        };
+        }
+        DeliveryTarget::Slack | DeliveryTarget::Discord | DeliveryTarget::Webhook => {
+            let channel = match item.target {
+                DeliveryTarget::Slack => delivery_channels::Channel::Slack,
+                DeliveryTarget::Discord => delivery_channels::Channel::Discord,
+                _ => delivery_channels::Channel::Webhook,
+            };
+            match delivery_channels::send(&data_dir, &item.owner, channel, item.task_id, &item.text)
+                .await
+            {
+                Ok(()) => (DeliveryStatus::Delivered, None),
+                Err(error) if error.skipped() => {
+                    (DeliveryStatus::Skipped, Some(error.reason().to_owned()))
+                }
+                Err(error) => (DeliveryStatus::Failed, Some(error.reason().to_owned())),
+            }
+        }
+    };
     record_outcome(&data_dir, &item.owner, item.task_id, status, reason).await;
 }
 
