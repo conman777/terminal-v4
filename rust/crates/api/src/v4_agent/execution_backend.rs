@@ -6,6 +6,11 @@ use std::{
 use tokio::process::Command;
 
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+const CREATE_SETTLE: Duration = Duration::from_millis(2500);
+const CREATE_POLL: Duration = Duration::from_millis(250);
+const REMOTE_WATCHDOG_SECONDS: u32 = 120;
+const PROBE_GONE: &str = "v4-cleanup:gone";
+const PROBE_ABSENT: &str = "v4-cleanup:absent";
 const APP_LABEL: &str = "terminal-v4.app=run-command";
 const PID_LABEL: &str = "terminal-v4.pid";
 const RUN_LABEL: &str = "terminal-v4.run";
@@ -154,19 +159,62 @@ fn bounded_output(mut process: std::process::Command, timeout: Duration) -> Opti
     finished.then_some(text)
 }
 
+enum CleanupTarget {
+    Docker {
+        program: String,
+        name: String,
+        directory: tempfile::TempDir,
+    },
+    Ssh {
+        program: String,
+        arguments: Vec<String>,
+    },
+}
+
 pub(super) struct ContainerCleanup {
-    program: String,
-    name: String,
-    directory: tempfile::TempDir,
+    target: CleanupTarget,
     armed: bool,
 }
 impl ContainerCleanup {
+    fn docker(program: String, name: String, directory: tempfile::TempDir) -> Self {
+        Self {
+            target: CleanupTarget::Docker {
+                program,
+                name,
+                directory,
+            },
+            armed: true,
+        }
+    }
+
+    fn name(&self) -> &str {
+        match &self.target {
+            CleanupTarget::Docker { name, .. } => name,
+            CleanupTarget::Ssh { .. } => "",
+        }
+    }
+
     fn cidfile(&self) -> std::path::PathBuf {
-        self.directory.path().join("container.id")
+        match &self.target {
+            CleanupTarget::Docker { directory, .. } => directory.path().join("container.id"),
+            CleanupTarget::Ssh { .. } => std::path::PathBuf::new(),
+        }
     }
 
     pub(super) fn force_remove(&mut self) -> Result<(), String> {
-        let mut targets = vec![self.name.clone()];
+        match &self.target {
+            CleanupTarget::Docker { .. } => self.force_remove_container()?,
+            CleanupTarget::Ssh { program, arguments } => remote_cleanup(program, arguments)?,
+        }
+        self.armed = false;
+        Ok(())
+    }
+
+    fn force_remove_container(&self) -> Result<(), String> {
+        let CleanupTarget::Docker { program, name, .. } = &self.target else {
+            return Ok(());
+        };
+        let mut targets = vec![name.clone()];
         if let Ok(id) = std::fs::read_to_string(self.cidfile()) {
             let id = id.trim();
             if is_container_id(id) {
@@ -175,30 +223,61 @@ impl ContainerCleanup {
         }
         for (index, target) in targets.iter().enumerate() {
             if index == 0 {
-                let mut kill = scrubbed_std_command(&self.program);
+                let mut kill = scrubbed_std_command(program);
                 kill.args(["kill", target]);
                 let _ = bounded_output(kill, CLEANUP_TIMEOUT);
             }
-            let mut remove = scrubbed_std_command(&self.program);
+            let mut remove = scrubbed_std_command(program);
             remove.args(["rm", "-f", target]);
             let _ = bounded_output(remove, CLEANUP_TIMEOUT);
         }
-        let mut list = scrubbed_std_command(&self.program);
-        list.args([
-            "ps",
-            "-a",
-            "--filter",
-            &format!("name=^/{}$", self.name),
-            "--format",
-            "{{.Names}}",
-        ]);
-        let listing = bounded_output(list, CLEANUP_TIMEOUT)
-            .ok_or("Docker container cleanup is unconfirmed")?;
-        if listing.lines().any(|name| !name.trim().is_empty()) {
-            return Err("Docker container cleanup is unconfirmed".into());
+        let started =
+            std::fs::read_to_string(self.cidfile()).is_ok_and(|id| is_container_id(id.trim()));
+        let deadline = Instant::now()
+            + if started {
+                Duration::ZERO
+            } else {
+                CREATE_SETTLE
+            };
+        loop {
+            let mut list = scrubbed_std_command(program);
+            list.args([
+                "ps",
+                "-a",
+                "--filter",
+                &format!("name=^/{name}$"),
+                "--format",
+                "{{.Names}}",
+            ]);
+            let listing = bounded_output(list, CLEANUP_TIMEOUT)
+                .ok_or("Docker container cleanup is unconfirmed")?;
+            if listing.lines().any(|name| !name.trim().is_empty()) {
+                if Instant::now() >= deadline {
+                    return Err("Docker container cleanup is unconfirmed".into());
+                }
+                let mut remove = scrubbed_std_command(program);
+                remove.args(["rm", "-f", name]);
+                let _ = bounded_output(remove, CLEANUP_TIMEOUT);
+            } else if Instant::now() >= deadline {
+                return Ok(());
+            }
+            std::thread::sleep(CREATE_POLL);
         }
-        self.armed = false;
+    }
+}
+
+fn remote_cleanup(program: &str, arguments: &[String]) -> Result<(), String> {
+    let mut probe = scrubbed_std_command(program);
+    probe.args(arguments);
+    let output =
+        bounded_output(probe, CLEANUP_TIMEOUT).ok_or("Remote command cleanup is unconfirmed")?;
+    if output
+        .lines()
+        .any(|line| line == PROBE_GONE || line == PROBE_ABSENT)
+    {
         Ok(())
+    } else {
+        Err("Remote command cleanup is unconfirmed".into())
     }
 }
 impl Drop for ContainerCleanup {
@@ -402,15 +481,14 @@ impl ExecutionBackend for DockerBackend {
             .prefix("v4-container-")
             .tempdir()
             .map_err(|_| "Cannot prepare container tracking")?;
-        let cleanup = ContainerCleanup {
-            program: self.program.clone(),
-            name: format!("v4-run-{}", uuid::Uuid::new_v4().simple()),
+        let cleanup = ContainerCleanup::docker(
+            self.program.clone(),
+            format!("v4-run-{}", uuid::Uuid::new_v4().simple()),
             directory,
-            armed: true,
-        };
+        );
         let mut process = Command::new(&self.program);
         process
-            .args(self.arguments(&root, command, &cleanup.name, &cleanup.cidfile()))
+            .args(self.arguments(&root, command, cleanup.name(), &cleanup.cidfile()))
             .env_clear();
         for (name, value) in scrubbed_host_environment(&|name| std::env::var_os(name)) {
             process.env(name, value);
@@ -431,6 +509,7 @@ pub(super) struct SshBackend {
     pub(super) identity: Option<String>,
     pub(super) known_hosts: Option<String>,
     pub(super) workdir: String,
+    pub(super) state_dir: String,
 }
 
 fn shell_quote(text: &str) -> String {
@@ -457,7 +536,7 @@ fn is_remote_directory(value: &str) -> bool {
 }
 
 impl SshBackend {
-    pub(super) fn arguments(&self, command: &str) -> Vec<String> {
+    fn option_arguments(&self) -> Vec<String> {
         let mut arguments: Vec<String> = [
             "-n",
             "-T",
@@ -504,29 +583,70 @@ impl SshBackend {
         if let Some(user) = &self.user {
             arguments.extend(["-l".into(), user.clone()]);
         }
+        arguments
+    }
+
+    fn remote_arguments(&self, script: &str) -> Vec<String> {
+        let mut arguments = self.option_arguments();
         arguments.extend([
             "--".into(),
             self.host.clone(),
-            format!(
-                "cd -- {} && exec /bin/sh -c {}",
-                shell_quote(&self.workdir),
-                shell_quote(command)
-            ),
+            format!("exec /bin/sh -c {}", shell_quote(script)),
         ]);
         arguments
     }
-}
-impl ExecutionBackend for SshBackend {
-    fn name(&self) -> &'static str {
-        "ssh"
+
+    fn run_script(&self, command: &str, pidfile: &str) -> String {
+        self.run_script_with(command, pidfile, REMOTE_WATCHDOG_SECONDS)
     }
-    fn host_description(&self) -> String {
+
+    fn run_script_with(&self, command: &str, pidfile: &str, watchdog: u32) -> String {
         format!(
-            "runs on the remote host {} over SSH in {} (not this machine; the workspace is not synchronised; remote commands may continue after cancellation or disconnection; the remote login shell must be POSIX)",
-            self.host, self.workdir
+            "umask 077\n\
+             pf={pidfile}\n\
+             [ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"$$\" ] || {{ echo 'v4: remote process group is not isolated' >&2; exit 125; }}\n\
+             echo $$ > \"$pf\" || exit 125\n\
+             [ -e \"$pf.stop\" ] && exit 125\n\
+             ( sleep {watchdog}; kill -KILL -$$ ) </dev/null >/dev/null 2>&1 &\n\
+             cd -- {workdir} || exit 126\n\
+             exec /bin/sh -c {command}",
+            pidfile = shell_quote(pidfile),
+            workdir = shell_quote(&self.workdir),
+            command = shell_quote(command),
         )
     }
-    fn command(&self, _root: &Path, command: &str) -> Result<Command, String> {
+
+    fn cleanup_script(pidfile: &str) -> String {
+        format!(
+            "umask 077\n\
+             pf={pidfile}\n\
+             : > \"$pf.stop\" || exit 3\n\
+             [ -f \"$pf\" ] || {{ echo {PROBE_ABSENT}; exit 0; }}\n\
+             g=$(cat \"$pf\")\n\
+             case \"$g\" in ''|*[!0-9]*) exit 4;; esac\n\
+             [ \"$g\" -gt 1 ] || exit 4\n\
+             kill -TERM -\"$g\" 2>/dev/null\n\
+             i=0\n\
+             while kill -0 -\"$g\" 2>/dev/null && [ $i -lt 2 ]; do sleep 1; i=$((i+1)); done\n\
+             kill -KILL -\"$g\" 2>/dev/null\n\
+             i=0\n\
+             while kill -0 -\"$g\" 2>/dev/null && [ $i -lt 2 ]; do sleep 1; i=$((i+1)); done\n\
+             if kill -0 -\"$g\" 2>/dev/null; then echo v4-cleanup:alive; exit 5; fi\n\
+             rm -f \"$pf\" \"$pf.stop\"\n\
+             echo {PROBE_GONE}",
+            pidfile = shell_quote(pidfile),
+        )
+    }
+
+    pub(super) fn arguments(&self, command: &str, pidfile: &str) -> Vec<String> {
+        self.remote_arguments(&self.run_script(command, pidfile))
+    }
+
+    pub(super) fn cleanup_arguments(&self, pidfile: &str) -> Vec<String> {
+        self.remote_arguments(&Self::cleanup_script(pidfile))
+    }
+
+    fn validate(&self) -> Result<(), String> {
         if !is_ssh_name(&self.host)
             || self.user.as_deref().is_some_and(|user| !is_ssh_name(user))
             || self
@@ -536,15 +656,52 @@ impl ExecutionBackend for SshBackend {
                 .chain(self.known_hosts.as_deref())
                 .any(|path| !is_plain_absolute_path(path))
             || !is_remote_directory(&self.workdir)
+            || !is_plain_absolute_path(&self.state_dir)
         {
             return Err("SSH execution backend settings are invalid".into());
         }
+        Ok(())
+    }
+}
+impl ExecutionBackend for SshBackend {
+    fn name(&self) -> &'static str {
+        "ssh"
+    }
+    fn host_description(&self) -> String {
+        format!(
+            "runs on the remote host {} over SSH in {} (not this machine; the workspace is not synchronised; the command runs in its own remote process group with a {REMOTE_WATCHDOG_SECONDS} second remote watchdog, and completion, timeout or cancellation runs a verified cleanup over a second SSH connection, but a descendant that starts a new session or process group may escape, and cleanup is reported as unconfirmed if the host cannot be reached; the remote login shell must be POSIX with ps, tr, kill and a writable /tmp)",
+            self.host, self.workdir
+        )
+    }
+    fn command(&self, root: &Path, command: &str) -> Result<Command, String> {
+        let mut prepared = self.prepare(root, command)?;
+        if let Some(cleanup) = prepared.cleanup.as_mut() {
+            cleanup.armed = false;
+        }
+        Ok(prepared.command)
+    }
+    fn prepare(&self, _root: &Path, command: &str) -> Result<PreparedCommand, String> {
+        self.validate()?;
+        let pidfile = format!(
+            "{}/.v4-run-{}.pid",
+            self.state_dir.trim_end_matches('/'),
+            uuid::Uuid::new_v4().simple()
+        );
         let mut process = Command::new(&self.program);
-        process.args(self.arguments(command)).env_clear();
+        process.args(self.arguments(command, &pidfile)).env_clear();
         for (name, value) in scrubbed_host_environment(&|name| std::env::var_os(name)) {
             process.env(name, value);
         }
-        Ok(process)
+        Ok(PreparedCommand {
+            command: process,
+            cleanup: Some(ContainerCleanup {
+                target: CleanupTarget::Ssh {
+                    program: self.program.clone(),
+                    arguments: self.cleanup_arguments(&pidfile),
+                },
+                armed: true,
+            }),
+        })
     }
 }
 
@@ -569,8 +726,9 @@ fn ssh_from_settings(lookup: &dyn Fn(&str) -> Option<String>) -> Result<SshBacke
         identity: setting(SSH_IDENTITY_VARIABLE),
         known_hosts: setting(SSH_KNOWN_HOSTS_VARIABLE),
         workdir,
+        state_dir: "/tmp".into(),
     };
-    backend.command(Path::new("/"), "true").map(|_| backend)
+    backend.validate().map(|_| backend)
 }
 
 pub(super) fn select(
@@ -592,13 +750,7 @@ pub(super) fn select(
                 network: matches!(lookup(DOCKER_NETWORK_VARIABLE).as_deref(), Some("enabled")),
             }))
         }
-        Some("ssh") => {
-            let _ = ssh_from_settings(lookup)?;
-            Err(
-                "SSH execution is disabled because remote command cleanup cannot be confirmed"
-                    .into(),
-            )
-        }
+        Some("ssh") => Ok(Box::new(ssh_from_settings(lookup)?)),
         Some(_) => Err("Unknown execution backend setting".into()),
     }
 }

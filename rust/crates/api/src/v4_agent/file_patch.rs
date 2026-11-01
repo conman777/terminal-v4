@@ -2,6 +2,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
+#[path = "file_patch_syntax.rs"]
+mod syntax;
+
 const MAX_HUNKS: usize = 50;
 const MAX_HUNK_BYTES: usize = 256_000;
 
@@ -14,11 +17,11 @@ pub(super) fn properties() -> Value {
         },"required":["old","new"],"additionalProperties":false}},
         "expected_revision":{"type":"string"},
         "dry_run":{"type":"boolean"},
-        "validate_syntax":{"type":"string","description":"Validate the complete result before writing; currently only json is supported."}
+        "validate_syntax":{"type":"string","enum":["json","toml","yaml"],"description":"Validate the complete result before writing; json, toml or yaml. TOML and YAML use conservative structural checks, not full parsers. Python is not supported."}
     })
 }
 
-pub(super) const DESCRIPTION: &str = "Atomically apply 1-50 ordered replacement hunks to one workspace file; all hunks apply or the file is unchanged. Each hunk replaces exactly expected_count (default 1) literal matches of old. If a hunk has no exact match, a unique match that differs only in per-line leading/trailing whitespace is used and new is re-indented; ambiguous matches fail. Optional expected_revision (a revision returned by a previous apply_patch) rejects stale files. dry_run validates and returns the current and resulting revision without writing. Optional validate_syntax checks the complete result before writing; currently only json is supported, and unsupported languages are rejected.";
+pub(super) const DESCRIPTION: &str = "Atomically apply 1-50 ordered replacement hunks to one workspace file; all hunks apply or the file is unchanged. Each hunk replaces exactly expected_count (default 1) literal matches of old. If a hunk has no exact match, a unique match that differs only in per-line leading/trailing whitespace is used and new is re-indented; ambiguous matches fail. Optional expected_revision (a revision returned by a previous apply_patch) rejects stale files. dry_run validates and returns the current and resulting revision without writing. Optional validate_syntax (json, toml or yaml) checks the complete result before writing and refuses invalid syntax without executing anything; TOML and YAML use conservative structural checks that reject only definite errors, not full parsers. Other languages, including Python, are rejected.";
 
 fn revision(content: &str) -> String {
     hex::encode(Sha256::digest(content.as_bytes()))
@@ -88,15 +91,21 @@ pub(super) fn apply(path: &Path, input: &Value) -> Result<String, String> {
         None => None,
         Some(v) => Some(v.as_str().ok_or("expected_revision must be a string")?),
     };
-    let validate_json = match input.get("validate_syntax") {
-        None => false,
-        Some(Value::String(language)) if language == "json" => true,
+    let validate_language = match input.get("validate_syntax") {
+        None => None,
+        Some(Value::String(language)) if syntax::is_supported(language) => Some(language.as_str()),
         Some(Value::String(language)) => {
             return Err(format!(
-                "Unsupported validate_syntax language: {language}; only json is supported"
+                "Unsupported validate_syntax language: {language}; supported: {}",
+                syntax::SUPPORTED
             ));
         }
-        Some(_) => return Err("validate_syntax must be a string (only json is supported)".into()),
+        Some(_) => {
+            return Err(format!(
+                "validate_syntax must be a string (supported: {})",
+                syntax::SUPPORTED
+            ))
+        }
     };
     let original = super::read(path)?;
     let before = revision(&original);
@@ -143,9 +152,8 @@ pub(super) fn apply(path: &Path, input: &Value) -> Result<String, String> {
             return Err(fail("result exceeds 512 KB"));
         }
     }
-    if validate_json {
-        serde_json::from_str::<Value>(&content)
-            .map_err(|err| format!("JSON syntax validation failed: {err}; no changes written"))?;
+    if let Some(language) = validate_language {
+        syntax::validate(language, &content)?;
     }
     let after = revision(&content);
     if dry_run {
@@ -364,7 +372,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("expected_revision"), "{err}");
-        for language in [json!("python"), json!("JSON"), json!(null), json!(true)] {
+        for language in [
+            json!("python"),
+            json!("JSON"),
+            json!("yml"),
+            json!(null),
+            json!(true),
+        ] {
             let err = patch(
                 root.path(),
                 json!({"validate_syntax":language,
@@ -374,6 +388,46 @@ mod tests {
             assert!(err.contains("validate_syntax"), "{err}");
             assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         }
+    }
+
+    #[test]
+    fn toml_and_yaml_validation_refuse_to_write_invalid_results() {
+        for (language, original, old, bad, good) in [
+            ("toml", "a = 1\n", "1", "[", "2"),
+            ("yaml", "a: 1\n", "a: 1", "a: [1", "a: 2"),
+        ] {
+            let (root, path) = setup(original);
+            let err = patch(
+                root.path(),
+                json!({"validate_syntax":language, "hunks":[{"old":old, "new":bad}]}),
+            )
+            .unwrap_err();
+            assert!(err.contains(&language.to_uppercase()), "{err}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            let dry = patch(
+                root.path(),
+                json!({"validate_syntax":language, "dry_run":true, "hunks":[{"old":old, "new":bad}]}),
+            );
+            assert!(dry.is_err());
+            patch(
+                root.path(),
+                json!({"validate_syntax":language, "hunks":[{"old":old, "new":good}]}),
+            )
+            .unwrap();
+            assert_ne!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn python_validation_is_rejected_with_the_supported_list() {
+        let (root, path) = setup("x = 1\n");
+        let err = patch(
+            root.path(),
+            json!({"validate_syntax":"python", "hunks":[{"old":"1", "new":"2"}]}),
+        )
+        .unwrap_err();
+        assert!(err.contains("json, toml, yaml"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "x = 1\n");
     }
 
     #[test]
