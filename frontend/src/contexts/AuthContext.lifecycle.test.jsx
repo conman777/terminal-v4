@@ -3,7 +3,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext';
 import { apiFetch } from '../utils/api';
-import { clearTokens, getAccessToken, getRefreshToken, getUser, getAuthInitializing, setAuthInitializing, setTokens, setUser, captureAuthScope, reportDamagedAuth, refreshTokens } from '../utils/auth';
+import { clearTokens, getAccessToken, getRefreshToken, getPairSeq, getUser, getAuthInitializing, setAuthInitializing, setTokens, setUser, captureAuthScope, reportDamagedAuth, refreshTokens } from '../utils/auth';
 import { setEnvironmentIdentity, setActiveEnvironment, getEnvironmentSignal } from '../utils/remoteEnvironments';
 import { getComposerDraftStore } from '../utils/composerDraftStore';
 import { getCompactionIntentStore } from '../utils/compactionIntentStore';
@@ -153,6 +153,30 @@ describe('real AuthProvider and apiFetch lifecycle', () => {
     await act(async () => { await auth.login('tester',undefined,'local-testing'); });
     expectNewAuth();
     expect(calls.find(call=>call.url==='/api/auth/local-testing').body).toBe(JSON.stringify({username:'tester'}));
+  });
+  it('password login opts in to pair binding and stores the returned pairSeq', async () => {
+    await mount();
+    handler = (url, options) => url === '/api/auth/login' ? response(200, { user: newUser, tokens: { accessToken: 'new-access', refreshToken: 'new-refresh' }, session: { id: 's', pairSeq: 1, pairBinding: true } }) : standard(url, options);
+    await act(async () => { await auth.login('new-fixture', 'synthetic-password'); });
+    expectNewAuth();
+    expect(JSON.parse(calls.find(call => call.url === '/api/auth/login').body)).toEqual({ username: 'new-fixture', password: 'synthetic-password', pairBinding: true });
+    expect(getPairSeq()).toBe(1);
+  });
+  it('password login against a server without session pairs stores no pairSeq', async () => {
+    await mount();
+    await act(async () => { await auth.login('new-fixture', 'synthetic-password'); });
+    expectNewAuth();
+    expect(getPairSeq()).toBeNull();
+  });
+  it('shows an upgrade-required message on 426 and keeps the previous credentials', async () => {
+    await mount();
+    handler = (url, options) => url === '/api/auth/login' ? response(426, { error: 'account requires an upgraded client' }) : standard(url, options);
+    let failure;
+    await act(async () => { try { await auth.login('new-fixture', 'synthetic-password'); } catch (error) { failure = error; } });
+    expect(failure?.message).toMatch(/upgrade required/i);
+    expect(auth.error).toBe(failure.message);
+    expect(calls.filter(call => call.url === '/api/auth/login')).toHaveLength(1);
+    expect(getRefreshToken()).toBe('old-refresh');
   });
   it('valid initial access credentials without a cached user still save and render the verified me result', async () => {
     localStorage.removeItem('terminal_user');

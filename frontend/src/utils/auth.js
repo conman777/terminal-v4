@@ -7,6 +7,7 @@ const REFRESH_TOKEN_KEY = 'terminal_refresh_token';
 const USER_KEY = 'terminal_user';
 const SESSION_KEY = 'terminal_auth_session';
 const REFRESH_PUBLICATION_KEY = 'terminal_auth_refresh_publication';
+const PAIR_SEQ_KEY = 'terminal_auth_pair_seq';
 
 // Centralized auth state to prevent race conditions
 // Start as true - AuthContext will set to false when validation completes
@@ -15,13 +16,19 @@ let refreshPromise = null;
 let authGeneration = 0;
 const authListeners = new Set();
 const authKeys = new Set([ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, USER_KEY, SESSION_KEY]);
+// Latest value seen for each credential key from this tab's writes and other tabs' storage events.
+const observedAuth = new Map();
+function writeAuth(key, value) {
+  if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value);
+  observedAuth.set(key, value);
+}
 const notifyAuth = (reason = 'identity') => authListeners.forEach(listener => listener(reason));
 
 export function beginAuthChange() {
   assertLegacyAuthAllowed();
   authGeneration += 1;
   refreshPromise = null;
-  localStorage.setItem(SESSION_KEY, Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16)).join('-'));
+  writeAuth(SESSION_KEY, Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16)).join('-'));
   return captureAuthScope();
 }
 
@@ -44,6 +51,8 @@ export function subscribeAuth(listener) {
 
 if (typeof window !== 'undefined') window.addEventListener('storage', event => {
   if (event.storageArea !== localStorage || (event.key !== null && !authKeys.has(event.key))) return;
+  if (event.key === null) for (const key of authKeys) observedAuth.set(key, null);
+  else observedAuth.set(event.key, event.newValue);
   // Rotation keeps the session epoch; explicit login/logout changes it before credentials.
   // Storage events may arrive after a waiting lock has already read the new pair.
   if (event.key === null || event.key === SESSION_KEY || event.newValue === null) {
@@ -63,11 +72,23 @@ export function getRefreshToken() {
   return localStorage.getItem(REFRESH_TOKEN_KEY);
 }
 
-export function setTokens(accessToken, refreshToken) {
+function storePairSeq(pairSeq) {
+  if (Number.isSafeInteger(pairSeq) && pairSeq > 0) localStorage.setItem(PAIR_SEQ_KEY, String(pairSeq));
+  else localStorage.removeItem(PAIR_SEQ_KEY);
+}
+
+export function getPairSeq() {
+  if (isStrictAuthSelected()) return null;
+  const value = Number(localStorage.getItem(PAIR_SEQ_KEY));
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+export function setTokens(accessToken, refreshToken, pairSeq) {
   assertLegacyAuthAllowed();
   beginAuthChange();
-  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+  writeAuth(ACCESS_TOKEN_KEY, accessToken);
+  writeAuth(REFRESH_TOKEN_KEY, refreshToken);
+  storePairSeq(pairSeq);
   notifyAuth();
 }
 
@@ -79,9 +100,10 @@ export function clearTokens(force = false) {
     return;
   }
   beginAuthChange();
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
+  writeAuth(ACCESS_TOKEN_KEY, null);
+  writeAuth(REFRESH_TOKEN_KEY, null);
+  writeAuth(USER_KEY, null);
+  localStorage.removeItem(PAIR_SEQ_KEY);
   notifyAuth();
 }
 
@@ -105,7 +127,7 @@ export function getUser() {
 export function setUser(user) {
   assertLegacyAuthAllowed();
   if ((getUser()?.id || null) !== (user?.id || null)) beginAuthChange();
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  writeAuth(USER_KEY, JSON.stringify(user));
   notifyAuth();
 }
 
@@ -261,12 +283,49 @@ function readRefreshRecord(store, key) {
   });
 }
 
+const PAIR_MISMATCH_ERROR = 'Token refresh pair mismatch; try again';
+const UPGRADE_REQUIRED_ERROR = 'Upgrade required; sign in again';
+
+async function readRejectionCode(response) {
+  const body = await response.json().catch(() => null);
+  return typeof body?.code === 'string' ? body.code : null;
+}
+
+async function awaitNewerPair(refreshToken, scope) {
+  const deadline = Date.now() + STORAGE_CATCH_UP_MS;
+  for (;;) {
+    if (!isAuthScopeCurrent(scope)) throw new Error('Authentication changed');
+    const refresh = getRefreshToken(), access = getAccessToken();
+    if (refresh && refresh !== refreshToken && access) return { accessToken: access, user: getUser() };
+    if (Date.now() >= deadline) return null;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
+
 async function awaitStorageCatchUp(refreshToken) {
   const deadline = Date.now() + STORAGE_CATCH_UP_MS;
   while (getRefreshToken() === refreshToken) {
     if (Date.now() >= deadline) throw new Error('Token refresh outcome uncertain; sign in again');
     await new Promise(resolve => setTimeout(resolve, 20));
   }
+}
+
+// localStorage has no cross-tab compare-and-set, so another tab can change the session between
+// the scope check and these writes. Verify afterwards, once pending storage events have been
+// delivered, and put back what that tab published so a stale pair is never left behind.
+async function publishCredentials(scope, { tokens, user }) {
+  const written = [[ACCESS_TOKEN_KEY, tokens.accessToken], [REFRESH_TOKEN_KEY, tokens.refreshToken]];
+  if (user) written.push([USER_KEY, JSON.stringify(user)]);
+  for (const [key, value] of written) localStorage.setItem(key, value);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  if (isAuthScopeCurrent(scope)) return true;
+  for (const [key, value] of written) {
+    if (localStorage.getItem(key) !== value) continue;
+    const current = observedAuth.get(key);
+    if (typeof current === 'string' && current !== value) localStorage.setItem(key, current);
+    else localStorage.removeItem(key);
+  }
+  return false;
 }
 
 // Same-account rotation shares a promise locally and exclusive ownership across tabs.
@@ -290,6 +349,7 @@ export async function refreshTokens() {
         // Persist the reservation before the request so an abort or restart cannot replay it.
         let deadline;
         let reserved;
+        let restore;
         while (reserved === undefined) {
           const currentAccess = getAccessToken();
           const currentAccessDigest = accessDigest(currentAccess);
@@ -315,6 +375,7 @@ export async function refreshTokens() {
                 }
               }
               if (getAccessToken() !== accessToken) throw new Error('Authentication changed');
+              restore = { consumed: consumed.includes(tokenFingerprint), record, history };
               store.put({ state: 'pending' }, recordKey);
               store.put({ state: 'pending' }, historyKey);
               store.put(consumed.includes(tokenFingerprint) ? consumed : [tokenFingerprint, ...consumed], CONSUMED_KEY);
@@ -338,6 +399,11 @@ export async function refreshTokens() {
           const tokenFingerprint = fingerprint(refreshToken);
           // Cross-process localStorage can lag the lock hand-off; a ledger entry proves this token was already spent.
           if (!reserved && consumed.includes(tokenFingerprint) && getRefreshToken() === refreshToken) await awaitStorageCatchUp(refreshToken);
+          const sendRefresh = access => fetch(scope.home.replace(/\/$/, '') + '/api/auth/refresh', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken, ...(access ? { accessToken: access } : {}), pairBinding: true })
+          });
+          let sentAccess = accessToken;
           let started;
           let pairDeadline;
           do {
@@ -354,9 +420,7 @@ export async function refreshTokens() {
                 return { reused: { accessToken: observedAccess, user: getUser() } };
               }
               if (observedAccess !== accessToken) throw new Error('Authentication changed');
-              return { response: fetch(scope.home.replace(/\/$/, '') + '/api/auth/refresh', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken })
-              }) };
+              return { response: sendRefresh(observedAccess) };
             });
             if (started.wait) {
               pairDeadline ??= Date.now() + STORAGE_CATCH_UP_MS;
@@ -370,8 +434,48 @@ export async function refreshTokens() {
           catch {
             throw new Error('Token refresh outcome uncertain; sign in again');
           }
+          let rejection = null;
+          if (!response.ok) rejection = await readRejectionCode(response);
+          if (response.status === 428 && rejection === 'pair_required') {
+            const retryAccess = await owned(() => {
+              if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken) throw new Error('Authentication changed');
+              return getAccessToken();
+            });
+            if (retryAccess) {
+              sentAccess = retryAccess;
+              response = await sendRefresh(retryAccess).catch(() => { throw new Error('Token refresh outcome uncertain; sign in again'); });
+              rejection = response.ok ? null : await readRejectionCode(response);
+            }
+          }
+          const release = () => owned(store => {
+            if (!restore) return;
+            if (restore.record === undefined) store.delete(recordKey); else store.put(restore.record, recordKey);
+            if (restore.history === undefined) store.delete(historyKey); else store.put(restore.history, historyKey);
+            store.put(restore.consumed ? consumed : consumed.filter(value => value !== tokenFingerprint), CONSUMED_KEY);
+          });
+          if (!response.ok) {
+            if (response.status === 409 && rejection === 'pair_mismatch') {
+              await release();
+              const adopted = await awaitNewerPair(refreshToken, scope);
+              if (adopted) return adopted;
+              throw new Error(PAIR_MISMATCH_ERROR);
+            }
+            if (response.status === 401 && rejection === 'refresh_token_spent') {
+              const adopted = await awaitNewerPair(refreshToken, scope);
+              if (adopted) return adopted;
+              throw new Error('Token refresh outcome uncertain; sign in again');
+            }
+            if (response.status === 426) {
+              await release();
+              throw new Error(UPGRADE_REQUIRED_ERROR);
+            }
+            if (response.status === 428 && rejection === 'pair_required') {
+              await release();
+              throw new Error('Token refresh temporarily unavailable');
+            }
+          }
           await owned(() => {
-            if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken || getAccessToken() !== accessToken) throw new Error('Authentication changed');
+            if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken || getAccessToken() !== sentAccess) throw new Error('Authentication changed');
             if (!response.ok) {
               if (response.status === 401 || response.status === 403) {
                 clearTokens(true);
@@ -385,7 +489,7 @@ export async function refreshTokens() {
           catch { throw new Error('Token refresh outcome uncertain; sign in again'); }
           const outputAccessDigest = accessDigest((data?.tokens || data)?.accessToken);
           return owned(store => {
-            if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken || getAccessToken() !== accessToken) throw new Error('Authentication changed');
+            if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken || getAccessToken() !== sentAccess) throw new Error('Authentication changed');
             const tokens = data?.tokens || data;
             if (!tokens?.accessToken || !tokens?.refreshToken) {
               clearTokens(true);
@@ -400,15 +504,14 @@ export async function refreshTokens() {
               store.put({ state: 'rotating-success', access: outputAccessDigest, refresh: accessDigest(tokens.refreshToken) }, recordKey);
             }
             store.put(consumed, CONSUMED_KEY);
-            return { tokens, user: data.user, publicationId };
+            return { tokens, user: data.user, publicationId, pairSeq: data.session?.pairSeq, sentAccess };
           });
         });
         // Publish only after the transaction commits; a failed commit leaves the reservation.
         if (!result.tokens) return result;
-        if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken || getAccessToken() !== accessToken) throw new Error('Authentication changed');
-        localStorage.setItem(ACCESS_TOKEN_KEY, result.tokens.accessToken);
-        localStorage.setItem(REFRESH_TOKEN_KEY, result.tokens.refreshToken);
-        if (result.user) localStorage.setItem(USER_KEY, JSON.stringify(result.user));
+        if (!isAuthScopeCurrent(scope) || getRefreshToken() !== refreshToken || getAccessToken() !== (result.sentAccess ?? accessToken)) throw new Error('Authentication changed');
+        if (!await publishCredentials(scope, result)) throw new Error('Authentication changed');
+        storePairSeq(result.pairSeq);
         if (result.publicationId) localStorage.setItem(REFRESH_PUBLICATION_KEY, result.publicationId);
         notifyAuth(result.user ? 'identity' : 'rotation');
         return { accessToken: result.tokens.accessToken, user: result.user };

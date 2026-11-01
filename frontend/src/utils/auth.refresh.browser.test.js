@@ -6,7 +6,7 @@ import { chromium } from '@playwright/test';
 import { managedChromiumPath } from '../test/managedChromium';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-let browser, server, origin, context, first, second, requests, held, heldBodies, consumed, apiRequests, previewRequests, disconnectAfterConsumption, managedPath;
+let browser, server, origin, context, first, second, requests, rawRequests, script, held, heldBodies, consumed, apiRequests, previewRequests, disconnectAfterConsumption, managedPath;
 const initial = { access: 'synthetic-expired-access', refresh: 'synthetic-original-refresh' };
 const rotated = { access: 'synthetic-rotated-access', refresh: 'synthetic-rotated-refresh' };
 const identity = { id: 'synthetic-owner' };
@@ -20,7 +20,10 @@ beforeAll(async () => {
   server = createServer(async (req, res) => {
     if (req.url === '/api/auth/refresh') {
       let body = ''; for await (const chunk of req) body += chunk;
-      requests.push(JSON.parse(body));
+      const parsed = JSON.parse(body);
+      rawRequests.push(parsed);
+      requests.push({ refreshToken: parsed.refreshToken });
+      if (script.length) { const step = await script.shift()(); return json(res, step.status, step.body); }
       if (consumed) return json(res, 401, { error: 'Synthetic single-use token consumed' });
       consumed = true;
       if (disconnectAfterConsumption) {
@@ -59,7 +62,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await browser?.close(); server?.closeAllConnections(); await new Promise(resolve => server?.close(resolve)); });
 beforeEach(async () => {
-  requests = []; held = []; heldBodies = []; consumed = false; apiRequests = []; previewRequests = []; disconnectAfterConsumption = false;
+  requests = []; rawRequests = []; script = []; held = []; heldBodies = []; consumed = false; apiRequests = []; previewRequests = []; disconnectAfterConsumption = false;
   context = await browser.newContext();
   context.setDefaultTimeout(10000);
   first = await context.newPage(); second = await context.newPage();
@@ -806,5 +809,99 @@ describe('refreshTokens across independent same-origin browser tabs', () => {
     await finished(first);
     expect((await snapshot(first)).outcome).toEqual({ accessToken: 'synthetic-second-access' });
     expect(requests).toEqual([{ refreshToken: initial.refresh }, { refreshToken: initial.refresh }]);
+  });
+});
+
+const PAIR_KEY = 'terminal_auth_pair_seq';
+const pairSeq = page => page.evaluate(key => localStorage.getItem(key), PAIR_KEY);
+const newerPair = { access: 'synthetic-other-tab-access', refresh: 'synthetic-other-tab-refresh' };
+const publishFromOtherTab = (page, pair = newerPair) => page.evaluate(pair => { localStorage.setItem('terminal_access_token', pair.access); localStorage.setItem('terminal_refresh_token', pair.refresh); }, pair);
+const rotatedBody = (seq) => ({ tokens: { accessToken: rotated.access, refreshToken: rotated.refresh }, ...(seq === undefined ? {} : { session: { id: 's', pairSeq: seq, pairBinding: true } }) });
+
+describe('refreshTokens session-pair protocol', () => {
+  it('sends the current access token and opts in to pair binding', async () => {
+    await start(first); await expect.poll(() => requests.length).toBe(1);
+    release(); await finished(first);
+    expect(rawRequests).toEqual([{ refreshToken: initial.refresh, accessToken: initial.access, pairBinding: true }]);
+  });
+
+  it('stores the returned pairSeq with the rotated tokens', async () => {
+    script.push(async () => ({ status: 200, body: rotatedBody(4) }));
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+    expect(await pairSeq(first)).toBe('4');
+  });
+
+  it('keeps today\'s behaviour and stores no pairSeq when the server omits session', async () => {
+    await first.evaluate(key => localStorage.setItem(key, '9'), PAIR_KEY);
+    script.push(async () => ({ status: 200, body: rotatedBody() }));
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+    expect(await pairSeq(first)).toBe(null);
+  });
+
+  it('adopts the newer pair from another tab on pair_mismatch without clearing', async () => {
+    script.push(async () => { await publishFromOtherTab(second); return { status: 409, body: { error: 'mismatch', code: 'pair_mismatch' } }; });
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { accessToken: newerPair.access }, access: newerPair.access, refresh: newerPair.refresh, user: identity });
+    expect(requests.length).toBe(1);
+  });
+
+  it('does not consume the token on pair_mismatch when no newer pair appears', async () => {
+    script.push(async () => ({ status: 409, body: { error: 'mismatch', code: 'pair_mismatch' } }));
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { error: 'Token refresh pair mismatch; try again' }, ...initial, user: identity });
+    script.push(async () => ({ status: 200, body: rotatedBody(2) }));
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+    expect(requests).toEqual([{ refreshToken: initial.refresh }, { refreshToken: initial.refresh }]);
+  }, 15000);
+
+  it('retries once with the current access token on pair_required', async () => {
+    await first.evaluate(() => localStorage.removeItem('terminal_access_token'));
+    script.push(async () => { await first.evaluate(() => localStorage.setItem('terminal_access_token', 'synthetic-late-access')); return { status: 428, body: { error: 'required', code: 'pair_required' } }; });
+    script.push(async () => ({ status: 200, body: rotatedBody(3) }));
+    await start(first); await finished(first);
+    expect(rawRequests).toEqual([
+      { refreshToken: initial.refresh, pairBinding: true },
+      { refreshToken: initial.refresh, accessToken: 'synthetic-late-access', pairBinding: true },
+    ]);
+    expect(await snapshot(first)).toEqual({ outcome: { accessToken: rotated.access }, ...rotated, user: identity });
+  });
+
+  it('retries pair_required only once and keeps the tokens', async () => {
+    await first.evaluate(() => localStorage.removeItem('terminal_access_token'));
+    const again = async () => { await first.evaluate(() => localStorage.setItem('terminal_access_token', 'synthetic-late-access')); return { status: 428, body: { code: 'pair_required' } }; };
+    script.push(again, async () => ({ status: 428, body: { code: 'pair_required' } }));
+    await start(first); await finished(first);
+    expect(requests.length).toBe(2);
+    expect((await snapshot(first)).refresh).toBe(initial.refresh);
+    expect((await snapshot(first)).outcome).toEqual({ error: 'Token refresh temporarily unavailable' });
+  });
+
+  it('reuses the newer pair on refresh_token_spent without clearing tokens', async () => {
+    script.push(async () => { await publishFromOtherTab(second); return { status: 401, body: { error: 'spent', code: 'refresh_token_spent' } }; });
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { accessToken: newerPair.access }, access: newerPair.access, refresh: newerPair.refresh, user: identity });
+    expect(requests.length).toBe(1);
+  });
+
+  it('keeps the tokens when refresh_token_spent has no newer pair', async () => {
+    script.push(async () => ({ status: 401, body: { error: 'spent', code: 'refresh_token_spent' } }));
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { error: 'Token refresh outcome uncertain; sign in again' }, ...initial, user: identity });
+  }, 15000);
+
+  it('clears tokens on invalid_refresh_token', async () => {
+    script.push(async () => ({ status: 401, body: { error: 'invalid', code: 'invalid_refresh_token' } }));
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { error: 'Token refresh failed' }, access: null, refresh: null, user: null });
+  });
+
+  it('reports upgrade required on 426 without clearing or looping', async () => {
+    script.push(async () => ({ status: 426, body: { error: 'upgraded client required' } }));
+    await start(first); await finished(first);
+    expect(await snapshot(first)).toEqual({ outcome: { error: 'Upgrade required; sign in again' }, ...initial, user: identity });
+    expect(requests.length).toBe(1);
   });
 });

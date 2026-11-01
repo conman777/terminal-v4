@@ -135,12 +135,13 @@ function LegacyAuthProvider({ children }) {
     setError(null);
     try {
       const response = await fetch(resolveHomeApiUrl(mode === 'local-testing' ? '/api/auth/local-testing' : '/api/auth/login'), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mode === 'local-testing' ? {username} : { username, password })
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mode === 'local-testing' ? {username} : { username, password, pairBinding: true })
       });
       const data = await response.json();
       if (!current()) throw new Error('Authentication changed');
+      if (response.status === 426) throw new Error('Upgrade required: this account needs a newer sign-in. Reload the app or contact your administrator, then sign in again.');
       if (!response.ok) throw new Error(data.error || 'Login failed');
-      setTokens(data.tokens.accessToken, data.tokens.refreshToken);
+      setTokens(data.tokens.accessToken, data.tokens.refreshToken, data.session?.pairSeq);
       setUser(data.user);
       scope = captureAuthScope();
       setUserState(data.user);
