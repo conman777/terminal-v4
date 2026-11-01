@@ -1,5 +1,22 @@
 # Auth authority integration boundary
 
+## Status summary
+
+| Piece | State |
+| --- | --- |
+| Rust server: session-bound credential pair (pair sequence, transactional login, refresh and logout) | Implemented, **off by default** behind `TERMINAL_V4_AUTH_SESSION_CUTOVER=1`; see "Server session-pair protocol" below |
+| Rust server: no-forced-sign-out migration of legacy accounts and refresh tokens | Implemented behind the same switch; covered by unit and HTTP tests |
+| Rust server: refresh replay detection (`refresh_token_spent`), mixed-pair rejection, logout/refresh ordering | Implemented and tested (including a threaded logout/refresh race) |
+| Browser: use of the protocol (`pairBinding`, `accessToken` on refresh, atomic pair publication) | **Not implemented.** The active frontend still writes two localStorage keys and cannot use the guarantees |
+| Server: older server binaries sharing the data directory, paired grants, every effect boundary rechecking the session | Not implemented; see "What is not done" |
+| Verification | 17 colocated tests (`state/auth_pairs_tests.rs`) and 3 HTTP tests (`tests/auth_session_pairs.rs`) pass. The full `terminal-v4-api` library run on a loaded machine showed load-dependent failures in unrelated queue and ownership tests that pass when rerun alone; no real browser, older-binary or multi-process test of the new protocol exists |
+| Production activation | Not done. Do not set the switch until the deployment plan below is followed |
+
+The text after this section is the earlier design history and prototype status;
+where it says the server cutover or an upgraded issuance path is "not implemented"
+or that legacy sign-in "returns a server error", the new section supersedes it for
+the Rust server (the cutover exists but is disabled unless the switch is set).
+
 The standalone IndexedDB authority is experimental groundwork, not the active auth
 runtime. The active runtime still stores tokens separately in localStorage. It is
 therefore not protected by the authority's atomic pair and tombstone operations.
@@ -334,3 +351,156 @@ blocks current account aliases on case-insensitive filesystems, but the current
 database is not evidence of a deleted or unrecorded historical owner. The guard
 does not establish durable ownership of a legacy directory, and direct terminal
 session paths are not covered by it.
+
+
+## Server session-pair protocol
+
+Source: `rust/crates/api/src/state/auth_pairs.rs` (issuance, rotation, migration),
+`state.rs` (schema, logout, claim validation), `auth.rs` (the `pair` access claim),
+`lib.rs` (the `/api/auth/login` and `/api/auth/refresh` handlers). Tests:
+`state/auth_pairs_tests.rs` (colocated) and `rust/crates/api/tests/auth_session_pairs.rs`
+(HTTP).
+
+### Model
+
+A protocol-1 session owns exactly one live pair at a time. Each pair has a
+per-session sequence number, `pairSeq` (1, 2, 3, ...). The access token carries it
+as the signed `pair` claim and the refresh token row stores it. Login, refresh and
+logout each run in one immediate SQLite transaction under the authentication
+admission fence and the per-owner lock, so they are totally ordered:
+
+* login creates the session and pair 1 together;
+* refresh consumes the refresh token, advances `pair_seq`, records the spent token
+  and inserts the successor in one transaction;
+* logout revokes the session and deletes its refresh token in one transaction.
+
+A refresh that loses to a logout finds the session revoked and publishes nothing; a
+refresh that wins is revoked by the logout that follows, so no usable pair survives
+a logout (the threaded test checks this over 24 rounds). Two refreshes of the same
+token redeem it exactly once. The server never revokes a session because of a
+replay: a benign second tab would otherwise sign the user out.
+
+Pair-bound sessions (`pairBinding: true`) additionally require, on refresh, the
+access token of the same pair. A session becomes bound at login or refresh when the
+client sets `pairBinding`; this is one way. Non-bound sessions (including everything
+created by older clients) behave as before apart from the new bookkeeping.
+
+### Wire protocol
+
+All responses to these routes are `Cache-Control: no-store`. Unknown JSON fields
+are ignored, so older clients are unaffected.
+
+`POST /api/auth/login`, body `{"username"|"email", "password", "pairBinding"?: bool}`.
+Response `AuthResult`: `{user, tokens:{accessToken, refreshToken}, session?}`, where a
+protocol-1 `session` is `{id, logoutCapability?, pairSeq, pairBinding}`.
+`logoutCapability` appears only at login. Status `426` (`error` text contains
+"upgraded client") means the account was cut over, the switch is currently off, and
+a pair cannot be issued; this is the one explicit forced re-login (see below).
+
+`POST /api/auth/refresh`, body `{"refreshToken", "accessToken"?, "pairBinding"?: bool}`.
+Response `AuthResult` as above, with `session.pairSeq` equal to the previous value
+plus one (or 1 when a legacy token migrates). Rejections carry `{error, code}`:
+
+| Status | `code` | Meaning and client action |
+| --- | --- | --- |
+| 401 | `invalid_refresh_token` | Unknown, expired or revoked (including after logout). Sign in again. |
+| 401 | `refresh_token_spent` | The token was already rotated, typically by another tab. Do not sign out: re-read the authority's current pair and retry with it. |
+| 409 | `pair_mismatch` | `accessToken` belongs to another pair, session or account. Token not consumed. Re-read the current pair; never publish a mixed pair. |
+| 428 | `pair_required` | The session is bound and `accessToken` was omitted. Token not consumed. Resend with the matching access token. |
+
+An expired access token is accepted as proof of its pair at refresh (signature,
+account, session and `pair` are checked, expiry is not). `POST /api/auth/logout`
+with the access token is unchanged on the wire and revokes only that session.
+
+Access validation: for a bound session, an access token is accepted when its `pair`
+is the current sequence or the one immediately before it (a one-rotation grace so
+in-flight requests and open streams survive a rotation); older pairs and bound
+tokens without `pair` are rejected. Non-bound sessions ignore `pair`. Refresh is
+exact: only the current pair's refresh token is live. Preview tokens do not carry
+`pair` and are unaffected.
+
+### Migration of legacy accounts (no forced sign-out)
+
+With the switch on (`TERMINAL_V4_AUTH_SESSION_CUTOVER=1`, read at start-up;
+`ApiState::set_auth_session_cutover` in tests):
+
+1. An unmodified client (no `pairBinding`) on an account that has not been cut over
+   gets exactly the legacy behavior. Nothing is activated by legacy clients.
+2. The first opted-in request, either a login with `pairBinding:true` or a refresh
+   of a legacy refresh token with `pairBinding:true`, cuts the account over in the
+   same transaction that issues that client's session pair. The cutover sets the
+   account's protocol marker. It does **not** bump the generation and does **not**
+   delete any refresh token.
+3. After the cutover, legacy (protocol-0) access tokens are rejected with 401. The
+   legacy refresh token each older tab holds stays redeemable once: the next
+   successful refresh from that tab, with or without `pairBinding`, returns a
+   protocol-1 pair (a new non-bound session unless it opts in) in the existing
+   `{tokens:{accessToken,refreshToken}}` shape, which an unmodified client already
+   stores. The only visible effect is one 401 followed by the refresh the client
+   already performs. Each legacy refresh token yields its own session.
+4. Further logins on a cut-over account always issue sessions (bound only if
+   requested), so an unmodified client keeps signing in.
+
+Legacy accounts therefore transition on the next successful refresh. Legacy pairs
+cannot be verified for mixing (a legacy access token has no link to a refresh token);
+verification starts with the first protocol-1 pair.
+
+### Where a forced re-login is unavoidable
+
+* **Rolling the switch back after any account was cut over.** Protocol-0 credentials
+  of that account stay rejected, and legacy logins return `426` instead of a pair
+  until the switch is turned back on. Existing sessions keep refreshing. Tests:
+  `cut_over_account_refuses_legacy_login_explicitly_only_while_cutover_is_disabled`
+  and `disabling_cutover_after_activation_makes_the_forced_relogin_explicit`.
+* **Restoring a pre-cutover database backup.** Pair, session and spent-token state
+  roll back with it; clients holding newer pairs must sign in again.
+* **A legacy refresh token that was already consumed or has expired** (30 days).
+  This is unchanged from before.
+* **Running an older server binary against the same data directory** after cutover
+  is unsupported; see the plan.
+
+### Deployment plan
+
+1. Back up the data directory. Stop every old server and worker on it (see
+   `SAFE_UPDATE.md`, rule 1 and 2); an older binary can issue protocol-0 tokens for a
+   cut-over account and does not understand pair state.
+2. Deploy the new binary with the switch **off**. Schema changes are additive
+   (`auth_sessions.pair_seq`, `auth_sessions.pair_binding`, `refresh_tokens.pair_seq`,
+   `auth_spent_refresh_tokens`); an old binary tolerates the new columns but must not be
+   restarted afterwards on a cut-over account. Confirm `/api/build-info`.
+3. Ship the frontend that sends `pairBinding`/`accessToken` and publishes the pair
+   atomically (not yet written). Until it ships, leave the switch off.
+4. Set `TERMINAL_V4_AUTH_SESSION_CUTOVER=1` and restart. The first opted-in client
+   cuts its account over; other tabs recover on their next refresh as described above.
+5. Rollback is a forced re-login for legacy logins only if some account was cut
+   over (see above). Prefer fixing forward.
+
+### What is not done
+
+* Frontend adoption is partial. `auth.js` and the login path now send
+  `pairBinding:true`, store `pairSeq`, and handle `pair_mismatch`, `pair_required`,
+  `refresh_token_spent` and 426 without clearing credentials. The two-key
+  localStorage problem is narrowed (rollback after a changed scope, a consumed-token
+  ledger) but not removed: pairs are still written as two keys, not atomically, and
+  tabs from before this client do not send the binding. No mixed-version or
+  deployed-environment result exists.
+* The cutover is not fenced against an older binary sharing the data directory, and
+  an old writer can still mint protocol-0 credentials for a cut-over account.
+* Paired grants and pairing codes are not part of the session lifecycle.
+* Effect boundaries other than those listed earlier still check the session only at
+  admission; a request admitted before a logout may complete after it. Streams
+  revalidate every two seconds, so a bound session's stream on a pair older than the
+  one-rotation grace stops at the next check.
+* A refresh response lost in transit leaves the client with a spent token (the
+  server reports `refresh_token_spent`); there is no server-side replay of the
+  last response, so that client must sign in again. The browser authority's
+  uncertain-attempt handling is the only mitigation.
+* Non-Unix builds cannot create sessions or cut accounts over.
+* `session-logout` receipts (the unmounted router) are unchanged; they do not yet
+  verify `pairSeq`.
+
+Logout wiring note: the server-side logout for protocol-0 accounts already holds the
+background owner and reports cleanup `pending` until the cleanup worker verifies
+quiescence; session-scoped (protocol 1) logout does not start owner cleanup. The server
+has no account-deletion path, so deleting an account (and purging board data with
+`workspace_board::purge_owner`) is not wired anywhere yet.

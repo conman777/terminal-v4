@@ -416,8 +416,13 @@ evidence of quiescence, not proof that the remote manager remains alive, and it
 inherits the existing process-tree and escaped-descendant limits. Legacy or
 alternate ledger layouts do not produce this remote proof. An existing ledger
 without the new receipt table fails closed until explicitly migrated; it is not
-silently recreated. The verifier is not yet wired into production logout and
-must not be used to bypass the structured or delegation cleanup requirements.
+silently recreated. In production the verifier is the release step of the owner
+cleanup worker that `/api/auth/logout` starts when owner cleanup is installed:
+logout writes the hold, the worker drains and acknowledges, and the hold is released
+only if `release_in_transaction` verifies the receipt (an unreviewed unknown claim,
+changed identity or renewed hold leaves cleanup pending and retryable; nothing is
+deleted). Session-scoped (protocol 1) logout does not start owner cleanup. The
+verifier must not be used to bypass the structured or delegation cleanup requirements.
 All cooperating processes must honor the same durable hold. These identity
 checks assume intact, private, stable local storage and do not protect against
 database rollback or a hostile same-user swap and restoration during SQLite
@@ -502,3 +507,22 @@ to let an older build start, and downgrade only by restoring the data directory
 backup taken before the newer build first ran. The completion markers described
 in this document are queue entries, not compatibility markers; they are drained
 by the consumer and are not removed by hand.
+
+Session fence unit tests. `background_session_fence.rs` now has colocated tests
+for idempotent retirement, exact owner/session scoping, invalid identities
+rejected before any storage is touched, a held launch lease blocking retirement
+(and a second lease failing closed without waiting), capacity checks including
+in-flight reservations, and unsafe roots, directory modes and tombstones
+(symlinks, group-writable) failing closed. These are single-process tests; the
+cross-process behavior is covered by the existing hardening fixtures. Logout
+and recovery behavior is unchanged. Correction: the standalone unknown-claim
+review has an authenticated HTTP route (`GET`/`POST /api/structured/background-review`,
+unix only; needs a direct owner login, explicit acknowledgment and no cleanup hold;
+covered by `review_tests::standalone_review_routes`) but no UI. The quiescence
+verifier is wired into the production logout cleanup worker (covered by
+`logout_regressions::logout_http_*`).
+
+Wiring audit: production logout (when owner cleanup is installed) already verifies
+background quiescence before reporting cleanup `complete`, and fails closed and retryable
+otherwise. The standalone review route exists. No code change was needed for either; the
+earlier "not wired" statements were stale.

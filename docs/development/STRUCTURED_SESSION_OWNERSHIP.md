@@ -427,3 +427,28 @@ guard is still not bound for ordinary loading; the retry task and dispatch
 permit are in-process only; the UI/routes were not exercised for native
 sessions beyond the existing queue routes. The feature stays opt-in: Cargo
 feature plus a runtime variable per provider, and no default build enables it.
+
+Additional verification (native queue): `native_queue_tests` now also covers
+repeated owner cleanup (run twice, then an item added after cleanup and a
+manager restart: the queue stays held with every item pending and no provider
+start, Codex and Claude) and a foreign owner being refused with `not_found` on
+mutate, snapshot and operation-receipt lookup without touching the queue file or
+creating the foreign owner's queue directory. `tests/native_queue_preview.rs`
+(feature `native-codex-queue-preview`, isolated child process) drives the real
+HTTP routes: anonymous is 401, another owner gets 404 on GET, POST and
+operation lookup and on session DELETE, the owner can enqueue and read, delete
+removes access, and without `TERMINAL_V4_NATIVE_CODEX_QUEUE=1` the routes
+answer 409 and no queue directory is created. Still unverified: a native
+paired-credential HTTP path, live providers, separate-process dispatch races.
+Both flags remain default off. Note: some `structured::queue::tests` and
+background runtime tests are timing sensitive (the fail-fast queue lock gives up
+after 50 ms) and can fail under heavy parallel load; they pass with
+`--test-threads=1`.
+
+Wiring audit (background logout and review): the background quiescence verifier is
+already the release step of the owner cleanup worker started for `/api/auth/logout`,
+and the standalone unknown-owner review already has an authenticated route
+(`/api/structured/background-review`, unix only, direct owner login required, mirroring
+`review_background` in `structured/ownership_recovery.rs`). Earlier notes saying
+otherwise were stale. Neither has a UI, and cross-process behavior is still covered only
+by the existing fixtures.
