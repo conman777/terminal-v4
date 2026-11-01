@@ -144,6 +144,40 @@ struct ApiKeyInput {
     #[serde(default)]
     settings: Option<serde_json::Map<String, Value>>,
 }
+const KEY_INVALID: &str = "API key must be 8-10000 characters without control characters";
+
+fn normalized_key(provider: &str, secret: &str) -> Result<String, &'static str> {
+    use crate::v4_agent::cloud_provider::{kind, Kind};
+    let length_ok = |value: &str| (8..=10000).contains(&value.chars().count());
+    let strict = || {
+        (length_ok(secret) && !secret.chars().any(char::is_control))
+            .then(|| secret.to_owned())
+            .ok_or(KEY_INVALID)
+    };
+    let Some(kind @ (Kind::Vertex | Kind::Bedrock)) = kind(provider) else {
+        return strict();
+    };
+    if !secret.starts_with('{')
+        || !secret.chars().any(char::is_control)
+        || secret.chars().count() > 10000
+    {
+        return strict();
+    }
+    let value: Value = serde_json::from_str(secret).map_err(|_| KEY_INVALID)?;
+    let text = |key: &str| value.get(key).is_some_and(Value::is_string);
+    let shaped = match kind {
+        Kind::Vertex => {
+            value["type"] == "service_account" && text("client_email") && text("private_key")
+        }
+        _ => text("accessKeyId") && text("secretAccessKey"),
+    };
+    let minified = serde_json::to_string(&value).map_err(|_| KEY_INVALID)?;
+    if !shaped || !length_ok(&minified) || minified.chars().any(char::is_control) {
+        return Err(KEY_INVALID);
+    }
+    Ok(minified)
+}
+
 async fn save_key(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -157,12 +191,8 @@ async fn save_key(
             message: "Provider does not accept API keys".into(),
         });
     }
-    let secret = input.api_key.trim();
-    if !(8..=10000).contains(&secret.chars().count()) || secret.chars().any(char::is_control) {
-        return Err(ApiError::bad_request(
-            "API key must be 8-10000 characters without control characters",
-        ));
-    }
+    let secret = normalized_key(&provider, input.api_key.trim()).map_err(ApiError::bad_request)?;
+    let secret = secret.as_str();
     let stored = if crate::v4_agent::cloud_provider::kind(&provider).is_some() {
         crate::v4_agent::cloud_provider::pack(
             &provider,
@@ -1020,6 +1050,91 @@ mod tests {
             .find(|provider| provider["id"] == "deepseek")
             .unwrap();
         assert_eq!(provider["configured"], true);
+    }
+
+    #[test]
+    fn multiline_json_is_accepted_only_for_vertex_and_bedrock_and_minified() {
+        let aws = "{\n  \"accessKeyId\": \"AKIDEXAMPLE0000001\",\n  \"secretAccessKey\": \"wJalrXUtnFEMI/K7MDENG\"\n}";
+        let vertex = "{\n  \"type\": \"service_account\",\n  \"client_email\": \"a@b.iam.gserviceaccount.com\",\n  \"private_key\": \"-----BEGIN-----\\nabc\\n-----END-----\\n\"\n}";
+        let raw_newline_in_string =
+            "{\"type\":\"service_account\",\"client_email\":\"a@b\",\"private_key\":\"x\ny\"}";
+        let wrong_shape = "{\n  \"hello\": \"worldworld\"\n}";
+        let single = "{\"accessKeyId\":\"AKIDEXAMPLE0000001\",\"secretAccessKey\":\"wJalrXUtnFEMI/K7MDENG\"}";
+        let minified = |provider: &str, raw: &str| normalized_key(provider, raw);
+        let compact = |provider: &str, raw: &str| {
+            minified(provider, raw)
+                .map(|value| !value.contains('\n') && !value.contains("  "))
+                .map_err(|_| ())
+        };
+        assert_eq!(
+            vec![
+                compact("bedrock", aws),
+                compact("vertex", vertex),
+                compact("vertex", raw_newline_in_string),
+                compact("bedrock", wrong_shape),
+                compact("vertex", aws),
+                compact("deepseek", aws),
+                compact("deepseek", vertex),
+                compact("bedrock", single),
+            ],
+            vec![
+                Ok(true),
+                Ok(true),
+                Err(()),
+                Err(()),
+                Err(()),
+                Err(()),
+                Err(()),
+                Ok(true)
+            ]
+        );
+        assert_eq!(
+            minified("bedrock", aws).unwrap(),
+            "{\"accessKeyId\":\"AKIDEXAMPLE0000001\",\"secretAccessKey\":\"wJalrXUtnFEMI/K7MDENG\"}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pretty_printed_bedrock_key_is_stored_minified_and_never_echoed() {
+        let state = state();
+        let app = router(state.clone());
+        let body = serde_json::json!({
+            "apiKey": "{\n  \"accessKeyId\": \"AKIDEXAMPLE0000001\",\n  \"secretAccessKey\": \"wJalrXUtnFEMI/K7MDENGbPxRfiCYEXAMPLEKEY\"\n}",
+            "settings": {"region": "eu-west-1"}
+        })
+        .to_string();
+        let response = app
+            .clone()
+            .oneshot(request(
+                "PUT",
+                "/api/agent/auth/bedrock/api-key",
+                Some("owner"),
+                &body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let echoed = json(response).await.to_string();
+        let user = AuthenticatedUser {
+            user_id: "owner".into(),
+            username: "owner".into(),
+        };
+        let stored = state.list_vault_keys(&user).unwrap();
+        let plain = crate::vault::VaultCipher::load(&state.config().data_dir)
+            .unwrap()
+            .decrypt(&stored[0].key_value)
+            .unwrap();
+        let (key, _) = crate::v4_agent::cloud_provider::unpack(&plain).unwrap();
+        assert_eq!(
+            (
+                echoed.contains("wJalrXUtnFEMI"),
+                key,
+            ),
+            (
+                false,
+                "{\"accessKeyId\":\"AKIDEXAMPLE0000001\",\"secretAccessKey\":\"wJalrXUtnFEMI/K7MDENGbPxRfiCYEXAMPLEKEY\"}".to_string()
+            )
+        );
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@ struct Seen {
     target: String,
     headers: Vec<(String, String)>,
     body: Value,
+    raw: String,
 }
 
 impl Seen {
@@ -104,6 +105,7 @@ async fn mock(replies: Vec<Reply>) -> (std::net::SocketAddr, Arc<Mutex<Vec<Seen>
                     })
                     .collect(),
                 body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+                raw: String::from_utf8_lossy(&bytes).into_owned(),
             });
             let reply = replies
                 .lock()
@@ -425,4 +427,332 @@ fn provider_construction_rejects_unsafe_stored_settings_and_unconfigured_secrets
     assert!(
         Provider::with_loopback("azure-foundry", session_model_with_slash, "a/b", true).is_err()
     );
+}
+
+const AWS_SECRET: &str = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+const AWS_SESSION: &str = "session-token-for-mock-0001";
+
+fn aws_keys() -> String {
+    json!({"accessKeyId":"AKIDEXAMPLE0000001","secretAccessKey":AWS_SECRET,"sessionToken":AWS_SESSION})
+        .to_string()
+}
+
+fn json_reply(status: u16, body: Value) -> Reply {
+    Reply {
+        status,
+        content_type: "application/json",
+        body: body.to_string(),
+    }
+}
+
+fn converse_tool_call() -> Reply {
+    json_reply(
+        200,
+        json!({"output":{"message":{"role":"assistant","content":[
+            {"toolUse":{"toolUseId":"call-1","name":"write_file","input":{"path":"cloud.txt","content":"cloud ok"}}}]}},
+            "stopReason":"tool_use","usage":{"inputTokens":1,"outputTokens":2,"totalTokens":3}}),
+    )
+}
+
+fn converse_answer() -> Reply {
+    json_reply(
+        200,
+        json!({"output":{"message":{"role":"assistant","content":[{"text":"Cloud done"}]}},
+            "stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":2,"totalTokens":3}}),
+    )
+}
+
+fn unix_from_amz_date(date: &str) -> u64 {
+    let number = |range: std::ops::Range<usize>| date[range].parse::<i64>().unwrap();
+    let (year, month, day) = (number(0..4), number(4..6), number(6..8));
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year.rem_euclid(400);
+    let shifted = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * shifted + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    (days * 86_400 + number(9..11) * 3600 + number(11..13) * 60 + number(13..15)) as u64
+}
+
+#[tokio::test]
+async fn bedrock_sigv4_converse_signs_requests_and_round_trips_tool_calls() {
+    let (addr, seen) = mock(vec![converse_tool_call(), converse_answer()]).await;
+    let model = "openai.gpt-oss-20b-1:0";
+    let stored = cloud_provider::pack(
+        "bedrock",
+        &aws_keys(),
+        Some(
+            json!({"region":"us-west-2","endpoint":format!("http://{addr}")})
+                .as_object()
+                .unwrap(),
+        ),
+        true,
+    )
+    .unwrap();
+    let provider = Provider::with_loopback("bedrock", stored, model, true).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(workspace.path()).unwrap();
+    let mut session = new_session("bedrock", model, &root);
+    session.transport = Some(provider.transport.clone());
+    let answer = turn(
+        &provider,
+        data.path(),
+        "owner",
+        &mut session,
+        "Write it",
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(answer, "Cloud done");
+    assert_eq!(
+        std::fs::read_to_string(root.join("cloud.txt")).unwrap(),
+        "cloud ok"
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2);
+    for request in seen.iter() {
+        assert_eq!(request.target, "/model/openai.gpt-oss-20b-1%3A0/converse");
+        assert_eq!(request.header("x-amz-security-token"), Some(AWS_SESSION));
+        assert_eq!(request.header("content-type"), Some("application/json"));
+        let date = request.header("x-amz-date").unwrap();
+        let expected = cloud_provider::sigv4::sign(
+            &cloud_provider::sigv4::Request {
+                method: "POST",
+                host: &addr.to_string(),
+                path: "/model/openai.gpt-oss-20b-1%3A0/converse",
+                query: "",
+                headers: &[("content-type", "application/json")],
+                body: request.raw.as_bytes(),
+            },
+            &cloud_provider::sigv4::Credentials {
+                access_key: "AKIDEXAMPLE0000001",
+                secret_key: AWS_SECRET,
+                session_token: Some(AWS_SESSION),
+            },
+            "us-west-2",
+            "bedrock",
+            unix_from_amz_date(date),
+        );
+        assert_eq!(
+            request.header("authorization"),
+            Some(expected.authorization.as_str())
+        );
+        assert!(expected
+            .authorization
+            .contains("SignedHeaders=content-type;host;x-amz-date;x-amz-security-token"));
+        assert!(!request.raw.contains(AWS_SECRET) && !request.raw.contains(AWS_SESSION));
+        assert!(request.body.get("stream").is_none() && request.body.get("model").is_none());
+    }
+    assert!(seen[0].body["toolConfig"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| tool["toolSpec"]["name"] == "write_file"));
+    assert_eq!(
+        seen[1].body["messages"].as_array().unwrap().last().unwrap()["content"][0]["toolResult"]
+            ["toolUseId"],
+        "call-1"
+    );
+    let saved = std::fs::read_to_string(
+        directory(data.path(), "owner", &root).join(format!("{}.json", session.id)),
+    )
+    .unwrap();
+    assert!(!saved.contains(AWS_SECRET) && !saved.contains(AWS_SESSION));
+}
+
+#[tokio::test]
+async fn bedrock_sigv4_errors_map_to_hints_without_secrets_or_body() {
+    for (status, hint) in [
+        (403, "rejected the credential"),
+        (429, "rate limit or quota"),
+    ] {
+        let (addr, _) = mock(vec![json_reply(
+            status,
+            json!({"message":format!("echo {AWS_SECRET} {AWS_SESSION}")}),
+        )])
+        .await;
+        let stored = cloud_provider::pack(
+            "bedrock",
+            &aws_keys(),
+            Some(
+                json!({"region":"us-east-1","endpoint":format!("http://{addr}")})
+                    .as_object()
+                    .unwrap(),
+            ),
+            true,
+        )
+        .unwrap();
+        let provider =
+            Provider::with_loopback("bedrock", stored, "openai.gpt-oss-20b-1:0", true).unwrap();
+        let error = provider
+            .request(&json!({"model":"openai.gpt-oss-20b-1:0","messages":[{"role":"user","content":"x"}]}), &mut |_| Ok(()))
+            .await
+            .unwrap_err();
+        assert!(
+            error.starts_with(&format!("Provider returned HTTP {status}.")) && error.contains(hint),
+            "{error}"
+        );
+        assert!(
+            !error.contains(AWS_SECRET)
+                && !error.contains(AWS_SESSION)
+                && !error.contains("127.0.0.1")
+        );
+    }
+}
+
+fn vertex_provider(addr: std::net::SocketAddr, key_file: &str) -> Provider {
+    let stored = cloud_provider::pack(
+        "vertex",
+        key_file,
+        Some(
+            json!({"project":"my-proj-123","location":"global",
+                "endpoint":format!("http://{addr}"),"tokenEndpoint":format!("http://{addr}/token")})
+            .as_object()
+            .unwrap(),
+        ),
+        true,
+    )
+    .unwrap();
+    Provider::with_loopback("vertex", stored, "google/gemini-2.5-pro", true).unwrap()
+}
+
+fn token_reply(token: &str, expires_in: u64) -> Reply {
+    json_reply(
+        200,
+        json!({"access_token":token,"expires_in":expires_in,"token_type":"Bearer"}),
+    )
+}
+
+#[tokio::test]
+async fn vertex_service_account_mints_one_cached_token_for_a_whole_tool_turn() {
+    let (private, public) = cloud_provider::vertex::test_keys::rsa_pair();
+    let (addr, seen) = mock(vec![
+        token_reply("ya29.minted-1", 3600),
+        chat_tool_call(),
+        chat_answer(),
+    ])
+    .await;
+    let provider = vertex_provider(addr, &cloud_provider::vertex::test_keys::key_file(&private));
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(workspace.path()).unwrap();
+    let mut session = new_session("vertex", "google/gemini-2.5-pro", &root);
+    session.transport = Some(provider.transport.clone());
+    let answer = turn(
+        &provider,
+        data.path(),
+        "owner",
+        &mut session,
+        "Write it",
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(answer, "Cloud done");
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 3);
+    assert_eq!(seen[0].target, "/token");
+    assert_eq!(
+        seen[0].header("content-type"),
+        Some("application/x-www-form-urlencoded")
+    );
+    let form: std::collections::HashMap<String, String> =
+        url::form_urlencoded::parse(seen[0].raw.as_bytes())
+            .into_owned()
+            .collect();
+    assert_eq!(
+        form["grant_type"],
+        "urn:ietf:params:oauth:grant-type:jwt-bearer"
+    );
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
+    validation.set_audience(&[format!("http://{addr}/token")]);
+    let claims = jsonwebtoken::decode::<Value>(
+        &form["assertion"],
+        &jsonwebtoken::DecodingKey::from_rsa_pem(public.as_bytes()).unwrap(),
+        &validation,
+    )
+    .unwrap()
+    .claims;
+    assert_eq!(claims["iss"], "agent@proj-123.iam.gserviceaccount.com");
+    assert_eq!(
+        claims["scope"],
+        "https://www.googleapis.com/auth/cloud-platform"
+    );
+    for request in &seen[1..] {
+        assert_eq!(
+            request.target,
+            "/v1/projects/my-proj-123/locations/global/endpoints/openapi/chat/completions"
+        );
+        assert_eq!(
+            request.header("authorization"),
+            Some("Bearer ya29.minted-1")
+        );
+        assert!(!request.raw.contains("PRIVATE"));
+    }
+    let saved = std::fs::read_to_string(
+        directory(data.path(), "owner", &root).join(format!("{}.json", session.id)),
+    )
+    .unwrap();
+    assert!(!saved.contains("PRIVATE") && !saved.contains("ya29.minted-1"));
+}
+
+#[tokio::test]
+async fn vertex_token_is_reminted_after_it_expires() {
+    let (private, _) = cloud_provider::vertex::test_keys::rsa_pair();
+    let (addr, seen) = mock(vec![
+        token_reply("ya29.short", 1),
+        chat_answer(),
+        token_reply("ya29.fresh", 3600),
+        chat_answer(),
+    ])
+    .await;
+    let provider = vertex_provider(addr, &cloud_provider::vertex::test_keys::key_file(&private));
+    let body = json!({"model":"google/gemini-2.5-pro","messages":[{"role":"user","content":"x"}]});
+    provider.request(&body, &mut |_| Ok(())).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    provider.request(&body, &mut |_| Ok(())).await.unwrap();
+    let seen = seen.lock().unwrap();
+    let auth: Vec<_> = seen
+        .iter()
+        .filter(|request| request.target != "/token")
+        .map(|request| request.header("authorization").unwrap().to_owned())
+        .collect();
+    assert_eq!(auth, ["Bearer ya29.short", "Bearer ya29.fresh"]);
+    assert_eq!(
+        seen.iter()
+            .filter(|request| request.target == "/token")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn vertex_token_exchange_failures_never_leak_keys_or_response_bodies() {
+    let (private, _) = cloud_provider::vertex::test_keys::rsa_pair();
+    let (addr, _) = mock(vec![json_reply(
+        401,
+        json!({"error":"invalid_grant PRIVATE echo-body"}),
+    )])
+    .await;
+    let provider = vertex_provider(addr, &cloud_provider::vertex::test_keys::key_file(&private));
+    let error = provider
+        .request(&json!({"model":"m","messages":[]}), &mut |_| Ok(()))
+        .await
+        .unwrap_err();
+    assert!(error.contains("HTTP 401"), "{error}");
+    assert!(
+        !error.contains("PRIVATE") && !error.contains("echo-body") && !error.contains("127.0.0.1")
+    );
+    let (addr, _) = mock(vec![json_reply(200, json!({"nope":true}))]).await;
+    let provider = vertex_provider(addr, &cloud_provider::vertex::test_keys::key_file(&private));
+    let error = provider
+        .request(&json!({"model":"m","messages":[]}), &mut |_| Ok(()))
+        .await
+        .unwrap_err();
+    assert!(error.contains("no access token"), "{error}");
 }

@@ -1,6 +1,14 @@
 use regex_lite::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
+
+#[path = "cloud_provider_converse.rs"]
+pub(crate) mod converse;
+#[path = "cloud_provider_sigv4.rs"]
+pub(crate) mod sigv4;
+#[path = "cloud_provider_vertex.rs"]
+pub(crate) mod vertex;
 
 pub(crate) type Settings = Map<String, Value>;
 
@@ -26,6 +34,7 @@ const AZURE_SUFFIXES: &[&str] = &[
     ".cognitiveservices.azure.us",
     ".openai.azure.cn",
 ];
+const DYNAMIC_PREFIX: &str = "\u{1}v4-cloud:";
 const LOOPBACK_ENV: &str = "TERMINAL_V4_CLOUD_PROVIDER_ALLOW_LOOPBACK";
 
 pub(crate) fn kind(provider: &str) -> Option<Kind> {
@@ -113,10 +122,12 @@ pub(crate) fn validate_settings(
         Kind::Vertex => &["project", "location"],
     };
     let hidden_endpoint = allow_loopback && kind != Kind::Azure;
-    if let Some(key) = input
-        .keys()
-        .find(|key| !allowed.contains(&key.as_str()) && !(hidden_endpoint && *key == "endpoint"))
-    {
+    let hidden_token_endpoint = allow_loopback && kind == Kind::Vertex;
+    if let Some(key) = input.keys().find(|key| {
+        !allowed.contains(&key.as_str())
+            && !(hidden_endpoint && *key == "endpoint")
+            && !(hidden_token_endpoint && *key == "tokenEndpoint")
+    }) {
         return Err(format!("Unknown setting {key}"));
     }
     let mut out = Settings::new();
@@ -171,7 +182,87 @@ pub(crate) fn validate_settings(
             out.insert("endpoint".into(), json!(origin(endpoint, &[], true)?));
         }
     }
+    if hidden_token_endpoint {
+        if let Some(endpoint) = text(input, "tokenEndpoint")? {
+            out.insert("tokenEndpoint".into(), json!(loopback_url(endpoint)?));
+        }
+    }
     Ok(out)
+}
+
+fn loopback_url(input: &str) -> Result<String, String> {
+    let url = Url::parse(input).map_err(|_| "Token endpoint must be a valid URL".to_string())?;
+    let loopback = match url.host() {
+        Some(Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(Host::Domain(name)) => name == "localhost",
+        None => false,
+    };
+    if !loopback
+        || !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("Token endpoint overrides must be loopback URLs".into());
+    }
+    Ok(url.into())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AwsKeys {
+    access_key_id: String,
+    secret_access_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_token: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Sigv4Secret {
+    region: String,
+    #[serde(flatten)]
+    keys: AwsKeys,
+}
+
+fn is_structured(key: &str) -> bool {
+    key.starts_with('{')
+}
+
+fn parse_aws_keys(raw: &str) -> Result<AwsKeys, String> {
+    let invalid = || {
+        "AWS credentials must be JSON with accessKeyId, secretAccessKey and optional sessionToken"
+            .to_string()
+    };
+    let keys: AwsKeys = serde_json::from_str(raw).map_err(|_| invalid())?;
+    let plain = |value: &str, min: usize, max: usize| {
+        (min..=max).contains(&value.len()) && value.chars().all(|c| c.is_ascii_graphic())
+    };
+    if !plain(&keys.access_key_id, 16, 128)
+        || !keys
+            .access_key_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric())
+        || !plain(&keys.secret_access_key, 16, 256)
+        || keys
+            .session_token
+            .as_deref()
+            .is_some_and(|t| !plain(t, 1, 8192))
+    {
+        return Err(invalid());
+    }
+    Ok(keys)
+}
+
+fn validate_structured_key(kind: Kind, key: &str) -> Result<(), String> {
+    if !is_structured(key) || kind == Kind::Azure {
+        return Ok(());
+    }
+    match kind {
+        Kind::Bedrock => parse_aws_keys(key).map(drop),
+        Kind::Vertex => vertex::parse_key_file(key).map(drop),
+        Kind::Azure => Ok(()),
+    }
 }
 
 pub(crate) fn pack(
@@ -186,6 +277,7 @@ pub(crate) fn pack(
         settings.ok_or("Provider settings are required")?,
         allow_loopback,
     )?;
+    validate_structured_key(kind, api_key)?;
     Ok(json!({"v":1,"apiKey":api_key,"settings":settings}).to_string())
 }
 
@@ -299,11 +391,171 @@ pub(crate) fn resolve(
     }
     let api_key_header =
         (kind == Kind::Azure && settings["authHeader"] == "api-key").then(|| token.clone());
+    let token = if kind != Kind::Azure && is_structured(&token) {
+        dynamic_secret(kind, &token, &settings)?
+    } else {
+        token
+    };
     Ok(Route {
         url: url.into(),
         bearer: api_key_header.is_none().then_some(token),
         api_key_header,
     })
+}
+
+fn dynamic_secret(kind: Kind, key: &str, settings: &Settings) -> Result<String, String> {
+    let payload = match kind {
+        Kind::Bedrock => {
+            let secret = Sigv4Secret {
+                region: settings["region"].as_str().unwrap_or_default().to_owned(),
+                keys: parse_aws_keys(key)?,
+            };
+            format!(
+                "sigv4:{}",
+                serde_json::to_string(&secret).map_err(|_| "Invalid AWS credentials")?
+            )
+        }
+        Kind::Vertex => {
+            let mut account = vertex::parse_key_file(key)?;
+            account.token_endpoint = settings
+                .get("tokenEndpoint")
+                .and_then(Value::as_str)
+                .unwrap_or(vertex::GOOGLE_TOKEN_ENDPOINT)
+                .to_owned();
+            format!(
+                "vertex:{}",
+                serde_json::to_string(&account).map_err(|_| "Invalid service account")?
+            )
+        }
+        Kind::Azure => return Err("Azure credentials must be a plain API key".into()),
+    };
+    Ok(format!("{DYNAMIC_PREFIX}{payload}"))
+}
+
+pub(crate) struct Converse {
+    pub(crate) body: Value,
+    pub(crate) text: String,
+}
+
+fn encode_segment(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+pub(crate) async fn bearer(client: &reqwest::Client, secret: &str) -> Result<String, String> {
+    let Some(account) = secret
+        .strip_prefix(DYNAMIC_PREFIX)
+        .and_then(|rest| rest.strip_prefix("vertex:"))
+    else {
+        return Ok(secret.to_owned());
+    };
+    let account: vertex::ServiceAccount =
+        serde_json::from_str(account).map_err(|_| "Invalid service-account credential")?;
+    vertex::access_token(client, &account).await
+}
+
+pub(crate) async fn converse(
+    client: &reqwest::Client,
+    base_url: &str,
+    secret: &str,
+    body: &Value,
+) -> Result<Option<Converse>, String> {
+    let Some(rest) = secret
+        .strip_prefix(DYNAMIC_PREFIX)
+        .and_then(|rest| rest.strip_prefix("sigv4:"))
+    else {
+        return Ok(None);
+    };
+    let aws: Sigv4Secret = serde_json::from_str(rest).map_err(|_| "Invalid AWS credential")?;
+    let model = body["model"]
+        .as_str()
+        .filter(|model| matches_pattern(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$", model))
+        .ok_or("Bedrock model IDs may contain letters, digits, '.', '_', ':', '/' and '-'")?;
+    let base = Url::parse(base_url).map_err(|_| "Invalid provider endpoint".to_string())?;
+    let path = format!("/model/{}/converse", encode_segment(model));
+    let target = Url::parse(&format!("{}{path}", base.origin().ascii_serialization()))
+        .map_err(|_| "Invalid provider endpoint".to_string())?;
+    let host = match (target.host_str(), target.port()) {
+        (Some(host), Some(port)) => format!("{host}:{port}"),
+        (Some(host), None) => host.to_owned(),
+        _ => return Err("Invalid provider endpoint".into()),
+    };
+    let payload = serde_json::to_vec(&converse::request(body)?)
+        .map_err(|_| "Cannot encode provider request")?;
+    let signed = sigv4::sign(
+        &sigv4::Request {
+            method: "POST",
+            host: &host,
+            path: &path,
+            query: "",
+            headers: &[("content-type", "application/json")],
+            body: &payload,
+        },
+        &sigv4::Credentials {
+            access_key: &aws.keys.access_key_id,
+            secret_key: &aws.keys.secret_access_key,
+            session_token: aws.keys.session_token.as_deref(),
+        },
+        &aws.region,
+        "bedrock",
+        vertex::now(),
+    );
+    let sensitive = |value: &str| {
+        reqwest::header::HeaderValue::from_str(value)
+            .map(|mut value| {
+                value.set_sensitive(true);
+                value
+            })
+            .map_err(|_| "Provider credential contains invalid characters".to_string())
+    };
+    let mut request = client
+        .post(target)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("x-amz-date", signed.amz_date)
+        .header("Authorization", sensitive(&signed.authorization)?);
+    if let Some(token) = &aws.keys.session_token {
+        request = request.header("x-amz-security-token", sensitive(token)?);
+    }
+    let mut response = request
+        .body(payload)
+        .send()
+        .await
+        .map_err(|_| "Provider request failed; check connectivity and endpoint settings")?;
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        return Err(format!(
+            "Provider returned HTTP {status}. {}",
+            status_hint(status)
+        ));
+    }
+    let mut contents = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Provider response was interrupted")?
+    {
+        if contents.len() + chunk.len() > 8_000_000 {
+            return Err("Provider response exceeds 8 MB".into());
+        }
+        contents.extend_from_slice(&chunk);
+    }
+    let raw: Value =
+        serde_json::from_slice(&contents).map_err(|_| "Provider returned invalid JSON")?;
+    let body = converse::response(&raw)?;
+    let text = body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    Ok(Some(Converse { body, text }))
 }
 
 pub(crate) fn status_hint(status: u16) -> &'static str {
@@ -522,6 +774,105 @@ mod tests {
                 .unwrap_err()
                 .contains("settings are missing")
         );
+    }
+
+    const AWS_KEYS: &str = r#"{"accessKeyId":"AKIDEXAMPLE0000001","secretAccessKey":"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY","sessionToken":"session-token-0001"}"#;
+
+    #[test]
+    fn structured_aws_keys_resolve_to_a_signing_secret_without_changing_bearer_routes() {
+        let settings = map(json!({"region":"us-west-2"}));
+        let stored = pack("bedrock", AWS_KEYS, Some(&settings), false).unwrap();
+        let route = resolve("bedrock", "openai-chat", "m", &stored, false).unwrap();
+        assert_eq!(route.api_key_header, None);
+        let bearer = route.bearer.unwrap();
+        assert!(bearer.starts_with(DYNAMIC_PREFIX));
+        assert!(bearer.contains("sigv4:") && bearer.contains("us-west-2"));
+        let plain = pack("bedrock", "br-key", Some(&settings), false).unwrap();
+        assert_eq!(
+            resolve("bedrock", "openai-chat", "m", &plain, false)
+                .unwrap()
+                .bearer,
+            Some("br-key".into())
+        );
+    }
+
+    #[test]
+    fn malformed_structured_credentials_are_rejected_without_echoing_secrets() {
+        let settings = map(json!({"region":"us-west-2"}));
+        for bad in [
+            r#"{"accessKeyId":"short","secretAccessKey":"SECRETVALUE0123456789"}"#,
+            r#"{"accessKeyId":"AKIDEXAMPLE0000001"}"#,
+            r#"{"accessKeyId":"AKIDEXAMPLE0000001","secretAccessKey":"SECRETVALUE0123456789","extra":1}"#,
+            r#"{not json SECRETVALUE0123456789"#,
+        ] {
+            let error = pack("bedrock", bad, Some(&settings), false).unwrap_err();
+            assert!(!error.contains("SECRETVALUE"), "{error}");
+        }
+        let vertex = map(json!({"project":"my-proj-123","location":"global"}));
+        let error = pack(
+            "vertex",
+            r#"{"type":"service_account","client_email":"a@b","private_key":"LEAKYPEM"}"#,
+            Some(&vertex),
+            false,
+        )
+        .unwrap_err();
+        assert!(!error.contains("LEAKYPEM"), "{error}");
+    }
+
+    #[test]
+    fn service_account_keys_resolve_to_a_minting_secret_with_a_pinned_google_endpoint() {
+        let (private, _) = vertex::test_keys::rsa_pair();
+        let key_file = vertex::test_keys::key_file(&private);
+        let settings = map(json!({"project":"my-proj-123","location":"global"}));
+        let stored = pack("vertex", &key_file, Some(&settings), false).unwrap();
+        let route = resolve("vertex", "openai-chat", "m", &stored, false).unwrap();
+        let bearer = route.bearer.unwrap();
+        assert!(bearer.starts_with(DYNAMIC_PREFIX));
+        assert!(bearer.contains(vertex::GOOGLE_TOKEN_ENDPOINT));
+        let hidden = map(
+            json!({"project":"my-proj-123","location":"global","tokenEndpoint":"http://127.0.0.1:9/token"}),
+        );
+        assert!(pack("vertex", &key_file, Some(&hidden), false).is_err());
+        assert!(pack("vertex", &key_file, Some(&hidden), true).is_ok());
+        let remote = map(
+            json!({"project":"my-proj-123","location":"global","tokenEndpoint":"https://evil.example.com/token"}),
+        );
+        assert!(pack("vertex", &key_file, Some(&remote), true).is_err());
+    }
+
+    #[tokio::test]
+    async fn bearer_passes_plain_secrets_through_and_converse_ignores_them() {
+        let client = reqwest::Client::new();
+        assert_eq!(bearer(&client, "plain").await.unwrap(), "plain");
+        assert!(converse(&client, "http://127.0.0.1:1", "plain", &json!({}))
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn converse_rejects_model_ids_that_could_alter_the_signed_path() {
+        let stored = pack(
+            "bedrock",
+            AWS_KEYS,
+            Some(&map(json!({"region":"us-west-2"}))),
+            false,
+        )
+        .unwrap();
+        let secret = resolve("bedrock", "openai-chat", "m", &stored, false)
+            .unwrap()
+            .bearer
+            .unwrap();
+        for model in ["../x", "..", "a b", "a?b", "", "a#b", "/abs"] {
+            let result = converse(
+                &reqwest::Client::new(),
+                "http://127.0.0.1:1",
+                &secret,
+                &json!({"model":model,"messages":[]}),
+            )
+            .await;
+            assert!(result.is_err(), "{model}");
+        }
     }
 
     #[test]

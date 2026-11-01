@@ -1731,7 +1731,7 @@
     "cloud": "bedrock",
     "baseUrl": "",
     "envKeys": [],
-    "help": "Uses a Bedrock API key (bearer) against the bedrock-runtime OpenAI-compatible Chat Completions endpoint.",
+    "help": "Paste a Bedrock API key (bearer, OpenAI-compatible Chat Completions, gpt-oss models), or minified JSON {\"accessKeyId\":\"...\",\"secretAccessKey\":\"...\",\"sessionToken\":\"...\"} to sign requests with SigV4 against the Converse API (any Converse-capable model ID). The session token is optional.",
     "settings": [
       {
         "key": "region",
@@ -1768,7 +1768,7 @@
     "cloud": "vertex",
     "baseUrl": "",
     "envKeys": [],
-    "help": "Paste a short-lived OAuth access token (for example from gcloud auth print-access-token); it expires after about an hour and must be replaced.",
+    "help": "Paste a short-lived OAuth access token (for example from gcloud auth print-access-token; it expires after about an hour), or a service-account JSON key minified to one line (for example jq -c) to mint and cache tokens automatically.",
     "settings": [
       {
         "key": "project",

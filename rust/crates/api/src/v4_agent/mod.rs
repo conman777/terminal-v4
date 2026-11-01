@@ -208,7 +208,7 @@ fn tool_definitions_for_read(
     let mut definitions = tools::definitions();
     definitions.push(schedule_listing::definition());
     definitions.push(schedule_management::definition());
-    definitions.push(scheduling::definition());
+    definitions.push(scheduling::definition(data, owner));
     definitions.push(question::definition());
     definitions.push(todo::definition());
     #[cfg(unix)]
@@ -748,6 +748,16 @@ impl Provider {
                     .into(),
             );
         }
+        if let Some(converse) =
+            cloud_provider::converse(&self.client, &self.url, &self.secret, &body).await?
+        {
+            let streamed = !converse.text.is_empty();
+            if streamed {
+                target.text(&converse.text).await?;
+            }
+            return Ok((converse.body, streamed));
+        }
+        let bearer = cloud_provider::bearer(&self.client, &self.secret).await?;
         let mut request = self
             .client
             .post(&self.url)
@@ -757,10 +767,10 @@ impl Provider {
             request
                 .header("x-api-key", &self.secret)
                 .header("anthropic-version", "2023-06-01")
-        } else if self.secret.is_empty() {
+        } else if bearer.is_empty() {
             request
         } else {
-            request.bearer_auth(&self.secret)
+            request.bearer_auth(&bearer)
         };
         let mut response = request
             .send()
